@@ -1,0 +1,55 @@
+---
+// Token bucket: tokens drip in at a steady rate up to a cap; each request takes one.
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="rl-tb-t rl-tb-d">
+  <title id="rl-tb-t">A token bucket</title>
+  <desc id="rl-tb-d">
+    Tokens drip into a bucket from above at 5 tokens per second. The bucket holds at most 10; it
+    currently holds 7. A request arriving from the left takes one token. If a token is there, the
+    request passes with a 200. If the bucket is empty, the request is rejected with a 429.
+  </desc>
+  <defs>
+    <marker id="rl-tb-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="rl-tb-store" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-store)" />
+    </marker>
+  </defs>
+
+  <!-- Refill -->
+  <text x="200" y="26" font-size="19" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">refill: 5 tokens per second</text>
+  <circle cx="200" cy="46" r="6" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="1.5" />
+  <line x1="200" y1="56" x2="200" y2="80" stroke-width="2" style="stroke: var(--viz-store)" marker-end="url(#rl-tb-store)" />
+
+  <!-- Bucket: 10 slots, 7 full -->
+  <path d="M140 90 V214 H260 V90" fill="none" stroke-width="2.5" stroke-linejoin="round" style="stroke: var(--viz-server)" />
+  <g stroke-width="1.5">
+    <circle cx="164" cy="196" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="188" cy="196" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="212" cy="196" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="236" cy="196" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="164" cy="172" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="188" cy="172" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="212" cy="172" r="9" style="fill: var(--viz-store); stroke: var(--viz-store)" />
+    <circle cx="236" cy="172" r="9" fill="none" style="stroke: var(--viz-stroke)" />
+    <circle cx="176" cy="148" r="9" fill="none" style="stroke: var(--viz-stroke)" />
+    <circle cx="224" cy="148" r="9" fill="none" style="stroke: var(--viz-stroke)" />
+  </g>
+  <text x="272" y="150" font-size="19" style="fill: var(--viz-muted)">holds 10</text>
+  <text x="272" y="174" font-size="19" style="fill: var(--viz-muted)">has 7</text>
+
+  <!-- A request comes in and takes a token -->
+  <text x="20" y="160" font-size="19" style="fill: var(--viz-ink)">request</text>
+  <line x1="20" y1="178" x2="134" y2="178" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rl-tb-flow)" />
+  <text x="77" y="204" font-size="19" text-anchor="middle" style="fill: var(--viz-muted)">takes 1</text>
+
+  <!-- Outcomes -->
+  <g font-size="19">
+    <circle cx="28" cy="258" r="7" style="fill: var(--viz-ok)" />
+    <text x="44" y="264" style="fill: var(--viz-ink)">token there: 200</text>
+    <path d="M222 252 l12 12 M234 252 l-12 12" stroke-width="3" stroke-linecap="round" style="stroke: var(--viz-bad)" />
+    <text x="244" y="264" style="fill: var(--viz-ink)">empty: 429</text>
+  </g>
+</svg>

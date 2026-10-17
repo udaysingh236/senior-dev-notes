@@ -1,0 +1,47 @@
+---
+// Sliding window counter: weight the previous window by how much of it is still inside the
+// sliding window, assuming its requests were spread evenly.
+---
+
+<svg viewBox="0 0 400 292" width="100%" role="img" aria-labelledby="rl-sc-t rl-sc-d">
+  <title id="rl-sc-t">A sliding window counter</title>
+  <desc id="rl-sc-d">
+    Two one-minute windows side by side. The previous minute had 80 requests, drawn as an evenly
+    filled block. We are 40 percent of the way into the current minute, which has 30 requests so
+    far. The sliding window covers the last 60 seconds, so it overlaps 60 percent of the previous
+    minute: 48 of its 80 requests still count and 32 have slid out. The estimate is 80 times 0.6
+    plus 30, which is 78, below the limit of 100, so the request is allowed.
+  </desc>
+
+  <g font-size="19" text-anchor="middle">
+    <text x="110" y="26" font-weight="600" style="fill: var(--viz-ink)">previous minute: 80</text>
+    <text x="290" y="26" font-weight="600" style="fill: var(--viz-ink)">this minute: 30</text>
+  </g>
+
+  <!-- The sliding window: the last 60 s, from 0.4 of a window back into the previous one -->
+  <rect x="92" y="40" width="180" height="150" rx="4" style="fill: var(--viz-flow-soft)" />
+  <line x1="92" y1="40" x2="92" y2="190" stroke-width="1.5" stroke-dasharray="5 4" style="stroke: var(--viz-flow)" />
+  <line x1="272" y1="40" x2="272" y2="190" stroke-width="2" style="stroke: var(--viz-flow)" />
+
+  <!-- Previous minute, evenly spread: the part that slid out, and the part still counted -->
+  <rect x="20" y="110" width="72" height="80" fill="none" stroke-width="1.5" stroke-dasharray="4 3" style="stroke: var(--viz-muted)" />
+  <rect x="92" y="110" width="108" height="80" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="56" y="156" font-size="19" text-anchor="middle" style="fill: var(--viz-muted)">32 out</text>
+  <text x="146" y="156" font-size="19" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">48 in</text>
+
+  <!-- Current minute so far -->
+  <rect x="200" y="140" width="72" height="50" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="236" y="172" font-size="19" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">30</text>
+
+  <line x1="200" y1="40" x2="200" y2="190" stroke-width="1.5" style="stroke: var(--viz-muted)" />
+  <line x1="20" y1="190" x2="380" y2="190" stroke-width="2" style="stroke: var(--viz-stroke)" />
+  <g font-size="19" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="20" y="214" text-anchor="start">0 s</text>
+    <text x="200" y="214">60 s</text>
+    <text x="272" y="214" font-weight="600" style="fill: var(--viz-flow)">now</text>
+    <text x="380" y="214" text-anchor="end">120 s</text>
+  </g>
+
+  <text x="200" y="252" font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">80 × 0.6 + 30 = 78</text>
+  <text x="200" y="280" font-size="19" text-anchor="middle" style="fill: var(--viz-ok)">under the limit of 100: allowed</text>
+</svg>

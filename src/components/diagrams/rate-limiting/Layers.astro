@@ -1,0 +1,48 @@
+---
+// Where rate limiters live, from the caller down to the database, and what each layer keys on.
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="rl-ly-t rl-ly-d">
+  <title id="rl-ly-t">The layers where a rate limit can live</title>
+  <desc id="rl-ly-d">
+    A vertical stack of five layers a request passes through: the client, which paces itself; the
+    edge or CDN, which limits per IP against floods; the API gateway, which limits per API key and
+    plan; the service, which limits per user and route; and the database, protected by limits on
+    the calls made to it.
+  </desc>
+  <defs>
+    <marker id="rl-ly-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <g font-size="19">
+    <rect x="8" y="12" width="150" height="48" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="83" y="42" text-anchor="middle" font-weight="600" style="fill: var(--viz-ink)">Client</text>
+    <text x="176" y="42" style="fill: var(--viz-muted)">paces itself</text>
+
+    <rect x="8" y="82" width="150" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="83" y="112" text-anchor="middle" font-weight="600" style="fill: var(--viz-ink)">Edge / CDN</text>
+    <text x="176" y="112" style="fill: var(--viz-muted)">per IP, floods</text>
+
+    <rect x="8" y="152" width="150" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="83" y="182" text-anchor="middle" font-weight="600" style="fill: var(--viz-ink)">API gateway</text>
+    <text x="176" y="182" style="fill: var(--viz-muted)">per API key, plan</text>
+
+    <rect x="8" y="222" width="150" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="83" y="252" text-anchor="middle" font-weight="600" style="fill: var(--viz-ink)">Service</text>
+    <text x="176" y="252" style="fill: var(--viz-muted)">per user + route</text>
+
+    <path d="M18 302 a65 9 0 0 1 130 0 v32 a65 9 0 0 1 -130 0 z" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="2" />
+    <path d="M18 302 a65 9 0 0 0 130 0" fill="none" style="stroke: var(--viz-store)" stroke-width="2" />
+    <text x="83" y="330" text-anchor="middle" font-weight="600" style="fill: var(--viz-ink)">Database</text>
+    <text x="176" y="324" style="fill: var(--viz-muted)">calls to it capped</text>
+  </g>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rl-ly-flow)">
+    <line x1="83" y1="61" x2="83" y2="79" />
+    <line x1="83" y1="131" x2="83" y2="149" />
+    <line x1="83" y1="201" x2="83" y2="219" />
+    <line x1="83" y1="271" x2="83" y2="290" />
+  </g>
+</svg>

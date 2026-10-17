@@ -1,0 +1,48 @@
+---
+// Fixed window boundary problem: 10 at the end of one window, 10 at the start of the next.
+---
+
+<svg viewBox="0 0 400 228" width="100%" role="img" aria-labelledby="rl-fw-t rl-fw-d">
+  <title id="rl-fw-t">The fixed window boundary burst</title>
+  <desc id="rl-fw-d">
+    A timeline from 0 to 20 seconds split into two 10 second windows, each with a limit of 10.
+    Ten requests arrive right before the 10 second boundary and ten right after it. Each window's
+    counter says 10 of 10, so all twenty are accepted, though they arrived back to back.
+  </desc>
+
+  <g font-size="19" text-anchor="middle">
+    <text x="110" y="28" font-weight="600" style="fill: var(--viz-ink)">window 1</text>
+    <text x="110" y="52" style="fill: var(--viz-muted)">10 of 10</text>
+    <text x="290" y="28" font-weight="600" style="fill: var(--viz-ink)">window 2</text>
+    <text x="290" y="52" style="fill: var(--viz-muted)">10 of 10</text>
+  </g>
+
+  <!-- Window boundary -->
+  <line x1="200" y1="64" x2="200" y2="160" stroke-width="1.5" stroke-dasharray="5 4" style="stroke: var(--viz-muted)" />
+
+  <!-- Requests: 2 columns x 5 rows on each side of the boundary -->
+  <g style="fill: var(--viz-ok)">
+    <circle cx="178" cy="142" r="6" /><circle cx="190" cy="142" r="6" />
+    <circle cx="178" cy="128" r="6" /><circle cx="190" cy="128" r="6" />
+    <circle cx="178" cy="114" r="6" /><circle cx="190" cy="114" r="6" />
+    <circle cx="178" cy="100" r="6" /><circle cx="190" cy="100" r="6" />
+    <circle cx="178" cy="86" r="6" /><circle cx="190" cy="86" r="6" />
+    <circle cx="210" cy="142" r="6" /><circle cx="222" cy="142" r="6" />
+    <circle cx="210" cy="128" r="6" /><circle cx="222" cy="128" r="6" />
+    <circle cx="210" cy="114" r="6" /><circle cx="222" cy="114" r="6" />
+    <circle cx="210" cy="100" r="6" /><circle cx="222" cy="100" r="6" />
+    <circle cx="210" cy="86" r="6" /><circle cx="222" cy="86" r="6" />
+  </g>
+
+  <!-- Time axis -->
+  <line x1="20" y1="154" x2="380" y2="154" stroke-width="2" style="stroke: var(--viz-stroke)" />
+  <g font-size="19" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="20" y="180" text-anchor="start">0 s</text>
+    <text x="200" y="180">10 s</text>
+    <text x="380" y="180" text-anchor="end">20 s</text>
+  </g>
+
+  <!-- The short span holding 20 requests -->
+  <path d="M170 192 v8 h60 v-8" fill="none" stroke-width="2" style="stroke: var(--viz-bad)" />
+  <text x="200" y="222" font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">20 accepted, back to back</text>
+</svg>

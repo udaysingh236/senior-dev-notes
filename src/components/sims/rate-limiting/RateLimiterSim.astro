@@ -1,0 +1,77 @@
+---
+// One rate limiter sim, in one of six modes. Every instance on a page shares the same seeded
+// background traffic, so the modes can be compared run for run.
+import SimShell from '../../sim/SimShell.astro';
+
+type Algorithm = 'token-bucket' | 'leaky-bucket' | 'fixed-window' | 'sliding-log' | 'sliding-counter' | 'compare';
+
+interface Props {
+  algorithm: Algorithm;
+  /** Overrides the default "What to watch for" text for this mode. */
+  watchFor?: string;
+}
+
+const COPY: Record<Algorithm, { title: string; description: string; watchFor: string }> = {
+  'token-bucket': {
+    title: 'Token bucket',
+    description:
+      'Requests travel from clients on the left to the API on the right through a bucket of tokens. Each accepted request takes one token; tokens refill at a steady rate. When the bucket is empty, requests are rejected. A timeline underneath marks accepted requests above the line and rejected ones below it.',
+    watchFor:
+      'Press "Send a burst of 20". As many requests pass at once as there are tokens in the bucket, the rest bounce, and then requests trickle through again at the refill rate. The stored tokens are what let a burst through.',
+  },
+  'leaky-bucket': {
+    title: 'Leaky bucket (as a queue)',
+    description:
+      'Requests join a fixed-size queue and leave it towards the API at a steady leak rate. When the queue is full, new requests are rejected. A timeline underneath marks when accepted requests reached the API and when requests were rejected.',
+    watchFor:
+      'Send a burst of 20. The queue fills, everything that does not fit is rejected, and the queued requests reach the API one per second, never faster. Watch the average wait: the price of a perfectly smooth output is latency.',
+  },
+  'fixed-window': {
+    title: 'Fixed window counter',
+    description:
+      'A counter allows a fixed number of requests per window and resets to zero at each window boundary. Dashed lines on the timeline mark the boundaries; accepted requests are above the line and rejected ones below.',
+    watchFor:
+      'Press "Hit the window boundary" and wait. Ten requests land right before the dashed line and ten right after, and all twenty pass within about 0.7 seconds. The "most in any 10 s" counter shows the limit doubled.',
+  },
+  'sliding-log': {
+    title: 'Sliding window log',
+    description:
+      'The limiter stores a timestamp for every accepted request and counts the ones inside the last window, shown as a shaded band that slides with time. A request is accepted only if fewer than the limit are inside the band.',
+    watchFor:
+      'Hit the window boundary again. Only ten get through, because the shaded band always covers the last 10 seconds, wherever the boundary falls. Then watch rejected requests pass again as old timestamps slide out of the band.',
+  },
+  'sliding-counter': {
+    title: 'Sliding window counter',
+    description:
+      'Two bars show the previous window count and the current window count. The previous count is weighted by how much of it still overlaps the sliding window, and the weighted sum is compared with the limit, drawn as a red dashed line.',
+    watchFor:
+      'Watch the weight in the formula at the top fall from 1 towards 0 as the current window ages, and the filled part of the previous bar shrink with it. Hit the boundary: the weighted previous window blocks the second half, almost exactly like the log.',
+  },
+  compare: {
+    title: 'All five on the same traffic',
+    description:
+      'Five timelines, one per algorithm, fed the same requests. On each, accepted requests are dots above the line and rejected requests are crosses below it. Dashed lines mark the fixed window boundaries.',
+    watchFor:
+      'Hit the window boundary. Only the fixed window row lets the second group through, and its "most in 10 s" climbs to twice the limit. Then send a burst of 20: the token bucket lets ten through at once, the leaky bucket lets them out one per second.',
+  },
+};
+
+const { algorithm, watchFor } = Astro.props;
+const copy = COPY[algorithm];
+---
+
+<SimShell
+  name="rate-limiter"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox="0 0 400 270"
+  config={{ algorithm }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRateLimiterModel } from './model';
+
+  mountAll('rate-limiter', createRateLimiterModel);
+</script>

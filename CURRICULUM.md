@@ -133,7 +133,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | planned |
 | 3 | Circuit breakers | circuit-breakers | 13 | pilot |
 | 4 | Bulkheads | bulkheads | new | planned |
-| 5 | Rate limiting | rate-limiting | 2 | pilot |
+| 5 | Rate limiting | rate-limiting | 2 | published (2026-10-17) |
 | 6 | Load shedding | load-shedding | new | planned |
 | 7 | Graceful degradation | graceful-degradation | new | planned |
 | 8 | Health checks, liveness and readiness probes | health-checks-and-probes | 74, 75 | planned |

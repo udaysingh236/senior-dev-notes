@@ -148,6 +148,10 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
+# Python (runnable examples)
+.venv/
+__pycache__/
+
 # Astro / Netlify
 .netlify/
 .DS_Store

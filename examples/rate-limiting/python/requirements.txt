@@ -1,0 +1,2 @@
+# Only redis_limiter.py needs this. Everything else is standard library.
+redis>=8.1,<9

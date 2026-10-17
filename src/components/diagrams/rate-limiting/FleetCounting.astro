@@ -1,0 +1,55 @@
+---
+// Two ways to count across a fleet: each server alone with a share of the limit, or every
+// server against one shared, atomic counter.
+---
+
+<svg viewBox="0 0 400 356" width="100%" role="img" aria-labelledby="rl-fc-t rl-fc-d">
+  <title id="rl-fc-t">Counting across many servers</title>
+  <desc id="rl-fc-d">
+    Top: three app servers each count on their own and allow a third of a 100 request limit, 33
+    each. This only adds up if the load balancer spreads every client evenly. Bottom: the same
+    three servers all send each check to one shared Redis store, which runs the check and update
+    as one atomic script, so the limit holds however traffic is spread.
+  </desc>
+  <defs>
+    <marker id="rl-fc-store" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-store)" />
+    </marker>
+  </defs>
+
+  <text x="8" y="24" font-size="19" font-weight="700" style="fill: var(--viz-ink)">Each server counts alone</text>
+  <g font-size="19" text-anchor="middle">
+    <rect x="8" y="40" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="68" y="70" font-weight="600" style="fill: var(--viz-ink)">App 1</text>
+    <rect x="140" y="40" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="200" y="70" font-weight="600" style="fill: var(--viz-ink)">App 2</text>
+    <rect x="272" y="40" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="332" y="70" font-weight="600" style="fill: var(--viz-ink)">App 3</text>
+    <text x="68" y="114" style="fill: var(--viz-muted)">allows 33</text>
+    <text x="200" y="114" style="fill: var(--viz-muted)">allows 33</text>
+    <text x="332" y="114" style="fill: var(--viz-muted)">allows 33</text>
+  </g>
+  <text x="200" y="146" font-size="19" text-anchor="middle" style="fill: var(--viz-warn)">only right if traffic splits evenly</text>
+
+  <line x1="8" y1="166" x2="392" y2="166" stroke-width="1" style="stroke: var(--viz-stroke)" />
+
+  <text x="8" y="196" font-size="19" font-weight="700" style="fill: var(--viz-ink)">One shared counter</text>
+  <g font-size="19" text-anchor="middle">
+    <rect x="8" y="212" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="68" y="242" font-weight="600" style="fill: var(--viz-ink)">App 1</text>
+    <rect x="140" y="212" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="200" y="242" font-weight="600" style="fill: var(--viz-ink)">App 2</text>
+    <rect x="272" y="212" width="120" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="332" y="242" font-weight="600" style="fill: var(--viz-ink)">App 3</text>
+
+    <path d="M140 304 a60 9 0 0 1 120 0 v34 a60 9 0 0 1 -120 0 z" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="2" />
+    <path d="M140 304 a60 9 0 0 0 120 0" fill="none" style="stroke: var(--viz-store)" stroke-width="2" />
+    <text x="200" y="334" font-weight="600" style="fill: var(--viz-ink)">Redis</text>
+  </g>
+  <text x="270" y="334" font-size="19" style="fill: var(--viz-muted)">atomic</text>
+  <g stroke-width="2" style="stroke: var(--viz-store)" marker-end="url(#rl-fc-store)">
+    <line x1="80" y1="261" x2="150" y2="296" />
+    <line x1="200" y1="261" x2="200" y2="292" />
+    <line x1="320" y1="261" x2="250" y2="296" />
+  </g>
+</svg>
