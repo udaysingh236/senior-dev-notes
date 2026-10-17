@@ -161,14 +161,33 @@ export const createRateLimiterModel: SimFactory = (config) => {
     }
   }
 
-  /** The history strip: accepted dots above the line, rejected crosses below. */
-  function timeline(track: Track, yOk: number, yBad: number, parent: Element): void {
+  /**
+   * The history strip: accepted dots above the line, rejected crosses below. Marks that land
+   * almost on top of each other stack (accepted upwards, rejected downwards, up to a cap), so a
+   * burst reads as a column whose height you can see, not one blob.
+   */
+  function timeline(track: Track, yOk: number, yBad: number, parent: Element, gap = 0, capOk = 1, capBad = 1): void {
     const now = t / 1000;
-    for (const a of track.accepted) if (a <= now && xAt(a) >= X0) accept(xAt(a), yOk, parent, 4.5);
-    for (const r of track.rejected) if (xAt(r) >= X0) reject(xAt(r), yBad, parent, 4.5);
+    const marks = (times: number[], cap: number, draw: (x: number, depth: number) => void) => {
+      let anchor = -Infinity; // x of the column we are stacking onto
+      let depth = 0;
+      for (const time of times) {
+        const x = xAt(time);
+        if (time > now || x < X0) continue;
+        if (x - anchor < 4) {
+          depth = Math.min(depth + 1, cap - 1);
+        } else {
+          anchor = x;
+          depth = 0;
+        }
+        draw(anchor, depth);
+      }
+    };
+    marks(track.accepted, capOk, (x, d) => accept(x, yOk - d * gap, parent, 4.5));
+    marks(track.rejected, capBad, (x, d) => reject(x, yBad + d * gap, parent, 4.5));
   }
 
-  // Single-mode layout on a 400 × 270 canvas.
+  // Single-mode layout on a 400 × 300 canvas.
   const GATE_IN = 136; // where dots enter the limiter
   const GATE_OUT = 264; // where accepted dots leave it
   const LANE = 104;
@@ -279,9 +298,9 @@ export const createRateLimiterModel: SimFactory = (config) => {
       const label = { fill: MUTED, 'font-size': 19, 'font-weight': 600 };
       text('Clients', { ...label, x: 8, y: 26 }, base);
       text('API', { ...label, x: 392, y: 26, 'text-anchor': 'end' }, base);
-      svg('line', { x1: 8, x2: 392, y1: 218, y2: 218, stroke: token('--viz-stroke'), 'stroke-width': 1.5 }, base);
-      text(`${span} s ago`, { x: 8, y: 262, fill: MUTED, 'font-size': 19 }, base);
-      text('now', { x: 392, y: 262, fill: MUTED, 'font-size': 19, 'text-anchor': 'end' }, base);
+      svg('line', { x1: 8, x2: 392, y1: 250, y2: 250, stroke: token('--viz-stroke'), 'stroke-width': 1.5 }, base);
+      text(`${span} s ago`, { x: 8, y: 294, fill: MUTED, 'font-size': 19 }, base);
+      text('now', { x: 392, y: 294, fill: MUTED, 'font-size': 19, 'text-anchor': 'end' }, base);
     }
     const live = layer(view, 'live');
     clear(live);
@@ -289,10 +308,11 @@ export const createRateLimiterModel: SimFactory = (config) => {
     const tr = tracks[0];
     if (mode === 'sliding-log' || mode === 'sliding-counter') {
       // The sliding window itself: the last `window` seconds, ending now.
-      svg('rect', { x: xAt(now - window), y: 188, width: xAt(now) - xAt(now - window), height: 58, fill: token('--viz-flow-soft') }, live);
+      svg('rect', { x: xAt(now - window), y: 192, width: xAt(now) - xAt(now - window), height: 86, fill: token('--viz-flow-soft') }, live);
     }
-    if (isWindow) boundaries(188, 246, live);
-    timeline(tr, 204, 233, live);
+    if (isWindow) boundaries(192, 278, live);
+    // Accepted marks stack up to 8 high, so a burst of 20 at a boundary shows as tall columns.
+    timeline(tr, 238, 263, live, 5, 8, 3);
     drawMechanism(live);
     drawSprites(live);
   }

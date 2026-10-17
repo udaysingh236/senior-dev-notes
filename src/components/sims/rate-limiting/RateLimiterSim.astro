@@ -65,7 +65,7 @@ const copy = COPY[algorithm];
   title={copy.title}
   description={copy.description}
   watchFor={watchFor ?? copy.watchFor}
-  viewBox="0 0 400 270"
+  viewBox={algorithm === 'compare' ? '0 0 400 270' : '0 0 400 300'}
   config={{ algorithm }}
 />
 

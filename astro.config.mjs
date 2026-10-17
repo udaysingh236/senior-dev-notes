@@ -13,7 +13,7 @@ const GISCUS = {
   repo: 'udaysingh236/senior-dev-notes',
   repoId: 'R_kgDOVNbYCA',
   category: 'Announcements', // an announcement-type category: only giscus and maintainers open threads
-  categoryId: '',
+  categoryId: 'DIC_kwDOVNbYCM4DIxVk',
   lazy: true, // load the comments iframe only when the reader scrolls near it
 };
 
