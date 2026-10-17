@@ -5,7 +5,7 @@ final-year students, new grads and engineers in their first job. Every topic is 
 engineer with 25+ years of experience would mentor a junior: start from the real problem, walk
 around it, then go deep, then point to what to learn next.
 
-Owner: Uday. Repo: `udaysingh236/senior-dev-notes`. Live site: `https://senior-dev-notes.netlify.app`.
+Owner: Uday. Repo: `udaysingh236/senior-dev-notes`. Live site: `https://seniordevnotes.netlify.app`.
 
 ## Stack
 
