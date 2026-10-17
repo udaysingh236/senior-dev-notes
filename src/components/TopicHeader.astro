@@ -1,10 +1,12 @@
 ---
-// Overrides Starlight's PageTitle. On topic pages (frontmatter has `track`) it adds the
-// tagline, a difficulty badge, the reading time and prerequisite chips under the title.
-import { getTrack, readingMinutes, resolveTopic } from '../lib/topics';
+// Overrides Starlight's PageTitle. On topic pages (frontmatter has `track`) it adds the track and
+// position, the tagline, a difficulty badge, the reading time, prerequisite chips and a reading
+// progress line under the site header. Other pages get the title alone.
+import { findCurriculumTopic, getTrack, readingMinutes, resolveTopic } from '../lib/topics';
+import TrackIcon from './TrackIcon.astro';
 
 const { entry, id } = Astro.locals.starlightRoute;
-const { title, tagline, difficulty, track, prerequisites } = entry.data;
+const { title, tagline, difficulty, track, prerequisites, lastReviewed } = entry.data;
 const isTopic = Boolean(track);
 
 if (isTopic) {
@@ -22,16 +24,32 @@ if (isTopic) {
 
 const minutes = isTopic ? readingMinutes(entry.body) : 0;
 const prereqs = isTopic ? await Promise.all(prerequisites.map((s) => resolveTopic(s, id))) : [];
-const trackTitle = isTopic ? getTrack(track!)?.title : undefined;
+const trackInfo = isTopic ? getTrack(track!) : undefined;
+const slug = id.split('/').pop()!;
+const position = isTopic ? findCurriculumTopic(slug) : undefined;
+const reviewed = lastReviewed?.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 ---
 
-<h1 id="_top">{title}</h1>
-
 {
-  isTopic && (
-    <div class="topic-header">
+  isTopic ? (
+    <header class="topic-header">
+      <div class="topic-header-bg note-grid" aria-hidden="true" />
+      <div class="reading-progress" data-reading-progress aria-hidden="true" />
+
+      <p class="topic-eyebrow">
+        <TrackIcon track={track!} size={16} />
+        <a href={`/roadmap/#${track}`}>{trackInfo?.title}</a>
+        {position && trackInfo && (
+          <span class="topic-eyebrow-pos">
+            · {position.order} of {trackInfo.topics.length}
+          </span>
+        )}
+      </p>
+
+      <h1 id="_top">{title}</h1>
       {tagline && <p class="topic-tagline">{tagline}</p>}
-      <p class="topic-meta">
+
+      <div class="topic-meta">
         <span class:list={['difficulty-badge', `difficulty-${difficulty}`]}>
           <span class="difficulty-dots" aria-hidden="true">
             <span />
@@ -40,9 +58,16 @@ const trackTitle = isTopic ? getTrack(track!)?.title : undefined;
           </span>
           {difficulty}
         </span>
-        <span class="topic-meta-item">{minutes} min read</span>
-        {trackTitle && <span class="topic-meta-item">{trackTitle}</span>}
-      </p>
+        <span class="topic-meta-item">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <path d="M8 4.5V8l2.4 1.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+          {minutes} min read
+        </span>
+        {reviewed && <span class="topic-meta-item">Reviewed {reviewed}</span>}
+      </div>
+
       {prereqs.length > 0 && (
         <div class="topic-prereqs">
           <span class="topic-prereqs-label">Read first</span>
@@ -64,65 +89,127 @@ const trackTitle = isTopic ? getTrack(track!)?.title : undefined;
           </ul>
         </div>
       )}
-    </div>
+    </header>
+  ) : (
+    <h1 id="_top" class="page-title">
+      {title}
+    </h1>
   )
 }
 
 <style>
-  h1 {
-    margin-top: 1rem;
+  .page-title,
+  .topic-header h1 {
+    margin: 0;
+    font-family: var(--note-font-display);
+    font-optical-sizing: auto;
     font-size: var(--sl-text-h1);
-    line-height: var(--sl-line-height-headings);
-    font-weight: 700;
-    letter-spacing: -0.015em;
+    font-weight: 620;
+    line-height: 1.08;
+    letter-spacing: -0.022em;
     color: var(--sl-color-white);
+    text-wrap: balance;
+  }
+  .page-title {
+    margin-top: 1rem;
   }
 
   .topic-header {
-    margin-top: 0.75rem;
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.9rem;
+    padding: 1.25rem 0 0.5rem;
+  }
+  .topic-header-bg {
+    position: absolute;
+    inset: -3rem -100vw -1rem;
+    z-index: -1;
+    mask-image: radial-gradient(ellipse 70% 100% at 30% 0%, #000 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 100% at 30% 0%, #000 30%, transparent 75%);
+    pointer-events: none;
+  }
+
+  /* A thin ink line under the site header that fills as you read. */
+  .reading-progress {
+    position: fixed;
+    z-index: 30;
+    top: var(--sl-nav-height);
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(to right, var(--sl-color-accent), var(--note-margin));
+    transform: scaleX(0);
+    transform-origin: left;
+    pointer-events: none;
+  }
+
+  .topic-eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0;
+    font-family: var(--sl-font-mono);
+    font-size: 0.76rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--note-margin);
+  }
+  .topic-eyebrow a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .topic-eyebrow a:hover {
+    text-decoration: underline;
+    text-underline-offset: 0.25em;
+  }
+  .topic-eyebrow-pos {
+    color: var(--sl-color-gray-3);
   }
 
   .topic-tagline {
     margin: 0;
-    font-size: var(--sl-text-xl);
+    max-width: 38rem;
+    font-family: var(--note-font-display);
+    font-style: italic;
+    font-size: clamp(1.15rem, 1.05rem + 0.5vw, 1.4rem);
     line-height: 1.45;
     color: var(--sl-color-gray-2);
   }
 
   .topic-meta {
-    margin: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem 1rem;
+    gap: 0.5rem 1.25rem;
+    margin-top: 0.2rem;
     font-size: var(--sl-text-sm);
     color: var(--sl-color-gray-3);
   }
-
-  .topic-meta-item + .topic-meta-item::before {
-    content: '·';
-    margin-inline-end: 1rem;
+  .topic-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
   }
 
   .difficulty-badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.15rem 0.6rem;
-    border: 1px solid var(--sl-color-gray-5);
+    gap: 0.45rem;
+    padding: 0.2rem 0.7rem;
+    border: 1px solid var(--sl-color-hairline-shade);
     border-radius: 999px;
+    background: var(--note-paper-raised);
     font-weight: 600;
     text-transform: capitalize;
     color: var(--sl-color-gray-1);
   }
-
   /* Filled dots show the level, so the badge does not rely on colour alone. */
   .difficulty-dots {
     display: inline-flex;
-    gap: 0.15rem;
+    gap: 0.18rem;
   }
   .difficulty-dots span {
     width: 0.45rem;
@@ -141,10 +228,30 @@ const trackTitle = isTopic ? getTrack(track!)?.title : undefined;
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.5rem;
+    margin-top: 0.2rem;
   }
   .topic-prereqs-label {
-    font-size: var(--sl-text-sm);
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
     font-weight: 600;
-    color: var(--sl-color-gray-2);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .topic-header > :not(.topic-header-bg, .reading-progress) {
+      animation: note-fade-up 0.7s var(--note-ease) both;
+    }
+    .topic-header > h1 {
+      animation-delay: 60ms;
+    }
+    .topic-header > .topic-tagline {
+      animation-delay: 140ms;
+    }
+    .topic-header > .topic-meta,
+    .topic-header > .topic-prereqs {
+      animation-delay: 220ms;
+    }
   }
 </style>

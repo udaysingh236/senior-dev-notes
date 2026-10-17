@@ -1,12 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <style>
-    rect { fill: #4b48d6; }
-    path { stroke: #ffffff; }
-    @media (prefers-color-scheme: dark) {
-      rect { fill: #8b8cf8; }
-      path { stroke: #14171d; }
-    }
-  </style>
-  <rect width="32" height="32" rx="7" />
-  <path d="M8 11h8M8 16h12M8 21h6M21 19l3 3-3 3" fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- An ink notebook page with a tiny system drawn on it: one client, two servers, one store. -->
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#232650"/>
+  <path d="M15 4v56" stroke="#e85d4a" stroke-width="2.5" opacity=".9"/>
+  <g stroke="#f4efe4" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M27 21 L42 21"/>
+    <path d="M42 21 L42 33"/>
+    <path d="M27 21 L27 33"/>
+    <path d="M27 33 L35 44"/>
+    <path d="M42 33 L35 44"/>
+  </g>
+  <circle cx="27" cy="21" r="5" fill="#f4efe4"/>
+  <circle cx="42" cy="21" r="5" fill="#ffd45c"/>
+  <circle cx="27" cy="33" r="4" fill="#f4efe4"/>
+  <circle cx="42" cy="33" r="4" fill="#f4efe4"/>
+  <circle cx="35" cy="45" r="5.5" fill="#f4efe4"/>
 </svg>

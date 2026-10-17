@@ -4,23 +4,25 @@ description: System design and production engineering for beginners, explained t
 template: splash
 giscus: false
 hero:
-  title: System design, explained like a mentor would
+  title: System design, explained like a <em>mentor</em> would.
   tagline: Rate limits, retries, caches, queues, replicas. The ideas that keep real systems standing, taught from the problem up, with diagrams you can play with and code you can run.
   actions:
     - text: Start the starter path
       link: '#the-starter-path'
-      icon: right-arrow
     - text: See the roadmap
       link: /roadmap/
-      icon: document
       variant: minimal
 ---
 
-import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 import TrackCards from '../../components/TrackCards.astro';
 import StarterPath from '../../components/StarterPath.astro';
+import FeatureTiles from '../../components/landing/FeatureTiles.astro';
+import ReadingMap from '../../components/landing/ReadingMap.astro';
+import LatestTopics from '../../components/landing/LatestTopics.astro';
 
-## Who this is for
+<p class="note-eyebrow">Who this is for</p>
+
+## You can code. Nobody taught you production.
 
 You are in your final year of a CS degree, fresh out of a bootcamp, or a year or two into your
 first job. You can write Python or JavaScript, you know roughly what an HTTP request is, and you
@@ -32,62 +34,34 @@ start with the problem that made people invent the thing, look at what people tr
 it breaks, then go deep on how it really works. No hand-waving, no assumed background beyond the
 basics, and every term is defined the first time it shows up.
 
-<CardGrid>
-  <Card title="Problem first" icon="warning">
-    Every mechanism exists because something hurt. Each page opens with that moment, so you know
-    why before you learn how.
-  </Card>
-  <Card title="See it move" icon="seti:svg">
-    Diagrams show the structure. Simulations let you change the numbers and watch queues fill,
-    tokens drain and replicas fall behind.
-  </Card>
-  <Card title="Code that runs" icon="seti:python">
-    Every snippet comes in Python and JavaScript, grows from naive to production-shaped, and has
-    a runnable twin in the repository.
-  </Card>
-  <Card title="Ready for interviews" icon="star">
-    Each topic ends with typical interview questions, what a strong answer covers, and a short
-    self-check.
-  </Card>
-</CardGrid>
+<FeatureTiles />
+
+<p class="note-eyebrow">Fresh from the notebook</p>
+
+## Latest notes
+
+<LatestTopics />
+
+<p class="note-eyebrow">One shape, every page</p>
 
 ## How to read a topic page
 
-Every topic follows the same shape, so after the first one you always know where you are.
+Every topic follows the same shape, so after the first one you always know where you are. If a
+page lists topics under **Read first**, those are the ideas it builds on. Skim them if any feel
+unfamiliar; the page still makes sense without them, but it makes more sense with them.
 
-<Steps>
+<ReadingMap />
 
-1. **The story.** A realistic production moment that makes you feel the problem. It ends with
-   the question the page answers.
-
-2. **The problem, properly.** Why the problem exists at all, who it hurts, and the key terms.
-
-3. **The obvious fix, and why it breaks.** What most people try first, and the neighbouring
-   ideas it gets confused with.
-
-4. **The core idea.** One everyday analogy, where that analogy stops working, and the overview
-   diagram.
-
-5. **How it works.** The longest part: each mechanism step by step, with numbers, diagrams and
-   a simulation you can drive. Then a side-by-side comparison and code you can build yourself.
-
-6. **The real world.** How well-known systems do it, the gotchas, and the trade-offs, including
-   when not to use it.
-
-7. **Check yourself.** Interview questions, a short quiz with hidden answers, a recap you can
-   revise from, and where to go next.
-
-</Steps>
-
-If a page lists topics under **Read first**, those are the ideas it builds on. Skim them if any
-feel unfamiliar; the page will still make sense without them, but it will make more sense with
-them.
+<p class="note-eyebrow">The curriculum</p>
 
 ## The tracks
 
-The curriculum is split into tracks. Within a track, topics are in reading order.
+The curriculum is split into fourteen tracks. Within a track, topics are in reading order, and
+each dot is one topic: filled once it is published.
 
 <TrackCards />
+
+<p class="note-eyebrow">Start here</p>
 
 ## The starter path
 

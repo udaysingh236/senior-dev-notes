@@ -1,34 +1,48 @@
 ---
-// One card per track on the landing page, with published and planned counts from CURRICULUM.md.
+// One card per track on the landing page: an icon, the first few topics, and one dot per topic,
+// filled in when it is published. Counts come from CURRICULUM.md.
 import { getTrackSummaries } from '../lib/topics';
+import TrackIcon from './TrackIcon.astro';
 
 const summaries = await getTrackSummaries();
 ---
 
 <ul class="track-cards not-content">
   {
-    summaries.map(({ track, topics, publishedCount, plannedCount }) => {
+    summaries.map(({ track, topics, publishedCount, plannedCount }, i) => {
       const first = topics.find((t) => t.href);
       const href = first?.href ?? `/roadmap/#${track.folder}`;
-      const total = publishedCount + plannedCount;
       return (
-        <li class="track-card">
-          <span class="track-card-num">Track {track.order}</span>
+        <li class:list={['track-card', { 'has-published': publishedCount > 0 }]} data-reveal style={`--reveal-i: ${i % 4}`}>
+          <div class="track-card-top">
+            <span class="track-card-icon">
+              <TrackIcon track={track.folder} size={22} />
+            </span>
+            <span class="track-card-num">{String(track.order).padStart(2, '0')}</span>
+          </div>
           <a class="track-card-title" href={href}>
             {track.title}
           </a>
           <p class="track-card-topics">
             {topics
-              .slice(0, 4)
+              .slice(0, 3)
               .map((t) => t.title)
               .join(' · ')}
-            {topics.length > 4 && ' …'}
+            {topics.length > 3 && ' …'}
           </p>
-          <div class="track-card-progress" aria-hidden="true">
-            <span style={`width: ${total ? (publishedCount / total) * 100 : 0}%`} />
+          <div class="track-card-dots" aria-hidden="true">
+            {topics.map((t) => (
+              <span class:list={{ 'is-done': t.published }} />
+            ))}
           </div>
           <p class="track-card-counts">
-            <strong>{publishedCount}</strong> published · {plannedCount} planned
+            {publishedCount > 0 ? (
+              <>
+                <strong>{publishedCount}</strong> of {publishedCount + plannedCount} published
+              </>
+            ) : (
+              <>{plannedCount} topics planned</>
+            )}
           </p>
         </li>
       );
@@ -39,9 +53,9 @@ const summaries = await getTrackSummaries();
 <style>
   .track-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr));
     gap: 1rem;
-    margin: 1.5rem 0 0;
+    margin: 1.75rem 0 0;
     padding: 0;
     list-style: none;
   }
@@ -49,30 +63,57 @@ const summaries = await getTrackSummaries();
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
-    padding: 1rem 1.1rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.75rem;
-    background: var(--sl-color-bg);
+    gap: 0.45rem;
+    padding: 1.1rem 1.15rem 1rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.85rem;
+    background: var(--note-paper-raised);
+    transition: translate 0.3s var(--note-ease), border-color 0.3s, box-shadow 0.3s;
   }
   .track-card:has(a:hover) {
-    border-color: var(--sl-color-accent);
+    translate: 0 -3px;
+    border-color: var(--sl-color-gray-4);
+    box-shadow: var(--note-shadow);
   }
   .track-card:has(a:focus-visible) {
     outline: 2px solid var(--sl-color-accent);
     outline-offset: 2px;
   }
+  .track-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .track-card-icon {
+    display: grid;
+    place-items: center;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 0.6rem;
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-gray-2);
+    transition: background-color 0.3s, color 0.3s, rotate 0.4s var(--note-ease);
+  }
+  .track-card.has-published .track-card-icon {
+    background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
+    color: var(--sl-color-text-accent);
+  }
+  .track-card:has(a:hover) .track-card-icon {
+    rotate: -6deg;
+  }
   .track-card-num {
-    font-size: var(--sl-text-2xs);
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
     color: var(--sl-color-gray-3);
   }
   .track-card-title {
-    font-size: var(--sl-text-lg);
-    font-weight: 700;
-    line-height: 1.3;
+    margin-top: 0.3rem;
+    font-family: var(--note-font-display);
+    font-size: 1.22rem;
+    font-weight: 600;
+    line-height: 1.25;
     color: var(--sl-color-white);
     text-decoration: none;
   }
@@ -92,22 +133,28 @@ const summaries = await getTrackSummaries();
     line-height: 1.55;
     color: var(--sl-color-gray-3);
   }
-  .track-card-progress {
-    height: 0.3rem;
-    margin-top: 0.4rem;
-    border-radius: 999px;
-    background: var(--sl-color-gray-6);
-    overflow: hidden;
+  .track-card-dots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.5rem;
   }
-  .track-card-progress span {
-    display: block;
-    height: 100%;
-    background: var(--sl-color-accent);
+  .track-card-dots span {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    border: 1.5px solid var(--sl-color-gray-4);
+  }
+  .track-card-dots span.is-done {
+    border-color: var(--viz-ok);
+    background: var(--viz-ok);
   }
   .track-card-counts {
     margin: 0;
-    font-size: var(--sl-text-sm);
-    color: var(--sl-color-gray-2);
+    font-family: var(--sl-font-mono);
+    font-size: 0.76rem;
+    letter-spacing: 0.02em;
+    color: var(--sl-color-gray-3);
   }
   .track-card-counts strong {
     color: var(--sl-color-white);

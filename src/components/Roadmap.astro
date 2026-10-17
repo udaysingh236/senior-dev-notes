@@ -2,6 +2,7 @@
 // Every planned topic, grouped by track, generated from CURRICULUM.md.
 import { getTrackSummaries } from '../lib/topics';
 import { getCurriculum } from '../lib/curriculum.mjs';
+import TrackIcon from './TrackIcon.astro';
 
 const summaries = await getTrackSummaries();
 const statusOf = new Map(
@@ -9,12 +10,19 @@ const statusOf = new Map(
 );
 const totalPublished = summaries.reduce((n, s) => n + s.publishedCount, 0);
 const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 0);
+const share = total ? (totalPublished / total) * 100 : 0;
 ---
 
 <div class="roadmap not-content">
-  <p class="roadmap-total">
-    <strong>{totalPublished}</strong> of {total} topics published across {summaries.length} tracks.
-  </p>
+  <div class="roadmap-summary">
+    <p class="roadmap-total">
+      <span class="roadmap-big">{totalPublished}</span>
+      <span>of {total} topics published, across {summaries.length} tracks</span>
+    </p>
+    <div class="roadmap-meter" role="img" aria-label={`${Math.round(share)}% of the roadmap published`}>
+      <span style={`--share: ${Math.max(share, 1.5)}%`}></span>
+    </div>
+  </div>
 
   <nav class="roadmap-jump" aria-label="Tracks">
     <ul class="chip-list">
@@ -22,6 +30,7 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
         summaries.map(({ track }) => (
           <li>
             <a class="chip" href={`#${track.folder}`}>
+              <TrackIcon track={track.folder} size={14} />
               {track.title}
             </a>
           </li>
@@ -32,19 +41,27 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
 
   {
     summaries.map(({ track, topics, publishedCount, plannedCount }) => (
-      <section class="roadmap-track" aria-labelledby={track.folder}>
-        <h2 id={track.folder}>
-          <span class="roadmap-track-num">{track.order}.</span> {track.title}
-        </h2>
-        <p class="roadmap-track-counts">
-          {publishedCount} published · {plannedCount} planned
-        </p>
+      <section class="roadmap-track" aria-labelledby={track.folder} data-reveal>
+        <div class="roadmap-track-head">
+          <span class:list={['roadmap-track-icon', { 'has-published': publishedCount > 0 }]}>
+            <TrackIcon track={track.folder} size={22} />
+          </span>
+          <div>
+            <h2 id={track.folder}>
+              <span class="roadmap-track-num">{String(track.order).padStart(2, '0')}</span> {track.title}
+            </h2>
+            <p class="roadmap-track-counts">
+              {publishedCount} published · {plannedCount} planned
+            </p>
+          </div>
+        </div>
         {track.intro && <p class="roadmap-track-intro">{track.intro}</p>}
         <ol class="roadmap-topics">
           {topics.map((t) => {
             const status = t.published ? 'published' : statusOf.get(t.slug) === 'pilot' ? 'pilot' : 'planned';
             return (
               <li class:list={['roadmap-topic', `is-${status}`]}>
+                <span class="roadmap-topic-dot" aria-hidden="true" />
                 {t.href ? (
                   <a href={t.href} class="roadmap-topic-title">
                     {t.title}
@@ -65,59 +82,155 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
 </div>
 
 <style>
+  .roadmap-summary {
+    display: grid;
+    gap: 0.8rem;
+    padding: 1.25rem 1.3rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.85rem;
+    background: var(--note-paper-raised);
+    box-shadow: var(--note-shadow);
+  }
   .roadmap-total {
-    font-size: var(--sl-text-lg);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    margin: 0;
+    color: var(--sl-color-gray-2);
   }
+  .roadmap-big {
+    font-family: var(--note-font-display);
+    font-size: 2.6rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--sl-color-white);
+  }
+  .roadmap-meter {
+    height: 0.6rem;
+    border-radius: 999px;
+    background: repeating-linear-gradient(90deg, var(--sl-color-gray-6) 0 6px, var(--sl-color-gray-5) 6px 7px);
+    overflow: hidden;
+  }
+  .roadmap-meter span {
+    display: block;
+    width: var(--share);
+    height: 100%;
+    border-radius: inherit;
+    background: var(--viz-ok);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .roadmap-meter span {
+      animation: roadmap-fill 1.4s 0.3s var(--note-ease) both;
+    }
+  }
+  @keyframes roadmap-fill {
+    from {
+      width: 0;
+    }
+  }
+
   .roadmap-jump {
-    margin: 1rem 0 0.5rem;
+    margin: 1.5rem 0 0.5rem;
   }
+  .roadmap-jump .chip {
+    gap: 0.35rem;
+  }
+
   .roadmap-track {
-    margin-top: 2.5rem;
+    margin-top: 3rem;
+  }
+  .roadmap-track-head {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+  }
+  .roadmap-track-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.7rem;
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-gray-2);
+  }
+  .roadmap-track-icon.has-published {
+    background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
+    color: var(--sl-color-text-accent);
   }
   .roadmap-track h2 {
     margin: 0;
+    font-family: var(--note-font-display);
     font-size: var(--sl-text-h3);
+    font-weight: 620;
     color: var(--sl-color-white);
     scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
   }
   .roadmap-track-num {
-    color: var(--sl-color-gray-3);
+    font-family: var(--sl-font-mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    vertical-align: 0.2em;
+    color: var(--note-margin);
   }
   .roadmap-track-counts {
-    margin: 0.25rem 0 0;
-    font-size: var(--sl-text-sm);
+    margin: 0.15rem 0 0;
+    font-family: var(--sl-font-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
     color: var(--sl-color-gray-3);
   }
   .roadmap-track-intro {
-    margin: 0.5rem 0 0;
+    margin: 0.75rem 0 0;
     color: var(--sl-color-gray-2);
   }
   .roadmap-topics {
-    margin: 0.75rem 0 0;
+    margin: 0.9rem 0 0;
     padding: 0;
     list-style: none;
-    border-top: 1px solid var(--sl-color-gray-6);
-    counter-reset: topic;
+    border-top: 1px solid var(--sl-color-hairline);
   }
   .roadmap-topic {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.55rem 0;
-    border-bottom: 1px solid var(--sl-color-gray-6);
-    counter-increment: topic;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.25rem;
+    border-bottom: 1px solid var(--sl-color-hairline);
+    transition: background-color 0.15s;
   }
-  .roadmap-topic-title::before {
-    content: counter(topic) '. ';
-    color: var(--sl-color-gray-3);
-    font-variant-numeric: tabular-nums;
+  .roadmap-topic:hover {
+    background: color-mix(in srgb, var(--sl-color-gray-6) 60%, transparent);
+  }
+  .roadmap-topic-dot {
+    flex: none;
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    border: 1.5px solid var(--sl-color-gray-4);
+  }
+  .is-published .roadmap-topic-dot {
+    border-color: var(--viz-ok);
+    background: var(--viz-ok);
+  }
+  .is-pilot .roadmap-topic-dot {
+    border-style: dashed;
+    border-color: var(--sl-color-gray-2);
   }
   .roadmap-topic-title {
+    flex: 1;
     color: var(--sl-color-gray-2);
   }
   a.roadmap-topic-title {
     font-weight: 600;
+    color: var(--sl-color-white);
+    text-decoration: underline;
+    text-decoration-color: var(--viz-ok);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.25em;
+  }
+  a.roadmap-topic-title:hover {
     color: var(--sl-color-text-accent);
   }
   .roadmap-status {
@@ -125,15 +238,16 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
     padding: 0.05rem 0.55rem;
     border: 1px solid var(--sl-color-gray-5);
     border-radius: 999px;
-    font-size: var(--sl-text-2xs);
+    font-family: var(--sl-font-mono);
+    font-size: 0.66rem;
     font-weight: 600;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--sl-color-gray-3);
   }
   .roadmap-status-published {
-    border-color: var(--sl-color-accent);
-    color: var(--sl-color-text-accent);
+    border-color: var(--viz-ok);
+    color: var(--viz-ok);
   }
   .roadmap-status-pilot {
     border-style: dashed;

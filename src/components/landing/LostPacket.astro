@@ -1,0 +1,102 @@
+---
+// The 404 drawing: a request leaves the browser, the route breaks halfway, and the packet falls
+// off the end. Loops gently; with reduced motion it shows the packet at the gap.
+---
+
+<figure class="lost">
+  <svg viewBox="0 0 400 190" width="100%" role="img" aria-labelledby="lost-t">
+    <title id="lost-t">A request leaves the browser, reaches a break in the route, and falls off.</title>
+    <rect x="8" y="40" width="104" height="52" rx="14" class="lost-client" />
+    <text x="60" y="73" class="lost-label">you</text>
+    <rect x="288" y="40" width="104" height="52" rx="6" class="lost-server" />
+    <text x="340" y="73" class="lost-label">this page</text>
+
+    <path d="M112 66H186" class="lost-wire" />
+    <path d="M226 66H288" class="lost-wire" />
+    <path d="M186 58l6 8-6 8M226 58l-6 8 6 8" class="lost-break" />
+    <text x="206" y="118" class="lost-note">404</text>
+
+    <circle cx="0" cy="0" r="8" class="lost-dot" />
+  </svg>
+</figure>
+
+<style>
+  .lost {
+    max-width: 30rem;
+    margin: 0 auto;
+  }
+  .lost svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .lost-client {
+    fill: var(--viz-client-soft);
+    stroke: var(--viz-client);
+    stroke-width: 2;
+  }
+  .lost-server {
+    fill: var(--viz-server-soft);
+    stroke: var(--viz-server);
+    stroke-width: 2;
+    stroke-dasharray: 6 5;
+  }
+  .lost-label {
+    font-size: 20px;
+    font-weight: 600;
+    text-anchor: middle;
+    fill: var(--viz-ink);
+  }
+  .lost-wire {
+    fill: none;
+    stroke: var(--viz-stroke);
+    stroke-width: 2;
+    stroke-dasharray: 4 6;
+  }
+  .lost-break {
+    fill: none;
+    stroke: var(--viz-bad);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .lost-note {
+    font-family: var(--note-font-display);
+    font-style: italic;
+    font-size: 26px;
+    font-weight: 600;
+    text-anchor: middle;
+    fill: var(--viz-bad);
+  }
+  .lost-dot {
+    fill: var(--viz-flow);
+    transform: translate(186px, 66px);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .lost-dot {
+      animation: lost-fall 3.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  }
+  @keyframes lost-fall {
+    0% {
+      transform: translate(112px, 66px);
+      opacity: 0;
+    }
+    8% {
+      opacity: 1;
+    }
+    40% {
+      transform: translate(192px, 66px);
+      fill: var(--viz-flow);
+    }
+    48% {
+      transform: translate(204px, 74px);
+    }
+    78%,
+    100% {
+      transform: translate(214px, 182px);
+      opacity: 0;
+      fill: var(--viz-bad);
+    }
+  }
+</style>

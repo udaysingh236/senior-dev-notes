@@ -37,14 +37,39 @@ export default defineConfig({
       description:
         'System design and production engineering for beginners, explained the way a senior engineer mentors a junior.',
       favicon: '/favicon.svg',
+      logo: { src: './src/assets/logo.svg', alt: '' },
       social: [{ icon: 'github', label: 'GitHub', href: REPO }],
       editLink: { baseUrl: `${REPO}/edit/main/` },
       lastUpdated: true,
-      customCss: ['./src/styles/custom.css'],
+      customCss: [
+        // Self-hosted fonts: only the Latin files are downloaded, and only when used.
+        '@fontsource-variable/fraunces/opsz.css',
+        '@fontsource-variable/fraunces/opsz-italic.css',
+        '@fontsource/ibm-plex-sans/latin-400.css',
+        '@fontsource/ibm-plex-sans/latin-400-italic.css',
+        '@fontsource/ibm-plex-sans/latin-500.css',
+        '@fontsource/ibm-plex-sans/latin-600.css',
+        '@fontsource/ibm-plex-sans/latin-700.css',
+        '@fontsource/ibm-plex-mono/latin-400.css',
+        '@fontsource/ibm-plex-mono/latin-500.css',
+        '@fontsource/ibm-plex-mono/latin-600.css',
+        './src/styles/custom.css',
+      ],
+      expressiveCode: {
+        styleOverrides: {
+          borderRadius: '0.6rem',
+          codeFontFamily: "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          uiFontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+          codeFontSize: '0.86rem',
+          codeLineHeight: '1.65',
+        },
+      },
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
       plugins: GISCUS.categoryId ? [starlightGiscus(GISCUS)] : [],
       components: {
         PageTitle: './src/components/TopicHeader.astro',
+        Hero: './src/components/landing/Hero.astro',
+        Footer: './src/components/Footer.astro',
       },
       sidebar: [
         {

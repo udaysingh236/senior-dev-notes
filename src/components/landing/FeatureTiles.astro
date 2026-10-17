@@ -1,0 +1,281 @@
+---
+// Four promises the site makes, each with a small looping drawing: a latency spike (problem
+// first), a token bucket (see it move), a terminal (code that runs) and a checklist (interviews).
+// The drawings are CSS-animated SVG; with reduced motion they show their final frame.
+---
+
+<ul class="tiles not-content">
+  <li class="tile" data-reveal style="--reveal-i: 0">
+    <svg class="tile-art" viewBox="0 0 240 120" role="img" aria-label="A latency graph that runs flat, then spikes sharply.">
+      <g class="t-axis">
+        <path d="M14 104h214M14 104V12" />
+      </g>
+      <path class="t-limit" d="M14 44h214" />
+      <polyline class="t-line" points="14,90 34,86 54,92 74,84 94,88 114,82 134,86 150,74 162,30 174,22 186,58 204,80 228,84" />
+      <circle class="t-spike" cx="174" cy="22" r="6" />
+      <text x="20" y="38" class="t-label">p99 budget</text>
+    </svg>
+    <h3>Problem first</h3>
+    <p>Every mechanism exists because something hurt. Each page opens with that moment, so you know why before you learn how.</p>
+  </li>
+
+  <li class="tile" data-reveal style="--reveal-i: 1">
+    <svg class="tile-art" viewBox="0 0 240 120" role="img" aria-label="Tokens drop into a bucket one by one, and requests take them out.">
+      <path class="t-bucket" d="M70 40v58a8 8 0 0 0 8 8h84a8 8 0 0 0 8-8V40" />
+      <g class="t-tokens">
+        <circle cx="96" cy="94" r="8" />
+        <circle cx="120" cy="94" r="8" />
+        <circle cx="144" cy="94" r="8" />
+        <circle cx="108" cy="76" r="8" />
+        <circle cx="132" cy="76" r="8" />
+      </g>
+      <circle class="t-drop" cx="120" cy="14" r="8" />
+      <circle class="t-take" cx="190" cy="94" r="8" />
+      <text x="178" y="38" class="t-label">5 / s</text>
+    </svg>
+    <h3>See it move</h3>
+    <p>Diagrams show the structure. Simulations let you change the numbers and watch queues fill, tokens drain and replicas fall behind.</p>
+  </li>
+
+  <li class="tile" data-reveal style="--reveal-i: 2">
+    <svg class="tile-art" viewBox="0 0 240 120" role="img" aria-label="A terminal running an example and printing its timings.">
+      <rect class="t-term" x="10" y="8" width="220" height="104" rx="8" />
+      <circle cx="26" cy="22" r="4" class="t-dot-r" />
+      <circle cx="40" cy="22" r="4" class="t-dot-a" />
+      <circle cx="54" cy="22" r="4" class="t-dot-g" />
+      <g class="t-code">
+        <text x="22" y="52" class="t-type t-type-1">$ python by_hand.py</text>
+        <text x="22" y="74" class="t-type t-type-2">dns     40 ms</text>
+        <text x="22" y="96" class="t-type t-type-3">tls     24 ms  ok</text>
+      </g>
+      <rect class="t-caret" x="22" y="84" width="9" height="16" />
+    </svg>
+    <h3>Code that runs</h3>
+    <p>Every snippet comes in Python and JavaScript, grows from naive to production-shaped, and has a runnable twin in the repository.</p>
+  </li>
+
+  <li class="tile" data-reveal style="--reveal-i: 3">
+    <svg class="tile-art" viewBox="0 0 240 120" role="img" aria-label="An interview checklist with three items ticked one after another.">
+      {[0, 1, 2].map((i) => (
+        <g>
+          <rect class="t-box" x="22" y={16 + i * 34} width="22" height="22" rx="5" />
+          <path class={`t-tick t-tick-${i}`} d={`M27 ${27 + i * 34}l5 5 9-10`} pathLength="1" />
+          <path class="t-rule" d={`M58 ${27 + i * 34}h${[150, 120, 160][i]}`} />
+        </g>
+      ))}
+    </svg>
+    <h3>Ready for interviews</h3>
+    <p>Each topic ends with typical interview questions, what a strong answer covers, and a short self-check with hidden answers.</p>
+  </li>
+</ul>
+
+<style>
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+    gap: 1rem;
+    margin: 1.75rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1.1rem 1.2rem 1.3rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.9rem;
+    background: var(--note-paper-raised);
+    box-shadow: var(--note-shadow);
+    transition: translate 0.3s var(--note-ease), border-color 0.3s;
+  }
+  .tile:hover {
+    translate: 0 -3px;
+    border-color: var(--sl-color-gray-4);
+  }
+  .tile h3 {
+    margin: 0.4rem 0 0;
+    font-family: var(--note-font-display);
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .tile p {
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+  }
+
+  .tile-art {
+    width: 100%;
+    height: auto;
+    border-radius: 0.6rem;
+    background:
+      linear-gradient(var(--note-grid) 1px, transparent 1px) 0 0 / 16px 16px,
+      linear-gradient(90deg, var(--note-grid) 1px, transparent 1px) 0 0 / 16px 16px,
+      var(--viz-surface);
+    border: 1px solid var(--sl-color-hairline);
+  }
+  .t-label {
+    font-family: var(--note-font-display);
+    font-style: italic;
+    font-size: 15px;
+    fill: var(--viz-muted);
+  }
+
+  /* 1. Latency spike */
+  .t-axis path {
+    fill: none;
+    stroke: var(--viz-stroke);
+    stroke-width: 1.5;
+  }
+  .t-limit {
+    fill: none;
+    stroke: var(--viz-bad);
+    stroke-width: 1.5;
+    stroke-dasharray: 5 5;
+    opacity: 0.7;
+  }
+  .t-line {
+    fill: none;
+    stroke: var(--viz-flow);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 260;
+  }
+  .t-spike {
+    fill: var(--viz-bad);
+  }
+
+  /* 2. Token bucket */
+  .t-bucket {
+    fill: none;
+    stroke: var(--viz-ink);
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+  .t-tokens circle,
+  .t-drop {
+    fill: var(--viz-ok);
+  }
+  .t-take {
+    fill: var(--viz-flow);
+  }
+
+  /* 3. Terminal */
+  .t-term {
+    fill: color-mix(in srgb, var(--viz-ink) 6%, var(--viz-surface));
+    stroke: var(--viz-stroke);
+    stroke-width: 1.5;
+  }
+  .t-dot-r { fill: var(--viz-bad); }
+  .t-dot-a { fill: var(--viz-warn); }
+  .t-dot-g { fill: var(--viz-ok); }
+  .t-code text {
+    font-family: var(--sl-font-mono);
+    font-size: 15px;
+    fill: var(--viz-ink);
+  }
+  .t-type-1 { fill: var(--viz-flow) !important; }
+  .t-caret {
+    fill: var(--viz-ink);
+    opacity: 0;
+  }
+
+  /* 4. Checklist */
+  .t-box {
+    fill: var(--viz-surface);
+    stroke: var(--viz-stroke);
+    stroke-width: 2;
+  }
+  .t-tick {
+    fill: none;
+    stroke: var(--viz-ok);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .t-rule {
+    stroke: var(--viz-stroke);
+    stroke-width: 6;
+    stroke-linecap: round;
+    opacity: 0.55;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .t-line {
+      animation: t-draw 4s var(--note-ease) infinite;
+    }
+    .t-spike {
+      animation: t-pop 4s ease-out infinite;
+    }
+    .t-drop {
+      animation: t-drop 2.4s cubic-bezier(0.5, 0, 0.75, 0) infinite;
+    }
+    .t-take {
+      animation: t-take 2.4s 1.2s var(--note-ease) infinite both;
+    }
+    .t-type {
+      clip-path: inset(0 100% 0 0);
+      animation: t-type 6s steps(22, end) infinite;
+    }
+    .t-type-2 {
+      animation-name: t-type-2;
+    }
+    .t-type-3 {
+      animation-name: t-type-3;
+    }
+    .t-caret {
+      animation: t-caret 1s steps(1) infinite;
+    }
+    .t-tick {
+      stroke-dasharray: 1;
+      animation: t-tick 4.5s var(--note-ease) infinite;
+    }
+    .t-tick-1 { animation-delay: 0.45s; }
+    .t-tick-2 { animation-delay: 0.9s; }
+  }
+
+  @keyframes t-draw {
+    0% { stroke-dashoffset: 260; }
+    55%, 100% { stroke-dashoffset: 0; }
+  }
+  @keyframes t-pop {
+    0%, 38% { opacity: 0; transform: scale(0.3); transform-origin: 174px 22px; }
+    46% { opacity: 1; transform: scale(1.5); transform-origin: 174px 22px; }
+    54%, 100% { opacity: 1; transform: scale(1); transform-origin: 174px 22px; }
+  }
+  @keyframes t-drop {
+    0% { transform: translateY(0); opacity: 0; }
+    15% { opacity: 1; }
+    70%, 100% { transform: translateY(44px); opacity: 0; }
+  }
+  @keyframes t-take {
+    0% { transform: translateX(-52px); opacity: 0; }
+    20% { opacity: 1; }
+    60% { transform: translateX(0); opacity: 1; }
+    100% { transform: translateX(30px); opacity: 0; }
+  }
+  @keyframes t-type {
+    0% { clip-path: inset(0 100% 0 0); }
+    20%, 100% { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes t-type-2 {
+    0%, 30% { clip-path: inset(0 100% 0 0); }
+    45%, 100% { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes t-type-3 {
+    0%, 52% { clip-path: inset(0 100% 0 0); }
+    68%, 100% { clip-path: inset(0 0 0 0); }
+  }
+  @keyframes t-caret {
+    50% { opacity: 1; }
+  }
+  @keyframes t-tick {
+    0%, 8% { stroke-dashoffset: 1; }
+    25%, 85% { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: 1; }
+  }
+</style>

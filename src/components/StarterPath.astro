@@ -1,81 +1,155 @@
 ---
-// The suggested starter path from CURRICULUM.md, in reading order.
+// The suggested starter path from CURRICULUM.md, drawn as a route map: one station per topic,
+// filled when the page is published, joined by a line that is solid up to the last published
+// station and dashed after it.
 import { getCurriculum } from '../lib/curriculum.mjs';
 import { resolveTopic } from '../lib/topics';
 
 const topics = await Promise.all(getCurriculum().starterPath.map((slug) => resolveTopic(slug, 'the starter path')));
+const half = Math.ceil(topics.length / 2);
 ---
 
-<ol class="starter-path not-content">
+<ol class="route not-content" style={`--rows: ${half}`}>
   {
-    topics.map((t, i) => (
-      <li class:list={['starter-step', { 'is-soon': !t.href }]}>
-        <span class="starter-num" aria-hidden="true">
-          {i + 1}
-        </span>
-        <span class="starter-body">
-          {t.href ? (
-            <a href={t.href}>{t.title}</a>
-          ) : (
-            <span class="starter-title">
-              {t.title} <span class="chip-soon-label">coming soon</span>
-            </span>
-          )}
-          <span class="starter-track">{t.trackTitle}</span>
-        </span>
-      </li>
-    ))
+    topics.map((t, i) => {
+      const nextDone = topics[i + 1]?.href;
+      return (
+        <li
+          class:list={['station', { 'is-done': t.href, 'line-done': t.href && nextDone, 'col-end': i === half - 1 }]}
+          data-reveal
+          style={`--reveal-i: ${i % 5}`}
+        >
+          <span class="station-dot" aria-hidden="true">
+            {i + 1}
+          </span>
+          <span class="station-body">
+            {t.href ? (
+              <a href={t.href}>{t.title}</a>
+            ) : (
+              <span class="station-title">
+                {t.title} <span class="chip-soon-label">soon</span>
+              </span>
+            )}
+            <span class="station-track">{t.trackTitle}</span>
+          </span>
+        </li>
+      );
+    })
   }
 </ol>
 
 <style>
-  .starter-path {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
-    gap: 0.5rem 1.5rem;
-    margin: 1.25rem 0 0;
+  .route {
+    margin: 1.75rem 0 0;
     padding: 0;
     list-style: none;
   }
-  .starter-step {
+  .station {
+    position: relative;
     display: flex;
     align-items: flex-start;
-    gap: 0.75rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--sl-color-gray-6);
+    gap: 0.9rem;
+    padding-bottom: 1.1rem;
   }
-  .starter-num {
+  /* The line to the next station. */
+  .station::before {
+    content: '';
+    position: absolute;
+    top: 2.1rem;
+    bottom: -0.1rem;
+    left: calc(1rem - 1.5px);
+    width: 3px;
+    background: repeating-linear-gradient(to bottom, var(--sl-color-gray-4) 0 4px, transparent 4px 9px);
+  }
+  .station.line-done::before {
+    background: var(--viz-ok);
+  }
+  .station:last-child::before {
+    display: none;
+  }
+  .station-dot {
+    position: relative;
+    z-index: 1;
     flex: none;
     display: grid;
     place-items: center;
-    width: 1.9rem;
-    height: 1.9rem;
-    border: 1.5px solid var(--sl-color-gray-4);
+    width: 2rem;
+    height: 2rem;
+    border: 2px solid var(--sl-color-gray-4);
     border-radius: 50%;
-    font-size: var(--sl-text-xs);
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: var(--sl-color-gray-2);
+    background: var(--sl-color-black);
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-3);
   }
-  .starter-step:not(.is-soon) .starter-num {
-    border-color: var(--sl-color-accent);
-    color: var(--sl-color-text-accent);
+  .station.is-done .station-dot {
+    border-color: var(--viz-ok);
+    background: var(--viz-ok-soft);
+    color: var(--sl-color-white);
   }
-  .starter-body {
+  @media (prefers-reduced-motion: no-preference) {
+    .station.is-done .station-dot::after {
+      content: '';
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+      border: 2px solid var(--viz-ok);
+      opacity: 0;
+      animation: station-ping 2.8s ease-out infinite;
+    }
+  }
+  @keyframes station-ping {
+    0% {
+      opacity: 0.6;
+      transform: scale(0.8);
+    }
+    70%,
+    100% {
+      opacity: 0;
+      transform: scale(1.5);
+    }
+  }
+  .station-body {
     display: flex;
     flex-direction: column;
+    padding-top: 0.2rem;
     line-height: 1.4;
   }
-  .starter-body a {
+  .station-body a {
     font-weight: 600;
+    color: var(--sl-color-white);
+    text-decoration: underline;
+    text-decoration-color: var(--viz-ok);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.25em;
+  }
+  .station-body a:hover {
     color: var(--sl-color-text-accent);
   }
-  .starter-title {
-    font-weight: 600;
+  .station-title {
+    font-weight: 500;
     color: var(--sl-color-gray-2);
   }
-  .starter-track {
-    font-size: var(--sl-text-xs);
+  .station-track {
+    margin-top: 0.15rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: var(--sl-color-gray-3);
+  }
+
+  /* Two columns on wide screens, each its own line: 1 to 10, then 11 to 20. */
+  @media (min-width: 50rem) {
+    .route {
+      display: grid;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(var(--rows), auto);
+      column-gap: 3rem;
+    }
+    .station.col-end::before {
+      display: none;
+    }
   }
 </style>

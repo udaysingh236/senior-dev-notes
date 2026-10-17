@@ -1,0 +1,143 @@
+---
+// The most recently reviewed topic pages, as index cards: track, title, tagline, level and
+// reading time.
+import { getPages, getTrack, pageHref, readingMinutes } from '../../lib/topics';
+import TrackIcon from '../TrackIcon.astro';
+
+interface Props {
+  limit?: number;
+}
+
+const { limit = 3 } = Astro.props;
+const pages = [...(await getPages()).values()]
+  .filter((p) => p.data.track)
+  .sort((a, b) => (b.data.lastReviewed?.getTime() ?? 0) - (a.data.lastReviewed?.getTime() ?? 0))
+  .slice(0, limit);
+---
+
+<ul class="latest not-content">
+  {
+    pages.map((p, i) => (
+      <li class="latest-card" data-reveal style={`--reveal-i: ${i}`}>
+        <span class="latest-track">
+          <TrackIcon track={p.data.track!} size={16} />
+          {getTrack(p.data.track!)?.title}
+        </span>
+        <a class="latest-title" href={pageHref(p)}>
+          {p.data.title}
+        </a>
+        <p class="latest-tagline">{p.data.tagline}</p>
+        <span class="latest-meta">
+          <span>{p.data.difficulty}</span>
+          <span>{readingMinutes(p.body)} min</span>
+          <span class="latest-arrow" aria-hidden="true">
+            Read
+            <svg viewBox="0 0 20 20" width="16" height="16">
+              <path d="M4 10h11M11 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+        </span>
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .latest {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+    gap: 1rem;
+    margin: 1.75rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .latest-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 1.3rem 1.3rem 1.1rem 1.6rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.85rem;
+    background:
+      linear-gradient(to right, transparent 0.95rem, var(--note-margin) 0.95rem, var(--note-margin) calc(0.95rem + 1.5px), transparent calc(0.95rem + 1.5px)),
+      repeating-linear-gradient(to bottom, transparent 0 1.6rem, var(--note-grid) 1.6rem calc(1.6rem + 1px)),
+      var(--note-paper-raised);
+    box-shadow: var(--note-shadow);
+    transition: translate 0.3s var(--note-ease), rotate 0.3s var(--note-ease);
+  }
+  .latest-card:has(a:hover) {
+    translate: 0 -4px;
+    rotate: -0.4deg;
+  }
+  .latest-card:has(a:focus-visible) {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+  .latest-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding-left: 0.6rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--note-margin);
+  }
+  .latest-title {
+    padding-left: 0.6rem;
+    font-family: var(--note-font-display);
+    font-size: 1.45rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+  .latest-title::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .latest-title:focus-visible {
+    outline: none;
+  }
+  .latest-tagline {
+    flex: 1;
+    margin: 0;
+    padding-left: 0.6rem;
+    font-family: var(--note-font-display);
+    font-style: italic;
+    font-size: 1.05rem;
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+  }
+  .latest-meta {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.4rem;
+    padding-left: 0.6rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.76rem;
+    text-transform: capitalize;
+    color: var(--sl-color-gray-3);
+  }
+  .latest-arrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-left: auto;
+    font-weight: 600;
+    text-transform: none;
+    color: var(--sl-color-text-accent);
+  }
+  .latest-arrow svg {
+    transition: translate 0.25s var(--note-ease);
+  }
+  .latest-card:has(a:hover) .latest-arrow svg {
+    translate: 3px 0;
+  }
+</style>

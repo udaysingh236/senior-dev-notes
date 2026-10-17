@@ -1,0 +1,224 @@
+---
+// Replaces Starlight's Hero on the landing page. Title, tagline and actions still come from the
+// page's `hero` frontmatter; the right-hand side is the live system diagram. Wrap a word of the
+// title in <em> to give it the highlighter stroke.
+import { getTrackSummaries } from '../../lib/topics';
+import HeroSystem from './HeroSystem.astro';
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+
+const summaries = await getTrackSummaries();
+const published = summaries.reduce((n, s) => n + s.publishedCount, 0);
+const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 0);
+---
+
+<div class="note-hero">
+  <div class="note-hero-bg note-grid" aria-hidden="true"></div>
+
+  <div class="note-hero-copy">
+    <p class="note-eyebrow note-hero-in" style="--i: 0">Field notes from production</p>
+    <h1 id="_top" data-page-title class="note-hero-in" style="--i: 1" set:html={title} />
+    {tagline && <p class="note-hero-tagline note-hero-in" style="--i: 2" set:html={tagline} />}
+    {
+      actions.length > 0 && (
+        <div class="note-hero-actions note-hero-in" style="--i: 3">
+          {actions.map(({ link, text, variant }) => (
+            <a href={link} class:list={['note-btn', variant === 'minimal' ? 'note-btn-quiet' : 'note-btn-ink']}>
+              {text}
+              <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+                <path d="M4 10h11M11 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </a>
+          ))}
+        </div>
+      )
+    }
+    <dl class="note-hero-stats note-hero-in" style="--i: 4">
+      <div><dt>topics published</dt><dd>{published}</dd></div>
+      <div><dt>on the roadmap</dt><dd>{total}</dd></div>
+      <div><dt>tracks</dt><dd>{summaries.length}</dd></div>
+    </dl>
+  </div>
+
+  <div class="note-hero-art note-hero-in" style="--i: 2">
+    <HeroSystem />
+  </div>
+</div>
+
+<style>
+  .note-hero {
+    position: relative;
+    display: grid;
+    grid-template-columns: 100%;
+    gap: 2.5rem;
+    align-items: center;
+    padding: 2rem 0 1.5rem;
+  }
+  /* The grid runs edge to edge behind the hero and fades out at the bottom. */
+  .note-hero-bg {
+    position: absolute;
+    inset: -2rem -50vw 0;
+    z-index: -1;
+    mask-image: linear-gradient(to bottom, #000 55%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  }
+
+  .note-hero-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    min-width: 0;
+  }
+
+  .note-hero h1 {
+    margin: 0;
+    font-size: clamp(2.5rem, 1.6rem + 4.2vw, 4.4rem);
+    font-weight: 600;
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+    color: var(--sl-color-white);
+    text-wrap: balance;
+  }
+  /* The highlighter stroke, drawn in after the page loads. */
+  .note-hero h1 :global(em) {
+    font-style: italic;
+    font-weight: 500;
+    background: linear-gradient(var(--note-highlight), var(--note-highlight)) no-repeat 0 88% / 100% 0.32em;
+    padding: 0 0.06em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .note-hero h1 :global(em) {
+      animation: note-highlight-in 0.9s 0.7s var(--note-ease) both;
+    }
+  }
+  @keyframes note-highlight-in {
+    from {
+      background-size: 0% 0.32em;
+    }
+  }
+
+  .note-hero-tagline {
+    margin: 0;
+    max-width: 34rem;
+    font-size: clamp(1.05rem, 1rem + 0.35vw, 1.25rem);
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+  }
+
+  .note-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.25rem;
+  }
+  .note-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.8rem 1.3rem;
+    border-radius: 0.6rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: transform 0.25s var(--note-ease), box-shadow 0.25s, background-color 0.2s, border-color 0.2s;
+  }
+  .note-btn svg {
+    transition: transform 0.25s var(--note-ease);
+  }
+  .note-btn:hover svg {
+    transform: translateX(3px);
+  }
+  .note-btn-ink {
+    background: var(--sl-color-white);
+    color: var(--sl-color-black);
+    box-shadow: 0 2px 0 var(--note-margin);
+  }
+  .note-btn-ink:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 0 var(--note-margin);
+  }
+  .note-btn-quiet {
+    border: 1px solid var(--sl-color-gray-4);
+    color: var(--sl-color-white);
+    background: color-mix(in srgb, var(--sl-color-black) 70%, transparent);
+  }
+  .note-btn-quiet:hover {
+    border-color: var(--sl-color-white);
+  }
+  .note-btn:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 3px;
+  }
+
+  .note-hero-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 2rem;
+    margin: 0.75rem 0 0;
+    padding-top: 1rem;
+    border-top: 1px dashed var(--sl-color-gray-5);
+  }
+  .note-hero-stats div {
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .note-hero-stats dd {
+    margin: 0;
+    font-family: var(--note-font-display);
+    font-size: 1.9rem;
+    font-weight: 600;
+    line-height: 1.1;
+    color: var(--sl-color-white);
+  }
+  .note-hero-stats dt {
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+
+  .note-hero-art {
+    position: relative;
+    max-width: 30rem;
+    width: 100%;
+    margin-inline: auto;
+    padding: 1.25rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 1rem;
+    background: color-mix(in srgb, var(--viz-surface) 88%, transparent);
+    box-shadow: var(--note-shadow);
+  }
+  /* A strip of tape holding the drawing to the page. */
+  .note-hero-art::before {
+    content: '';
+    position: absolute;
+    top: -0.7rem;
+    left: 50%;
+    width: 6.5rem;
+    height: 1.4rem;
+    transform: translateX(-50%) rotate(-2deg);
+    background: color-mix(in srgb, var(--note-highlight-strong) 45%, transparent);
+    border-radius: 2px;
+  }
+
+  @media (min-width: 60rem) {
+    .note-hero {
+      grid-template-columns: 1.15fr 1fr;
+      gap: 3.5rem;
+      padding-block: 3.5rem 2.5rem;
+    }
+    .note-hero-art {
+      /* `rotate`, not `transform`, so the entrance animation does not undo the tilt. */
+      rotate: 0.8deg;
+    }
+  }
+
+  /* Entrance: each piece rises in after the one before. */
+  @media (prefers-reduced-motion: no-preference) {
+    .note-hero-in {
+      animation: note-fade-up 0.8s var(--note-ease) both;
+      animation-delay: calc(var(--i) * 110ms);
+    }
+  }
+</style>
