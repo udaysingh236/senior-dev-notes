@@ -1,0 +1,74 @@
+---
+// Hero diagram: the five steps of a page load. Find the server (DNS), connect and secure
+// (TCP + TLS), ask (HTTP request), answer (the servers behind the address), draw (render).
+// The viewBox starts above 0 to leave room for the Figure's enlarge button over the top row.
+---
+
+<svg viewBox="0 -34 400 406" width="100%" role="img" aria-labelledby="hw-ov-t hw-ov-d">
+  <title id="hw-ov-t">The five steps of loading a page</title>
+  <desc id="hw-ov-d">
+    The browser on the left, a DNS resolver and your servers on the right. Step 1, find: the
+    browser asks DNS where the name lives and gets an IP address back. Step 2, connect: the
+    browser opens a TCP connection and secures it with TLS. Step 3, ask: it sends GET /. Step 4,
+    answer: the servers, a CDN edge, a load balancer, the app and its database, send back 200 OK
+    with the HTML. Step 5, draw: the browser turns the HTML into pixels, and repeats steps 1 to 4
+    for every image, script and font the page mentions.
+  </desc>
+  <defs>
+    <marker id="hw-ov-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="hw-ov-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+    <marker id="hw-ov-store" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-store)" />
+    </marker>
+  </defs>
+
+  <g font-size="19" text-anchor="middle">
+    <!-- Browser -->
+    <rect x="6" y="12" width="122" height="350" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="67" y="42" font-weight="700" style="fill: var(--viz-ink)">Browser</text>
+    <text x="67" y="314" font-weight="700" style="fill: var(--viz-ink)">5 draw</text>
+    <text x="67" y="340" style="fill: var(--viz-muted)">the page</text>
+
+    <!-- DNS -->
+    <rect x="252" y="12" width="142" height="66" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="323" y="40" font-weight="700" style="fill: var(--viz-ink)">DNS</text>
+    <text x="323" y="66" style="fill: var(--viz-muted)">resolver</text>
+
+    <!-- Your servers -->
+    <rect x="252" y="122" width="142" height="240" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="323" y="152" font-weight="700" style="fill: var(--viz-ink)">Servers</text>
+    <g style="fill: var(--viz-muted)">
+      <text x="323" y="196">CDN edge</text>
+      <text x="323" y="236">load balancer</text>
+      <text x="323" y="276">app</text>
+      <text x="323" y="316">database</text>
+    </g>
+  </g>
+
+  <g font-size="19" font-weight="600" text-anchor="middle">
+    <!-- 1 find -->
+    <line x1="130" y1="34" x2="249" y2="34" stroke-width="2" style="stroke: var(--viz-store)" marker-end="url(#hw-ov-store)" />
+    <text x="190" y="26" style="fill: var(--viz-store)">1 find</text>
+    <line x1="250" y1="58" x2="131" y2="58" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-store)" marker-end="url(#hw-ov-store)" />
+    <text x="190" y="86" font-weight="400" style="fill: var(--viz-muted)">IP address</text>
+
+    <!-- 2 connect -->
+    <line x1="131" y1="164" x2="249" y2="164" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#hw-ov-flow)" marker-end="url(#hw-ov-flow)" />
+    <text x="190" y="154" style="fill: var(--viz-flow)">2 connect</text>
+    <text x="190" y="190" font-weight="400" style="fill: var(--viz-muted)">TCP + TLS</text>
+
+    <!-- 3 ask -->
+    <line x1="130" y1="236" x2="249" y2="236" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#hw-ov-flow)" />
+    <text x="190" y="226" style="fill: var(--viz-flow)">3 ask</text>
+    <text x="190" y="260" font-weight="400" style="fill: var(--viz-muted)">GET /</text>
+
+    <!-- 4 answer -->
+    <line x1="250" y1="300" x2="131" y2="300" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-ok)" marker-end="url(#hw-ov-ok)" />
+    <text x="190" y="290" style="fill: var(--viz-ok)">4 answer</text>
+    <text x="190" y="324" font-weight="400" style="fill: var(--viz-muted)">200 + HTML</text>
+  </g>
+</svg>

@@ -1,0 +1,62 @@
+---
+// Round trips to the first byte, for one protocol or all of them side by side.
+import SimShell from '../../sim/SimShell.astro';
+
+type Protocol = 'tls12' | 'tls13' | 'quic' | 'compare';
+
+interface Props {
+  protocol: Protocol;
+  /** Overrides the default "What to watch for" text for this mode. */
+  watchFor?: string;
+}
+
+const COPY: Record<Protocol, { title: string; description: string; watchFor: string }> = {
+  tls12: {
+    title: 'A first visit over TCP and TLS 1.2 (slowed down 5×)',
+    description:
+      'A browser on the left and a server on the right, with a DNS resolver above. Packets travel along the wire between them: the DNS question, the TCP handshake, two round trips of TLS 1.2, then the request and the first byte of the response. A waterfall underneath fills in each phase as it happens.',
+    watchFor:
+      'Count the trips across the wire before GET / is even sent: one for TCP, two for TLS 1.2. Then drag the round trip slider down to 20 ms and see how little the server work matters by comparison.',
+  },
+  tls13: {
+    title: 'A first visit over TCP and TLS 1.3 (slowed down 5×)',
+    description:
+      'A browser on the left and a server on the right, with a DNS resolver above. Packets travel along the wire between them: the DNS question, the TCP handshake, one round trip of TLS 1.3, then the request and the first byte of the response. A waterfall underneath fills in each phase as it happens.',
+    watchFor:
+      'Three trips across the wire before the first byte: TCP, TLS, then the request itself. With the default 190 ms round trip, that is 570 ms of pure waiting, more than ten times the 50 ms of server work. Slide the round trip to 20 ms, the distance to a nearby CDN edge, and watch the whole load shrink.',
+  },
+  quic: {
+    title: 'A first visit over HTTP/3 and QUIC (slowed down 5×)',
+    description:
+      'A browser on the left and a server on the right, with a DNS resolver above. QUIC sets up the connection and the encryption in one round trip, then the request and the first byte of the response follow. A waterfall underneath fills in each phase; the QUIC bar is striped in both the TCP and TLS colours because it does both jobs.',
+    watchFor:
+      'Only two trips across the wire before the first byte. QUIC sends its connection set-up and its TLS 1.3 handshake in the same packets, so the separate TCP round trip disappears.',
+  },
+  compare: {
+    title: 'Four ways to reach the first byte',
+    description:
+      'Four timelines on one time axis: TCP with TLS 1.2, TCP with TLS 1.3, HTTP/3 over QUIC, and a request on a connection that is already open. Each bar fills in phase by phase, DNS, TCP, TLS and the request, and shows its time to first byte when it finishes.',
+    watchFor:
+      'Each newer protocol removes one round trip, and a reused connection removes all of them except the request itself. Move the round trip slider: the gaps between the rows grow with distance, while the server work slider moves every row by the same amount.',
+  },
+};
+
+const { protocol, watchFor } = Astro.props;
+const copy = COPY[protocol];
+---
+
+<SimShell
+  name="round-trips"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox={protocol === 'compare' ? '0 0 400 276' : '0 0 400 340'}
+  config={{ protocol }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRoundTripModel } from './model';
+
+  mountAll('round-trips', createRoundTripModel);
+</script>

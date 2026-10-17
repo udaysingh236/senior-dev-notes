@@ -1,0 +1,37 @@
+---
+// An HTTP/1.1 request and response as the text they really are: a start line, headers, a blank
+// line, and (for the response) the body.
+---
+
+<svg viewBox="0 0 400 452" width="100%" role="img" aria-labelledby="hw-http-t hw-http-d">
+  <title id="hw-http-t">An HTTP request and its response</title>
+  <desc id="hw-http-d">
+    The request is four lines of text: GET /cart HTTP/1.1, then the headers Host:
+    shop.example.in, Accept: text/html, and Cookie: session=8f2c. The response starts with
+    HTTP/1.1 200 OK, then the headers Content-Type: text/html, Cache-Control: max-age=60 and
+    Content-Length: 5120, a blank line, and the HTML body.
+  </desc>
+
+  <g font-size="19">
+    <text x="4" y="20" font-weight="700" style="fill: var(--viz-flow)">Request</text>
+    <rect x="4" y="30" width="392" height="158" rx="8" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+    <g style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">
+      <text x="16" y="64" font-weight="700">GET /cart HTTP/1.1</text>
+      <text x="16" y="100">Host: shop.example.in</text>
+      <text x="16" y="132">Accept: text/html</text>
+      <text x="16" y="164">Cookie: session=8f2c</text>
+    </g>
+
+    <text x="4" y="230" font-weight="700" style="fill: var(--viz-ok)">Response</text>
+    <rect x="4" y="240" width="392" height="206" rx="8" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" stroke-width="2" />
+    <g style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">
+      <text x="16" y="274" font-weight="700">HTTP/1.1 200 OK</text>
+      <text x="16" y="310">Content-Type: text/html</text>
+      <text x="16" y="342">Cache-Control: max-age=60</text>
+      <text x="16" y="374">Content-Length: 5120</text>
+      <text x="16" y="428" style="fill: var(--viz-muted)">&lt;!doctype html&gt;…</text>
+    </g>
+    <!-- The blank line that separates headers from the body -->
+    <line x1="16" y1="394" x2="384" y2="394" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  </g>
+</svg>

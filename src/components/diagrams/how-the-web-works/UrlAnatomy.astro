@@ -1,0 +1,48 @@
+---
+// The parts of https://shop.example.in:443/cart?item=42#pay, one row each, with what the
+// browser does with it. The fragment is drawn differently because it never leaves the browser.
+---
+
+<svg viewBox="0 0 400 362" width="100%" role="img" aria-labelledby="hw-url-t hw-url-d">
+  <title id="hw-url-t">The parts of a URL</title>
+  <desc id="hw-url-d">
+    The URL https://shop.example.in:443/cart?item=42#pay split into six parts. https:// is the
+    scheme, how to talk. shop.example.in is the host, the name to look up in DNS. :443 is the
+    port, which door on the server; 443 is the default for HTTPS so it is usually hidden. /cart
+    is the path, which page. ?item=42 is the query, extra details. #pay is the fragment, which
+    stays in the browser and is never sent to the server.
+  </desc>
+
+  <g font-size="19">
+    <!-- One row per part: the part in a box on the left, what it means on the right. -->
+    <g style="font-family: var(--sl-font-mono)">
+      <rect x="4" y="6" width="194" height="46" rx="6" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+      <text x="14" y="36" style="fill: var(--viz-ink)">https://</text>
+      <rect x="4" y="64" width="194" height="46" rx="6" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+      <text x="14" y="94" style="fill: var(--viz-ink)">shop.example.in</text>
+      <rect x="4" y="122" width="194" height="46" rx="6" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+      <text x="14" y="152" style="fill: var(--viz-ink)">:443</text>
+      <rect x="4" y="180" width="194" height="46" rx="6" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+      <text x="14" y="210" style="fill: var(--viz-ink)">/cart</text>
+      <rect x="4" y="238" width="194" height="46" rx="6" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+      <text x="14" y="268" style="fill: var(--viz-ink)">?item=42</text>
+      <rect x="4" y="306" width="194" height="46" rx="6" stroke-dasharray="6 4" style="fill: var(--viz-surface); stroke: var(--viz-warn)" stroke-width="2" />
+      <text x="14" y="336" style="fill: var(--viz-ink)">#pay</text>
+    </g>
+
+    <g>
+      <text x="212" y="26" font-weight="700" style="fill: var(--viz-ink)">scheme</text>
+      <text x="212" y="48" style="fill: var(--viz-muted)">how to talk</text>
+      <text x="212" y="84" font-weight="700" style="fill: var(--viz-ink)">host</text>
+      <text x="212" y="106" style="fill: var(--viz-muted)">look it up in DNS</text>
+      <text x="212" y="142" font-weight="700" style="fill: var(--viz-ink)">port</text>
+      <text x="212" y="164" style="fill: var(--viz-muted)">443 if not given</text>
+      <text x="212" y="200" font-weight="700" style="fill: var(--viz-ink)">path</text>
+      <text x="212" y="222" style="fill: var(--viz-muted)">which page</text>
+      <text x="212" y="258" font-weight="700" style="fill: var(--viz-ink)">query</text>
+      <text x="212" y="280" style="fill: var(--viz-muted)">extra details</text>
+      <text x="212" y="326" font-weight="700" style="fill: var(--viz-warn)">fragment</text>
+      <text x="212" y="348" style="fill: var(--viz-muted)">never sent</text>
+    </g>
+  </g>
+</svg>
