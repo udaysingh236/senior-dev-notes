@@ -1,0 +1,114 @@
+---
+// "How to read a topic page": the seven stops every topic makes, drawn as a ruled line that fills
+// in as the reader scrolls past each stop.
+const STOPS = [
+  ['The story', 'A realistic production moment that makes you feel the problem. It ends with the question the page answers.'],
+  ['The problem, properly', 'Why the problem exists at all, who it hurts, and the key terms, each defined the first time it appears.'],
+  ['The obvious fix, and why it breaks', 'What most people try first, and the neighbouring ideas it gets confused with.'],
+  ['The core idea', 'One everyday analogy, where that analogy stops working, and the overview diagram.'],
+  ['How it works', 'Each mechanism step by step, with numbers, diagrams and a simulation you can drive. Then a side-by-side comparison and code you build yourself.'],
+  ['The real world', 'How well-known systems do it, sourced war stories, the trade-offs, and when not to use it.'],
+  ['Check yourself', 'Interview questions, a quiz with hidden answers, a recap to revise from, and where to go next.'],
+];
+---
+
+<ol class="reading-map not-content">
+  {
+    STOPS.map(([title, text], i) => (
+      <li class="stop" data-reveal style={`--reveal-i: ${i % 3}`}>
+        <span class="stop-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+        <div class="stop-body">
+          <h3>{title}</h3>
+          <p>{text}</p>
+        </div>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .reading-map {
+    position: relative;
+    margin: 1.75rem 0 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: stop;
+  }
+  .stop {
+    position: relative;
+    display: grid;
+    grid-template-columns: 3.25rem 1fr;
+    gap: 1rem;
+    padding-bottom: 1.6rem;
+  }
+  /* The ruled line between stops. It draws downwards when the stop is revealed. */
+  .stop::before {
+    content: '';
+    position: absolute;
+    top: 3rem;
+    bottom: 0.2rem;
+    left: 1.6rem;
+    width: 2px;
+    background: repeating-linear-gradient(to bottom, var(--sl-color-gray-4) 0 5px, transparent 5px 10px);
+    transform-origin: top;
+  }
+  .stop:last-child::before {
+    display: none;
+  }
+  .stop-num {
+    display: grid;
+    place-items: center;
+    width: 3.25rem;
+    height: 3.25rem;
+    border: 1.5px solid var(--sl-color-gray-4);
+    border-radius: 50%;
+    background: var(--note-paper-raised);
+    font-family: var(--sl-font-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--note-margin);
+    transition: border-color 0.4s, background-color 0.4s;
+  }
+  .stop:hover .stop-num {
+    border-color: var(--note-margin);
+  }
+  .stop-body h3 {
+    margin: 0.55rem 0 0.25rem;
+    font-family: var(--note-font-display);
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .stop-body p {
+    margin: 0;
+    max-width: 36rem;
+    color: var(--sl-color-gray-2);
+    line-height: 1.6;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    :global(.js-reveal) .stop[data-reveal]::before {
+      transform: scaleY(0);
+      transition: transform 0.9s 0.3s var(--note-ease);
+    }
+    :global(.js-reveal) .stop[data-reveal].is-visible::before {
+      transform: scaleY(1);
+    }
+  }
+
+  @media (min-width: 50rem) {
+    .reading-map {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      column-gap: 2.5rem;
+    }
+    /* Keep reading order down the first column, then the second. */
+    .reading-map {
+      grid-auto-flow: column;
+      grid-template-rows: repeat(4, auto);
+    }
+    .stop:nth-child(4)::before {
+      display: none;
+    }
+  }
+</style>

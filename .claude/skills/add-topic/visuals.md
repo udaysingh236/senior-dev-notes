@@ -129,6 +129,23 @@ explanation. The last step summarises the whole flow.
 A `scripts/record-sim.mjs` that uses Playwright to record a sim at 1080×1080 and ffmpeg to turn it
 into MP4 or GIF for social posts. Ask before installing Playwright or ffmpeg.
 
+## How visuals sit on the page
+
+The site's look is an engineer's notebook (see `src/styles/custom.css`). Shared frames already
+apply it, so topic visuals need no extra styling:
+
+- `<Figure>`, `SimShell` and `StepThrough` draw a paper card with a faint blueprint grid behind
+  the drawing. Keep diagram backgrounds transparent so the grid shows through.
+- Figure captions are numbered automatically ("Fig. 3"). Never number them by hand.
+- Figures, sims, step-throughs, asides and code blocks fade in as the reader scrolls to them.
+  Do not add entrance animations of your own.
+- `--note-*` tokens (highlighter, margin red, grid) are decoration for the site chrome only.
+  Diagrams use `--viz-*` tokens, whose colours carry meaning.
+- Headings use Fraunces, body text IBM Plex Sans, code IBM Plex Mono. In SVG, use
+  `var(--note-font-display)` with `font-style: italic` for handwritten-style margin notes and
+  `var(--sl-font-mono)` for code or numbers.
+- Wrap a phrase in `<mark>` for a highlighter stroke in prose. Use it rarely: once or twice a page.
+
 ## Verify every visual
 
 Run `npm run dev` and check each page at 360px and 1280px, in light and dark mode, and with reduced

@@ -107,9 +107,10 @@ const maxWidth = Math.round(Number(viewBox.split(/\s+/)[2]) * 1.25);
   .sim {
     margin: 2rem 0;
     padding: 1rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.75rem;
-    background: var(--sl-color-bg);
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.85rem;
+    background: var(--note-paper-raised);
+    box-shadow: var(--note-shadow);
     font-size: var(--sl-text-sm);
     color: var(--sl-color-gray-2);
   }
@@ -126,21 +127,27 @@ const maxWidth = Math.round(Number(viewBox.split(/\s+/)[2]) * 1.25);
     margin-bottom: 0.75rem;
   }
   .sim-kicker {
-    font-size: var(--sl-text-2xs);
-    font-weight: 700;
-    letter-spacing: 0.08em;
+    font-family: var(--sl-font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--sl-color-text-accent);
+    color: var(--note-margin);
   }
   .sim-title {
-    font-size: var(--sl-text-base);
+    font-family: var(--note-font-display);
+    font-size: 1.12rem;
     font-weight: 600;
     color: var(--sl-color-white);
   }
 
   .sim-stage {
     border-radius: 0.5rem;
-    background: var(--viz-surface);
+    background:
+      linear-gradient(var(--note-grid) 1px, transparent 1px) 0 0 / 20px 20px,
+      linear-gradient(90deg, var(--note-grid) 1px, transparent 1px) 0 0 / 20px 20px,
+      var(--viz-surface);
+    border: 1px solid var(--sl-color-hairline);
     color: var(--viz-ink);
     overflow: hidden;
   }

@@ -1,7 +1,12 @@
 /*
-  Senior Dev Notes theme.
+  Senior Dev Notes theme: an engineer's notebook.
+  Paper and ink in light mode, a blueprint at night in dark mode. Fraunces for headings,
+  IBM Plex Sans for reading, IBM Plex Mono for code.
+
   Starlight's defaults sit in cascade layers, so these unlayered rules win without !important.
   Dark mode is :root; light mode is :root[data-theme='light'] (Starlight's convention).
+  In Starlight, --sl-color-white is the strongest text colour and --sl-color-black the page
+  background, in both themes.
 */
 
 /* ---------- Diagram and simulation tokens (see .claude/skills/add-topic/visuals.md) ----------
@@ -11,12 +16,12 @@
    client, server and store colour the actors. Each colour has a -soft fill variant. */
 
 :root {
-  --viz-ink: #e6e8ee;
-  --viz-muted: #8b93a7;
-  --viz-surface: #161a22;
-  --viz-stroke: #4a5366;
+  --viz-ink: #ecebe6;
+  --viz-muted: #8f94a3;
+  --viz-surface: #181b23;
+  --viz-stroke: #4a5062;
   --viz-client: #b49cff;
-  --viz-server: #a3b1c6;
+  --viz-server: #a6b2c6;
   --viz-store: #3fd0c0;
   --viz-flow: #6aa8ff;
   --viz-ok: #55d68a;
@@ -26,16 +31,16 @@
 }
 
 :root[data-theme='light'] {
-  --viz-ink: #1d2433;
-  --viz-muted: #687286;
-  --viz-surface: #f7f8fb;
-  --viz-stroke: #a4adbd;
+  --viz-ink: #1f1d1a;
+  --viz-muted: #6b6558;
+  --viz-surface: #fffdf8;
+  --viz-stroke: #b3aa98;
   --viz-client: #6d3fe0;
-  --viz-server: #4f5d75;
+  --viz-server: #545f74;
   --viz-store: #0b8278;
   --viz-flow: #1f66d1;
   --viz-ok: #178a45;
-  --viz-warn: #b7700a;
+  --viz-warn: #b06a08;
   --viz-bad: #cf2e2e;
   --viz-soft-mix: 12%;
 }
@@ -54,130 +59,357 @@
 /* ---------- Site colours ---------- */
 
 :root {
-  /* Indigo accent, kept clear of the diagram blue so links never read as "data in flight". */
-  --sl-color-accent-low: #1f1d4d;
-  --sl-color-accent: #8b8cf8;
-  --sl-color-accent-high: #d5d6ff;
+  /* Night blueprint: deep ink paper, warm white text, a soft periwinkle ink for links. */
+  --sl-color-accent-low: #262a57;
+  --sl-color-accent: #a3a9ff;
+  --sl-color-accent-high: #dcdeff;
 
-  --sl-color-white: #ffffff;
-  --sl-color-gray-1: #eceef3;
-  --sl-color-gray-2: #c4c8d2;
-  --sl-color-gray-3: #8e94a3;
-  --sl-color-gray-4: #555b69;
-  --sl-color-gray-5: #353a46;
-  --sl-color-gray-6: #20242d;
-  --sl-color-black: #14171d;
+  --sl-color-white: #f6f3ec;
+  --sl-color-gray-1: #e6e4de;
+  --sl-color-gray-2: #c2c3c8;
+  --sl-color-gray-3: #8d919d;
+  --sl-color-gray-4: #545a68;
+  --sl-color-gray-5: #2f3440;
+  --sl-color-gray-6: #1d2029;
+  --sl-color-black: #13151b;
+
+  --sl-color-bg-nav: rgb(19 21 27 / 0.82);
+  --sl-color-bg-sidebar: #13151b;
+  --sl-color-hairline: #262a35;
+  --sl-color-hairline-light: #2a2e3a;
+  --sl-color-hairline-shade: #0c0e12;
+
+  /* Decoration only, never data: a highlighter, a margin rule and the grid. */
+  --note-highlight: rgb(255 212 92 / 0.26);
+  --note-highlight-strong: #ffd45c;
+  --note-margin: #e85d4a;
+  --note-grid: rgb(150 165 255 / 0.07);
+  --note-paper-raised: #191c24;
+  --note-shadow: 0 1px 0 rgb(0 0 0 / 0.4), 0 12px 32px -18px rgb(0 0 0 / 0.7);
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #e3e3ff;
-  --sl-color-accent: #4b48d6;
-  --sl-color-accent-high: #26246e;
+  /* Paper and ink: warm off-white, near-black ink, deep indigo ink for links. */
+  --sl-color-accent-low: #e6e4f8;
+  --sl-color-accent: #3b3fb6;
+  --sl-color-accent-high: #1d1f66;
 
-  --sl-color-white: #161a22;
-  --sl-color-gray-1: #252a35;
-  --sl-color-gray-2: #3a404d;
-  --sl-color-gray-3: #5e6574;
-  --sl-color-gray-4: #8b92a1;
-  --sl-color-gray-5: #c9cdd6;
-  --sl-color-gray-6: #eceef2;
-  --sl-color-gray-7: #f6f7f9;
-  --sl-color-black: #ffffff;
+  --sl-color-white: #1a1814;
+  --sl-color-gray-1: #2b2823;
+  --sl-color-gray-2: #45403a;
+  --sl-color-gray-3: #6e6658;
+  --sl-color-gray-4: #a39a88;
+  --sl-color-gray-5: #ddd4c3;
+  --sl-color-gray-6: #efe9dd;
+  --sl-color-gray-7: #f5f0e6;
+  --sl-color-black: #faf7f0;
+
+  --sl-color-bg-nav: rgb(250 247 240 / 0.85);
+  --sl-color-bg-sidebar: #faf7f0;
+  --sl-color-hairline: #e4dccd;
+  --sl-color-hairline-light: #ebe4d6;
+  --sl-color-hairline-shade: #d6ccb9;
+
+  --note-highlight: rgb(255 214 92 / 0.55);
+  --note-highlight-strong: #f5c22e;
+  --note-margin: #b23e2c; /* about 5:1 on the paper, so small uppercase labels stay readable */
+  --note-grid: rgb(70 60 40 / 0.065);
+  --note-paper-raised: #fffdf8;
+  --note-shadow: 0 1px 0 rgb(80 60 20 / 0.06), 0 14px 30px -20px rgb(80 60 20 / 0.35);
 }
 
-/* ---------- Typography for long reading ---------- */
+/* ---------- Type ---------- */
 
 :root {
-  /* System fonts: no web-font download, and each platform's best reading face. */
-  --sl-font: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto,
-    'Helvetica Neue', 'Noto Sans', Arial, sans-serif;
-  --sl-font-mono: ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas,
+  --sl-font: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans',
+    Arial, sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas,
     'Liberation Mono', monospace;
+  --note-font-display: 'Fraunces Variable', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
 
   --sl-text-body: 1.0625rem; /* 17px: comfortable on phones and laptops */
   --sl-line-height: 1.72;
-  --sl-line-height-headings: 1.25;
-  --sl-text-h1: clamp(2rem, 1.6rem + 2vw, 2.6rem);
-  --sl-text-h2: clamp(1.5rem, 1.35rem + 0.8vw, 1.85rem);
-  --sl-text-h3: clamp(1.2rem, 1.12rem + 0.4vw, 1.35rem);
+  --sl-line-height-headings: 1.18;
+  --sl-text-h1: clamp(2.1rem, 1.6rem + 2.4vw, 3rem);
+  --sl-text-h2: clamp(1.6rem, 1.4rem + 0.9vw, 2rem);
+  --sl-text-h3: clamp(1.22rem, 1.13rem + 0.4vw, 1.4rem);
   --sl-text-h4: 1.125rem;
 
   /* About 70 characters per line: the sweet spot for long technical prose. */
-  --sl-content-width: 44rem;
+  --sl-content-width: 45rem;
+
+  --note-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   font-kerning: normal;
+  background-color: var(--sl-color-black);
 }
 
-.sl-markdown-content {
-  hanging-punctuation: first;
+::selection {
+  background: var(--note-highlight);
+  color: var(--sl-color-white);
+}
+
+/* Display face for every heading the reader sees. */
+.sl-markdown-content :is(h1, h2, h3),
+h1#_top,
+.hero h1,
+.site-title span {
+  font-family: var(--note-font-display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.012em;
 }
 
 .sl-markdown-content :is(h2, h3, h4) {
-  letter-spacing: -0.01em;
   text-wrap: balance;
+  color: var(--sl-color-white);
 }
-
 .sl-markdown-content h2 {
-  margin-top: 2.75rem;
-  padding-top: 0.25rem;
+  font-weight: 620;
+}
+.sl-markdown-content h3 {
+  font-weight: 600;
+}
+.sl-markdown-content h4 {
+  font-family: var(--sl-font);
+  font-weight: 700;
 }
 
-.sl-markdown-content h3 {
-  margin-top: 2rem;
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--sl-color-hairline);
+}
+/* The first section follows the page header's own divider, so it needs no rule or gap. */
+.sl-markdown-content > .sl-heading-wrapper.level-h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.sl-markdown-content .sl-heading-wrapper.level-h3 {
+  margin-top: 2.25rem;
+}
+
+/* Topic pages number their sections, like a notebook: 01, 02, ... */
+.sl-markdown-content {
+  counter-reset: note-figure;
+}
+main:has(.topic-header) .sl-markdown-content {
+  counter-reset: note-section note-figure;
+}
+main:has(.topic-header) .sl-markdown-content .sl-heading-wrapper.level-h2 h2::before {
+  counter-increment: note-section;
+  content: counter(note-section, decimal-leading-zero);
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  color: var(--note-margin);
 }
 
 .sl-markdown-content :is(p, li) {
   text-wrap: pretty;
 }
+.sl-markdown-content {
+  hanging-punctuation: first;
+}
 
 .sl-markdown-content strong {
   color: var(--sl-color-white);
+  font-weight: 600;
 }
 
+/* Links: a confident underline that thickens on hover. */
 .sl-markdown-content a:not(:where(.not-content *)) {
-  text-underline-offset: 0.2em;
+  text-underline-offset: 0.22em;
   text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  transition: text-decoration-color 0.2s, text-decoration-thickness 0.2s;
 }
 .sl-markdown-content a:not(:where(.not-content *)):hover {
   text-decoration-thickness: 2px;
+  text-decoration-color: currentColor;
 }
 
 /* Inline code that reads as part of the sentence. */
 .sl-markdown-content :not(pre) > code {
   padding: 0.1em 0.35em;
+  border: 1px solid var(--sl-color-hairline);
   border-radius: 0.3em;
-  font-size: 0.88em;
+  background: var(--sl-color-gray-6);
+  font-size: 0.86em;
 }
 
-/* Tables: compare three or more options. Scroll sideways on phones instead of squashing. */
+/* A highlighter for the phrases that matter: <mark> in MDX. */
+.sl-markdown-content mark {
+  padding: 0 0.15em;
+  color: inherit;
+  background: linear-gradient(to bottom, transparent 55%, var(--note-highlight) 55%);
+}
+
+/* Tables: ruled like a notebook. Scroll sideways on phones instead of squashing. */
 .sl-markdown-content table {
   display: block;
   overflow-x: auto;
   font-size: var(--sl-text-sm);
+  border-collapse: collapse;
 }
 .sl-markdown-content th {
   white-space: nowrap;
+  font-weight: 600;
+  text-align: start;
+  color: var(--sl-color-white);
+  border-bottom: 2px solid var(--sl-color-gray-4);
+  background: transparent;
+}
+.sl-markdown-content :is(td, th) {
+  border: 0;
+  border-bottom: 1px solid var(--sl-color-hairline);
+  padding: 0.6rem 0.8rem;
+}
+.sl-markdown-content tbody tr {
+  transition: background-color 0.15s;
+}
+.sl-markdown-content tbody tr:hover {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 70%, transparent);
 }
 
-/* Check-yourself answers. */
+/* Check-yourself answers: index cards that open. */
 .sl-markdown-content details {
-  margin: 0.75rem 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.6rem;
-  background: var(--sl-color-gray-6);
+  margin: 0.85rem 0;
+  padding: 0;
+  border: 1px solid var(--sl-color-hairline-shade);
+  border-radius: 0.7rem;
+  background: var(--note-paper-raised);
+  box-shadow: var(--note-shadow);
+  overflow: hidden;
 }
 .sl-markdown-content details summary {
+  position: relative;
+  padding: 0.9rem 1.1rem;
   font-weight: 600;
   color: var(--sl-color-white);
   cursor: pointer;
 }
-.sl-markdown-content details[open] summary {
+.sl-markdown-content details summary:hover {
+  background: color-mix(in srgb, var(--sl-color-gray-6) 60%, transparent);
+}
+.sl-markdown-content details > :not(summary) {
+  margin-inline: 1.1rem;
+}
+.sl-markdown-content details[open] {
+  padding-bottom: 0.4rem;
+}
+.sl-markdown-content details[open] > summary {
   margin-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--sl-color-hairline-shade);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sl-markdown-content details[open] > :not(summary) {
+    animation: note-fade-up 0.35s var(--note-ease) both;
+  }
+}
+
+/* Asides: notes in the margin of the page, with a coloured rule. */
+.starlight-aside {
+  border: 1px solid var(--sl-color-hairline);
+  border-inline-start: 4px solid var(--sl-color-asides-border);
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--sl-color-asides-border) 7%, var(--note-paper-raised));
+  box-shadow: var(--note-shadow);
+}
+.starlight-aside__title {
+  font-family: var(--note-font-display);
+  font-size: 1.08rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* Starlight's numbered steps, drawn as a ruled line with ink dots. */
+.sl-steps > li::before {
+  font-family: var(--sl-font-mono);
+  font-weight: 600;
+  background: var(--note-paper-raised);
+  border: 1.5px solid var(--sl-color-accent);
+  color: var(--sl-color-text-accent);
+  box-shadow: none;
+}
+.sl-steps > li::after {
+  background: repeating-linear-gradient(to bottom, var(--sl-color-gray-5) 0 4px, transparent 4px 8px);
+}
+
+/* Code blocks sit on the page like cards. */
+.expressive-code .frame {
+  box-shadow: var(--note-shadow) !important;
+}
+
+/* ---------- Header, sidebars, footer ---------- */
+
+.header {
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border-bottom-color: var(--sl-color-hairline) !important;
+}
+.site-title {
+  gap: 0.6rem !important;
+  color: var(--sl-color-white) !important;
+}
+.site-title img {
+  height: 2rem !important;
+  transition: transform 0.4s var(--note-ease);
+}
+.site-title:hover img {
+  transform: rotate(-8deg) scale(1.06);
+}
+.site-title span {
+  font-size: 1.28rem;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+/* Sidebar: an ink rule marks where you are, instead of a filled block. */
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+  position: relative;
+  background: color-mix(in srgb, var(--sl-color-accent) 12%, transparent);
+  color: var(--sl-color-white);
+  font-weight: 600;
+  border-radius: 0.35rem;
+}
+.sidebar-content a[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  inset-block: 0.3rem;
+  inset-inline-start: -0.6rem;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--note-margin);
+}
+.sidebar-content .group-label .large {
+  font-family: var(--note-font-display);
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+.sidebar-content a {
+  transition: color 0.15s, background-color 0.15s;
+}
+
+/* Right-hand table of contents. */
+.right-sidebar-panel h2 {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem !important;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3) !important;
+}
+.right-sidebar-panel a[aria-current='true'] {
+  font-weight: 600;
 }
 
 /* ---------- Chips (prerequisites, roadmap) ---------- */
@@ -195,39 +427,110 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.2rem 0.7rem;
-  border: 1px solid var(--sl-color-gray-5);
+  padding: 0.2rem 0.75rem;
+  border: 1px solid var(--sl-color-hairline-shade);
   border-radius: 999px;
   font-size: var(--sl-text-sm);
   line-height: 1.5;
   color: var(--sl-color-gray-1);
   text-decoration: none;
-  background: var(--sl-color-bg);
+  background: var(--note-paper-raised);
+  transition: border-color 0.2s, transform 0.2s var(--note-ease);
 }
 a.chip {
   color: var(--sl-color-text-accent);
 }
 a.chip:hover {
   border-color: var(--sl-color-accent);
+  transform: translateY(-1px);
 }
 .chip-soon {
   color: var(--sl-color-gray-3);
   border-style: dashed;
+  background: transparent;
 }
 
 .chip-soon-label {
-  padding: 0 0.4rem;
+  padding: 0 0.45rem;
   border-radius: 999px;
   background: var(--sl-color-gray-6);
-  font-size: var(--sl-text-2xs);
+  font-family: var(--sl-font-mono);
+  font-size: 0.66rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--sl-color-gray-3);
 }
 
+/* ---------- Shared bits for custom components ---------- */
+
+/* The faint blueprint grid, used behind heroes and figures. */
+.note-grid {
+  background-image:
+    linear-gradient(var(--note-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--note-grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.note-eyebrow {
+  font-family: var(--sl-font-mono);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--note-margin);
+}
+
+/* Scroll reveal. The script in Footer.astro adds .is-visible; without JS nothing is hidden. */
+@media (prefers-reduced-motion: no-preference) {
+  .js-reveal [data-reveal] {
+    opacity: 0;
+    transform: translateY(18px);
+    transition: opacity 0.7s var(--note-ease), transform 0.7s var(--note-ease);
+    transition-delay: calc(var(--reveal-i, 0) * 70ms);
+  }
+  .js-reveal [data-reveal].is-visible {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes note-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Decorative backgrounds bleed past the column; never let them cause sideways scrolling.
+   `clip` (unlike `hidden`) creates no scroll container, so sticky elements keep working. */
+.main-pane {
+  overflow-x: clip;
+}
+
 /* ---------- Landing page ---------- */
 
-.hero .tagline {
-  max-width: 36rem;
+[data-has-hero] .sl-markdown-content > .sl-heading-wrapper.level-h2 {
+  margin-top: 5rem;
+  border-top: 0;
+  padding-top: 0;
+}
+/* The splash layout is wide; keep prose at a readable line length anyway. */
+[data-has-hero] .sl-markdown-content > p:not(.note-eyebrow) {
+  max-width: 44rem;
+}
+/* An eyebrow line sits right above its heading and takes over the section spacing. */
+[data-has-hero] .sl-markdown-content > p.note-eyebrow {
+  margin-top: 5.5rem;
+}
+[data-has-hero] .sl-markdown-content > p.note-eyebrow + .sl-heading-wrapper.level-h2 {
+  margin-top: 0.4rem;
+}
+[data-has-hero] .sl-markdown-content .level-h2 h2 {
+  font-size: clamp(1.8rem, 1.4rem + 1.6vw, 2.6rem);
+  font-weight: 600;
 }

@@ -24,8 +24,9 @@ src/content/docs/<track>/<slug>.mdx   topic pages (track folders match CURRICULU
 src/components/diagrams/<slug>/       SVG diagram components for one topic
 src/components/sims/<slug>/           simulation components for one topic
 src/components/sim/                   SimShell and shared simulation helpers
-src/components/                       Figure, StepThrough, TopicHeader and other shared components
-src/styles/custom.css                 theme tokens, including --viz-* diagram colours
+src/components/                       Figure, StepThrough, TopicHeader, Footer and other shared components
+src/components/landing/               landing page hero, animated drawings and 404 graphic
+src/styles/custom.css                 the notebook theme: colours, fonts, --viz-* diagram tokens
 examples/<slug>/python|js/            runnable code behind every snippet on the page
 research/<slug>.md                    research notes and sources (not published)
 CURRICULUM.md                         master topic list: track, order, slug, status

@@ -54,13 +54,27 @@ const topics = await Promise.all(
 
   .next-topic {
     position: relative;
-    padding: 0.9rem 1rem;
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.6rem;
-    background: var(--sl-color-bg);
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-hairline-shade);
+    border-radius: 0.75rem;
+    background: var(--note-paper-raised);
+    transition: translate 0.3s var(--note-ease), border-color 0.3s, box-shadow 0.3s;
   }
   .next-topic:has(a:hover) {
-    border-color: var(--sl-color-accent);
+    translate: 0 -2px;
+    border-color: var(--sl-color-gray-4);
+    box-shadow: var(--note-shadow);
+  }
+  .next-topic-soon {
+    background: transparent;
+    border-style: dashed;
+  }
+  .next-topic-arrow {
+    display: inline-block;
+    transition: translate 0.25s var(--note-ease);
+  }
+  .next-topic:has(a:hover) .next-topic-arrow {
+    translate: 4px 0;
   }
 
   .next-topic-title {
@@ -68,8 +82,9 @@ const topics = await Promise.all(
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.5rem;
+    font-family: var(--note-font-display);
     font-weight: 600;
-    font-size: var(--sl-text-lg);
+    font-size: 1.2rem;
     color: var(--sl-color-white);
     text-decoration: none;
   }
@@ -102,8 +117,11 @@ const topics = await Promise.all(
 
   .next-topic-track {
     display: block;
-    margin-top: 0.35rem;
-    font-size: var(--sl-text-xs);
+    margin-top: 0.45rem;
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
     color: var(--sl-color-gray-3);
   }
 </style>
