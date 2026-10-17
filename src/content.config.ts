@@ -21,6 +21,8 @@ const topicFields = z.object({
   next: z.array(z.string()).optional(),
   /** Date a human last reviewed the page for accuracy. */
   lastReviewed: z.coerce.date().optional(),
+  /** Giscus comments under the page (starlight-giscus). On by default; off for non-topic pages. */
+  giscus: z.boolean().optional().default(true),
 });
 
 export const collections = {
