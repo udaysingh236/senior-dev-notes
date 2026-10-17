@@ -1,0 +1,150 @@
+---
+// Overrides Starlight's PageTitle. On topic pages (frontmatter has `track`) it adds the
+// tagline, a difficulty badge, the reading time and prerequisite chips under the title.
+import { getTrack, readingMinutes, resolveTopic } from '../lib/topics';
+
+const { entry, id } = Astro.locals.starlightRoute;
+const { title, tagline, difficulty, track, prerequisites } = entry.data;
+const isTopic = Boolean(track);
+
+if (isTopic) {
+  const where = `src/content/docs/${id}`;
+  if (!id.startsWith(`${track}/`)) {
+    throw new Error(`${where}: frontmatter track "${track}" does not match the folder it lives in.`);
+  }
+  if (!getTrack(track!)) {
+    throw new Error(`${where}: track "${track}" is not a track in CURRICULUM.md.`);
+  }
+  if (!tagline || !difficulty) {
+    throw new Error(`${where}: topic pages need both a tagline and a difficulty in frontmatter.`);
+  }
+}
+
+const minutes = isTopic ? readingMinutes(entry.body) : 0;
+const prereqs = isTopic ? await Promise.all(prerequisites.map((s) => resolveTopic(s, id))) : [];
+const trackTitle = isTopic ? getTrack(track!)?.title : undefined;
+---
+
+<h1 id="_top">{title}</h1>
+
+{
+  isTopic && (
+    <div class="topic-header">
+      {tagline && <p class="topic-tagline">{tagline}</p>}
+      <p class="topic-meta">
+        <span class:list={['difficulty-badge', `difficulty-${difficulty}`]}>
+          <span class="difficulty-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          {difficulty}
+        </span>
+        <span class="topic-meta-item">{minutes} min read</span>
+        {trackTitle && <span class="topic-meta-item">{trackTitle}</span>}
+      </p>
+      {prereqs.length > 0 && (
+        <div class="topic-prereqs">
+          <span class="topic-prereqs-label">Read first</span>
+          <ul class="chip-list">
+            {prereqs.map((p) => (
+              <li>
+                {p.href ? (
+                  <a class="chip" href={p.href}>
+                    {p.title}
+                  </a>
+                ) : (
+                  <span class="chip chip-soon" title="This page is not written yet">
+                    {p.title}
+                    <span class="chip-soon-label">coming soon</span>
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+<style>
+  h1 {
+    margin-top: 1rem;
+    font-size: var(--sl-text-h1);
+    line-height: var(--sl-line-height-headings);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    color: var(--sl-color-white);
+  }
+
+  .topic-header {
+    margin-top: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .topic-tagline {
+    margin: 0;
+    font-size: var(--sl-text-xl);
+    line-height: 1.45;
+    color: var(--sl-color-gray-2);
+  }
+
+  .topic-meta {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+
+  .topic-meta-item + .topic-meta-item::before {
+    content: '·';
+    margin-inline-end: 1rem;
+  }
+
+  .difficulty-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    font-weight: 600;
+    text-transform: capitalize;
+    color: var(--sl-color-gray-1);
+  }
+
+  /* Filled dots show the level, so the badge does not rely on colour alone. */
+  .difficulty-dots {
+    display: inline-flex;
+    gap: 0.15rem;
+  }
+  .difficulty-dots span {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+  }
+  .difficulty-beginner .difficulty-dots span:nth-child(-n + 1),
+  .difficulty-intermediate .difficulty-dots span:nth-child(-n + 2),
+  .difficulty-advanced .difficulty-dots span {
+    background: currentColor;
+  }
+
+  .topic-prereqs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+  .topic-prereqs-label {
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+  }
+</style>

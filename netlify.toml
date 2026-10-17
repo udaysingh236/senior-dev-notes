@@ -1,0 +1,9 @@
+# Netlify build settings. Netlify reads this file automatically when the repo is connected.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Astro 7.4 requires Node >= 22.22.0 (see "engines" in package.json). 24 is the current LTS
+  # line and matches local development.
+  NODE_VERSION = "24"

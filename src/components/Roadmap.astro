@@ -1,0 +1,142 @@
+---
+// Every planned topic, grouped by track, generated from CURRICULUM.md.
+import { getTrackSummaries } from '../lib/topics';
+import { getCurriculum } from '../lib/curriculum.mjs';
+
+const summaries = await getTrackSummaries();
+const statusOf = new Map(
+  getCurriculum().tracks.flatMap((t) => t.topics.map((topic) => [topic.slug, topic.status] as const)),
+);
+const totalPublished = summaries.reduce((n, s) => n + s.publishedCount, 0);
+const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 0);
+---
+
+<div class="roadmap not-content">
+  <p class="roadmap-total">
+    <strong>{totalPublished}</strong> of {total} topics published across {summaries.length} tracks.
+  </p>
+
+  <nav class="roadmap-jump" aria-label="Tracks">
+    <ul class="chip-list">
+      {
+        summaries.map(({ track }) => (
+          <li>
+            <a class="chip" href={`#${track.folder}`}>
+              {track.title}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+
+  {
+    summaries.map(({ track, topics, publishedCount, plannedCount }) => (
+      <section class="roadmap-track" aria-labelledby={track.folder}>
+        <h2 id={track.folder}>
+          <span class="roadmap-track-num">{track.order}.</span> {track.title}
+        </h2>
+        <p class="roadmap-track-counts">
+          {publishedCount} published · {plannedCount} planned
+        </p>
+        {track.intro && <p class="roadmap-track-intro">{track.intro}</p>}
+        <ol class="roadmap-topics">
+          {topics.map((t) => {
+            const status = t.published ? 'published' : statusOf.get(t.slug) === 'pilot' ? 'pilot' : 'planned';
+            return (
+              <li class:list={['roadmap-topic', `is-${status}`]}>
+                {t.href ? (
+                  <a href={t.href} class="roadmap-topic-title">
+                    {t.title}
+                  </a>
+                ) : (
+                  <span class="roadmap-topic-title">{t.title}</span>
+                )}
+                <span class={`roadmap-status roadmap-status-${status}`}>
+                  {status === 'published' ? 'Published' : status === 'pilot' ? 'Up next' : 'Planned'}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+    ))
+  }
+</div>
+
+<style>
+  .roadmap-total {
+    font-size: var(--sl-text-lg);
+  }
+  .roadmap-jump {
+    margin: 1rem 0 0.5rem;
+  }
+  .roadmap-track {
+    margin-top: 2.5rem;
+  }
+  .roadmap-track h2 {
+    margin: 0;
+    font-size: var(--sl-text-h3);
+    color: var(--sl-color-white);
+    scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
+  }
+  .roadmap-track-num {
+    color: var(--sl-color-gray-3);
+  }
+  .roadmap-track-counts {
+    margin: 0.25rem 0 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+  .roadmap-track-intro {
+    margin: 0.5rem 0 0;
+    color: var(--sl-color-gray-2);
+  }
+  .roadmap-topics {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--sl-color-gray-6);
+    counter-reset: topic;
+  }
+  .roadmap-topic {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--sl-color-gray-6);
+    counter-increment: topic;
+  }
+  .roadmap-topic-title::before {
+    content: counter(topic) '. ';
+    color: var(--sl-color-gray-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .roadmap-topic-title {
+    color: var(--sl-color-gray-2);
+  }
+  a.roadmap-topic-title {
+    font-weight: 600;
+    color: var(--sl-color-text-accent);
+  }
+  .roadmap-status {
+    flex: none;
+    padding: 0.05rem 0.55rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    font-size: var(--sl-text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .roadmap-status-published {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-text-accent);
+  }
+  .roadmap-status-pilot {
+    border-style: dashed;
+    color: var(--sl-color-gray-1);
+  }
+</style>

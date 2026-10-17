@@ -1,0 +1,233 @@
+/*
+  Senior Dev Notes theme.
+  Starlight's defaults sit in cascade layers, so these unlayered rules win without !important.
+  Dark mode is :root; light mode is :root[data-theme='light'] (Starlight's convention).
+*/
+
+/* ---------- Diagram and simulation tokens (see .claude/skills/add-topic/visuals.md) ----------
+   Meaning is fixed on every page:
+   flow = requests or data in flight (blue), ok = accepted or healthy (green),
+   warn = waiting or degraded (amber), bad = rejected or failed (red).
+   client, server and store colour the actors. Each colour has a -soft fill variant. */
+
+:root {
+  --viz-ink: #e6e8ee;
+  --viz-muted: #8b93a7;
+  --viz-surface: #161a22;
+  --viz-stroke: #4a5366;
+  --viz-client: #b49cff;
+  --viz-server: #a3b1c6;
+  --viz-store: #3fd0c0;
+  --viz-flow: #6aa8ff;
+  --viz-ok: #55d68a;
+  --viz-warn: #f5bd4f;
+  --viz-bad: #ff7a7a;
+  --viz-soft-mix: 18%;
+}
+
+:root[data-theme='light'] {
+  --viz-ink: #1d2433;
+  --viz-muted: #687286;
+  --viz-surface: #f7f8fb;
+  --viz-stroke: #a4adbd;
+  --viz-client: #6d3fe0;
+  --viz-server: #4f5d75;
+  --viz-store: #0b8278;
+  --viz-flow: #1f66d1;
+  --viz-ok: #178a45;
+  --viz-warn: #b7700a;
+  --viz-bad: #cf2e2e;
+  --viz-soft-mix: 12%;
+}
+
+:root,
+:root[data-theme='light'] {
+  --viz-client-soft: color-mix(in srgb, var(--viz-client) var(--viz-soft-mix), var(--viz-surface));
+  --viz-server-soft: color-mix(in srgb, var(--viz-server) var(--viz-soft-mix), var(--viz-surface));
+  --viz-store-soft: color-mix(in srgb, var(--viz-store) var(--viz-soft-mix), var(--viz-surface));
+  --viz-flow-soft: color-mix(in srgb, var(--viz-flow) var(--viz-soft-mix), var(--viz-surface));
+  --viz-ok-soft: color-mix(in srgb, var(--viz-ok) var(--viz-soft-mix), var(--viz-surface));
+  --viz-warn-soft: color-mix(in srgb, var(--viz-warn) var(--viz-soft-mix), var(--viz-surface));
+  --viz-bad-soft: color-mix(in srgb, var(--viz-bad) var(--viz-soft-mix), var(--viz-surface));
+}
+
+/* ---------- Site colours ---------- */
+
+:root {
+  /* Indigo accent, kept clear of the diagram blue so links never read as "data in flight". */
+  --sl-color-accent-low: #1f1d4d;
+  --sl-color-accent: #8b8cf8;
+  --sl-color-accent-high: #d5d6ff;
+
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #eceef3;
+  --sl-color-gray-2: #c4c8d2;
+  --sl-color-gray-3: #8e94a3;
+  --sl-color-gray-4: #555b69;
+  --sl-color-gray-5: #353a46;
+  --sl-color-gray-6: #20242d;
+  --sl-color-black: #14171d;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e3e3ff;
+  --sl-color-accent: #4b48d6;
+  --sl-color-accent-high: #26246e;
+
+  --sl-color-white: #161a22;
+  --sl-color-gray-1: #252a35;
+  --sl-color-gray-2: #3a404d;
+  --sl-color-gray-3: #5e6574;
+  --sl-color-gray-4: #8b92a1;
+  --sl-color-gray-5: #c9cdd6;
+  --sl-color-gray-6: #eceef2;
+  --sl-color-gray-7: #f6f7f9;
+  --sl-color-black: #ffffff;
+}
+
+/* ---------- Typography for long reading ---------- */
+
+:root {
+  /* System fonts: no web-font download, and each platform's best reading face. */
+  --sl-font: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', 'Noto Sans', Arial, sans-serif;
+  --sl-font-mono: ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --sl-text-body: 1.0625rem; /* 17px: comfortable on phones and laptops */
+  --sl-line-height: 1.72;
+  --sl-line-height-headings: 1.25;
+  --sl-text-h1: clamp(2rem, 1.6rem + 2vw, 2.6rem);
+  --sl-text-h2: clamp(1.5rem, 1.35rem + 0.8vw, 1.85rem);
+  --sl-text-h3: clamp(1.2rem, 1.12rem + 0.4vw, 1.35rem);
+  --sl-text-h4: 1.125rem;
+
+  /* About 70 characters per line: the sweet spot for long technical prose. */
+  --sl-content-width: 44rem;
+}
+
+body {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  font-kerning: normal;
+}
+
+.sl-markdown-content {
+  hanging-punctuation: first;
+}
+
+.sl-markdown-content :is(h2, h3, h4) {
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.sl-markdown-content h2 {
+  margin-top: 2.75rem;
+  padding-top: 0.25rem;
+}
+
+.sl-markdown-content h3 {
+  margin-top: 2rem;
+}
+
+.sl-markdown-content :is(p, li) {
+  text-wrap: pretty;
+}
+
+.sl-markdown-content strong {
+  color: var(--sl-color-white);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Inline code that reads as part of the sentence. */
+.sl-markdown-content :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 0.3em;
+  font-size: 0.88em;
+}
+
+/* Tables: compare three or more options. Scroll sideways on phones instead of squashing. */
+.sl-markdown-content table {
+  display: block;
+  overflow-x: auto;
+  font-size: var(--sl-text-sm);
+}
+.sl-markdown-content th {
+  white-space: nowrap;
+}
+
+/* Check-yourself answers. */
+.sl-markdown-content details {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.6rem;
+  background: var(--sl-color-gray-6);
+}
+.sl-markdown-content details summary {
+  font-weight: 600;
+  color: var(--sl-color-white);
+  cursor: pointer;
+}
+.sl-markdown-content details[open] summary {
+  margin-bottom: 0.5rem;
+}
+
+/* ---------- Chips (prerequisites, roadmap) ---------- */
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 999px;
+  font-size: var(--sl-text-sm);
+  line-height: 1.5;
+  color: var(--sl-color-gray-1);
+  text-decoration: none;
+  background: var(--sl-color-bg);
+}
+a.chip {
+  color: var(--sl-color-text-accent);
+}
+a.chip:hover {
+  border-color: var(--sl-color-accent);
+}
+.chip-soon {
+  color: var(--sl-color-gray-3);
+  border-style: dashed;
+}
+
+.chip-soon-label {
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--sl-color-gray-6);
+  font-size: var(--sl-text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+/* ---------- Landing page ---------- */
+
+.hero .tagline {
+  max-width: 36rem;
+}

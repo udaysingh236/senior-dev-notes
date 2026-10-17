@@ -1,0 +1,50 @@
+---
+title: About
+description: Who writes Senior Dev Notes, how each page is made, and how to suggest a topic.
+---
+
+## Who writes it
+
+Senior Dev Notes is written and maintained by Uday. It exists because most system design
+material assumes you have already been paged at 3 AM, and most beginners have not. The goal is
+to explain each idea the way a patient senior engineer would mentor a junior: start from the
+real problem, look at the wrong turns, then go deep, and finish by pointing at what to learn
+next.
+
+## How pages are made
+
+Each topic page is researched and drafted with AI assistance, then reviewed and edited by Uday
+before it goes live. The process is the same for every page:
+
+1. **Research.** Primary sources first: RFCs, specifications, official documentation and
+   original papers. Then engineering blogs from teams that run the thing at scale, and the
+   popular explainers, to see how the topic is usually taught and where learners get stuck.
+2. **Write in our own words.** Nothing is copied from sources. Every source used is listed in
+   the page's Further reading, with a line on what it is good for.
+3. **Build the visuals.** Diagrams are hand-made SVG. Simulations are small, deterministic
+   programs: press Reset and you get exactly the same run again.
+4. **Run the code.** Every snippet on a page has a runnable twin in the
+   [`examples/` folder of the repository](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples),
+   and it was run before the page was published.
+5. **Review.** A human reads the whole page, checks the facts that can change (versions,
+   limits, defaults carry an "as of" date and a source), and asks for changes before it ships.
+
+Each page shows when it was last updated. Mistakes still slip through; if you find one, please
+say so (see below), and it will be fixed.
+
+## Suggest a topic
+
+The [roadmap](/roadmap/) lists everything already planned. If something you want explained is
+not on it, or a page left you confused:
+
+- [Open an issue on GitHub](https://github.com/udaysingh236/senior-dev-notes/issues/new) with the
+  topic and, if you can, the question you were trying to answer. Confusing pages are worth an
+  issue too: "I got lost at section X" is very useful feedback.
+- Spotted a typo or a wrong fact? Use the **Edit page** link at the bottom of any page to propose
+  a fix directly.
+
+## The source
+
+The site is built with [Astro](https://astro.build/) and [Starlight](https://starlight.astro.build/),
+and hosted on [Netlify](https://www.netlify.com/). The code is on
+[GitHub](https://github.com/udaysingh236/senior-dev-notes).

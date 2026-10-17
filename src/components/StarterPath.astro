@@ -1,0 +1,81 @@
+---
+// The suggested starter path from CURRICULUM.md, in reading order.
+import { getCurriculum } from '../lib/curriculum.mjs';
+import { resolveTopic } from '../lib/topics';
+
+const topics = await Promise.all(getCurriculum().starterPath.map((slug) => resolveTopic(slug, 'the starter path')));
+---
+
+<ol class="starter-path not-content">
+  {
+    topics.map((t, i) => (
+      <li class:list={['starter-step', { 'is-soon': !t.href }]}>
+        <span class="starter-num" aria-hidden="true">
+          {i + 1}
+        </span>
+        <span class="starter-body">
+          {t.href ? (
+            <a href={t.href}>{t.title}</a>
+          ) : (
+            <span class="starter-title">
+              {t.title} <span class="chip-soon-label">coming soon</span>
+            </span>
+          )}
+          <span class="starter-track">{t.trackTitle}</span>
+        </span>
+      </li>
+    ))
+  }
+</ol>
+
+<style>
+  .starter-path {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
+    gap: 0.5rem 1.5rem;
+    margin: 1.25rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .starter-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--sl-color-gray-6);
+  }
+  .starter-num {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border: 1.5px solid var(--sl-color-gray-4);
+    border-radius: 50%;
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-gray-2);
+  }
+  .starter-step:not(.is-soon) .starter-num {
+    border-color: var(--sl-color-accent);
+    color: var(--sl-color-text-accent);
+  }
+  .starter-body {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.4;
+  }
+  .starter-body a {
+    font-weight: 600;
+    color: var(--sl-color-text-accent);
+  }
+  .starter-title {
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+  }
+  .starter-track {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+</style>

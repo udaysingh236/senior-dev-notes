@@ -1,0 +1,19 @@
+---
+// Reference sim used on the dev-only component workbench page. Topic sims follow this shape:
+// render <SimShell>, then mount the model from a <script>.
+import SimShell from '../SimShell.astro';
+---
+
+<SimShell
+  name="example-queue"
+  title="A server with a bounded queue"
+  description="Requests arrive into a queue of fixed size and one server works through them. Requests that arrive to a full queue are rejected."
+  watchFor="Set arrivals just above server speed. The queue fills slowly, then every extra request is rejected, even though the server never stops working."
+/>
+
+<script>
+  import { mountAll } from '../shell';
+  import { createQueueModel } from './queue-model';
+
+  mountAll('example-queue', createQueueModel);
+</script>

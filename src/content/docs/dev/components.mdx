@@ -1,0 +1,125 @@
+---
+title: Component workbench
+description: Every shared component in one place, for checking visuals in light and dark mode at phone and desktop widths. Dev only.
+draft: true
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import QueueSim from '../../../components/sim/example/QueueSim.astro';
+
+This page is a draft, so it only exists in `npm run dev` (at `/dev/components/`) and is never
+published. Use it to check shared components after changing them: at 360px and 1280px, in light
+and dark mode, and with reduced motion turned on.
+
+## Figure
+
+<Figure caption="A client sends a request to a server, which reads from a database and answers. Blue arrows are requests in flight; the green arrow is a successful response.">
+  <svg viewBox="0 0 400 150" width="100%" role="img" aria-labelledby="wb-fig-t wb-fig-d">
+    <title id="wb-fig-t">Client, server and database</title>
+    <desc id="wb-fig-d">A client box on the left sends a request to a server box in the middle, which queries a database cylinder on the right. The response travels back to the client.</desc>
+    <defs>
+      <marker id="wb-arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+      </marker>
+      <marker id="wb-arrow-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+      </marker>
+    </defs>
+    <rect x="6" y="50" width="100" height="56" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="56" y="84" text-anchor="middle" font-size="19" font-weight="600" style="fill: var(--viz-ink)">Client</text>
+    <rect x="150" y="50" width="100" height="56" rx="5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="200" y="84" text-anchor="middle" font-size="19" font-weight="600" style="fill: var(--viz-ink)">Server</text>
+    <path d="M294 52 a50 9 0 0 1 100 0 v52 a50 9 0 0 1 -100 0 z" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="2" />
+    <path d="M294 52 a50 9 0 0 0 100 0" fill="none" style="stroke: var(--viz-store)" stroke-width="2" />
+    <text x="344" y="88" text-anchor="middle" font-size="19" font-weight="600" style="fill: var(--viz-ink)">Database</text>
+    <line x1="107" y1="66" x2="147" y2="66" style="stroke: var(--viz-flow)" stroke-width="2" marker-end="url(#wb-arrow-flow)" />
+    <text x="128" y="38" text-anchor="middle" font-size="19" style="fill: var(--viz-ink)">GET</text>
+    <line x1="251" y1="66" x2="291" y2="66" style="stroke: var(--viz-flow)" stroke-width="2" marker-end="url(#wb-arrow-flow)" />
+    <text x="272" y="38" text-anchor="middle" font-size="19" style="fill: var(--viz-ink)">query</text>
+    <line x1="149" y1="92" x2="109" y2="92" style="stroke: var(--viz-ok)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#wb-arrow-ok)" />
+    <text x="128" y="134" text-anchor="middle" font-size="19" style="fill: var(--viz-ink)">200 OK</text>
+  </svg>
+</Figure>
+
+## Step-through
+
+<StepThrough
+  title="A cache-aside read"
+  actors={[
+    { id: 'app', label: 'App', kind: 'client' },
+    { id: 'cache', label: 'Cache', kind: 'store' },
+    { id: 'db', label: 'Database', kind: 'store' },
+  ]}
+  steps={[
+    { from: 'app', to: 'cache', label: 'GET user:42', text: 'The app asks the cache first, because a cache hit takes about a millisecond.' },
+    { from: 'cache', to: 'app', label: 'miss', text: 'The key is not there, so the cache answers with a miss.', tone: 'warn', dashed: true },
+    { from: 'app', to: 'db', label: 'SELECT', text: 'The app falls back to the database, which is slower but always has the data.' },
+    { from: 'db', to: 'app', label: 'row', text: 'The database returns the row.', tone: 'ok', dashed: true },
+    { from: 'app', to: 'cache', label: 'SET, 60 s', text: 'The app stores the row in the cache with a 60 second expiry, so the next read is a hit.' },
+  ]}
+  summary="Reads go to the cache first and fall back to the database on a miss, filling the cache on the way back. The expiry bounds how stale a cached row can get."
+/>
+
+## Simulation
+
+<QueueSim />
+
+## Code tabs
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="hello.py"
+def greet(name: str) -> str:
+    return f"Hello, {name}"
+
+print(greet("on-call"))  # Hello, on-call
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="hello.mjs"
+const greet = (name) => `Hello, ${name}`;
+
+console.log(greet('on-call')); // Hello, on-call
+```
+  </TabItem>
+</Tabs>
+
+## Asides and answers
+
+:::tip[Practical advice]
+Start with the simplest limit that protects you.
+:::
+
+:::caution[Common mistake]
+Counting requests per server instead of per client.
+:::
+
+:::danger[Outage risk]
+A retry loop with no backoff turns one slow dependency into a full outage.
+:::
+
+:::note[From the trenches]
+Teams usually discover their real limits during their first big sale.
+:::
+
+<details>
+<summary>1. What happens if the queue is unbounded?</summary>
+
+Latency grows without limit instead of requests being rejected, and memory eventually runs out.
+
+</details>
+
+| Option | Accuracy | Memory |
+|---|---|---|
+| Fixed window | Low at boundaries | One counter |
+| Sliding log | Exact | One timestamp per request |
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'rate-limiting', why: 'Protecting a service from one noisy client.' },
+  { slug: 'circuit-breakers', why: 'Protecting yourself from a dependency that is drowning.' },
+]} />

@@ -1,0 +1,308 @@
+---
+// The frame every simulation runs in: stage, Play/Pause, Step, Reset, Speed, sliders, stats,
+// event log and the "What to watch for" caption. A topic's sim component renders this and then
+// calls mountAll(name, factory) from its own <script>. See .claude/skills/add-topic/visuals.md.
+interface Props {
+  /** Identifies the sim type; the topic script mounts every shell with this name. */
+  name: string;
+  title: string;
+  /** Describes the picture for screen readers. The stats and log carry the live numbers. */
+  description: string;
+  /**
+   * SVG coordinate system. The stage is about 295px wide on a 360px phone, so with the default
+   * width of 400, text needs font-size 19 or more to render at 14px there.
+   */
+  viewBox?: string;
+  /** JSON-serialisable props passed to the model factory. */
+  config?: Record<string, unknown>;
+  /** "What to watch for", the one or two things to notice. Or use the "watch" slot. */
+  watchFor?: string;
+  seed?: number;
+  tickMs?: number;
+  stepMs?: number;
+  autoplay?: boolean;
+}
+
+const {
+  name,
+  title,
+  description,
+  viewBox = '0 0 400 240',
+  config = {},
+  watchFor,
+  seed,
+  tickMs,
+  stepMs,
+  autoplay,
+} = Astro.props;
+const hasWatchSlot = Astro.slots.has('watch');
+// Cap the drawing at 1.25× its own size so a narrow canvas does not balloon on desktop.
+const maxWidth = Math.round(Number(viewBox.split(/\s+/)[2]) * 1.25);
+---
+
+<figure
+  class="sim not-content"
+  data-sim={name}
+  data-config={JSON.stringify(config)}
+  data-seed={seed}
+  data-tick-ms={tickMs}
+  data-step-ms={stepMs}
+  data-autoplay={autoplay === undefined ? undefined : String(autoplay)}
+  tabindex="0"
+  aria-label={`${title}. Simulation. Space plays or pauses.`}
+>
+  <div class="sim-head">
+    <span class="sim-kicker">Simulation</span>
+    <span class="sim-title">{title}</span>
+  </div>
+
+  <div class="sim-stage">
+    <svg
+      class="sim-view"
+      data-sim-view
+      viewBox={viewBox}
+      width="100%"
+      role="img"
+      aria-label={description}
+      style={`max-width: ${maxWidth}px`}></svg>
+  </div>
+
+  <div class="sim-toolbar">
+    <button type="button" class="sim-btn sim-btn-primary" data-sim-play aria-pressed="false">
+      <svg class="sim-icon sim-icon-play" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M4 2.5v11l9-5.5z" fill="currentColor"></path>
+      </svg>
+      <svg class="sim-icon sim-icon-pause" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M4 2.5h3v11H4zM9 2.5h3v11H9z" fill="currentColor"></path>
+      </svg>
+      <span data-label>Play</span>
+    </button>
+    <button type="button" class="sim-btn" data-sim-step>Step</button>
+    <button type="button" class="sim-btn" data-sim-reset>Reset</button>
+    <label class="sim-speed">
+      Speed
+      <select data-sim-speed><option value="1">1×</option></select>
+    </label>
+    <div class="sim-actions" data-sim-actions></div>
+  </div>
+
+  <div class="sim-params" data-sim-params></div>
+  <dl class="sim-stats" data-sim-stats></dl>
+  <p class="sim-log" data-sim-log aria-live="polite"></p>
+
+  {
+    (watchFor || hasWatchSlot) && (
+      <figcaption class="sim-watch">
+        <strong>What to watch for.</strong> {watchFor}
+        <slot name="watch" />
+      </figcaption>
+    )
+  }
+
+  <noscript><p class="sim-log">This simulation needs JavaScript to run.</p></noscript>
+</figure>
+
+<style is:global>
+  /* Global because the shell script creates sliders, stats and buttons at runtime. */
+  .sim {
+    margin: 2rem 0;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-bg);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .sim:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 3px;
+  }
+
+  .sim-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+  .sim-kicker {
+    font-size: var(--sl-text-2xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-text-accent);
+  }
+  .sim-title {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .sim-stage {
+    border-radius: 0.5rem;
+    background: var(--viz-surface);
+    color: var(--viz-ink);
+    overflow: hidden;
+  }
+  .sim-view {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin: 0 auto;
+  }
+
+  .sim-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .sim-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .sim-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-height: 2.5rem;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-white);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .sim-btn:hover {
+    border-color: var(--sl-color-gray-2);
+  }
+  .sim-btn:focus-visible,
+  .sim select:focus-visible,
+  .sim input[type='range']:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+  .sim-btn-primary {
+    min-width: 6rem;
+    justify-content: center;
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent);
+    /* --sl-color-black flips with the theme, so this contrasts with the accent in both. */
+    color: var(--sl-color-black);
+  }
+  .sim-btn-primary:hover {
+    border-color: var(--sl-color-accent-high);
+  }
+  .sim-icon {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+  .sim-icon-pause,
+  .sim.is-playing .sim-icon-play {
+    display: none;
+  }
+  .sim.is-playing .sim-icon-pause {
+    display: inline;
+  }
+
+  .sim-speed {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+  }
+  .sim-speed select {
+    min-height: 2.5rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-white);
+    font: inherit;
+  }
+
+  .sim-params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.75rem 1.25rem;
+    margin-top: 1rem;
+  }
+  .sim-param-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .sim-param label {
+    font-weight: 600;
+    color: var(--sl-color-gray-1);
+  }
+  .sim-param output {
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-gray-2);
+  }
+  .sim-param input[type='range'] {
+    width: 100%;
+    min-height: 1.75rem;
+    accent-color: var(--sl-color-accent);
+  }
+
+  .sim-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    margin: 1rem 0 0;
+  }
+  .sim-stats:empty {
+    display: none;
+  }
+  .sim-stats div {
+    display: flex;
+    flex-direction: column;
+  }
+  .sim-stats dt {
+    font-size: var(--sl-text-2xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .sim-stats dd {
+    margin: 0;
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--sl-color-white);
+  }
+
+  .sim-log {
+    min-height: 1.6em;
+    margin: 0.75rem 0 0;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+    overflow-wrap: anywhere;
+  }
+
+  .sim-watch {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--sl-color-gray-5);
+    font-size: var(--sl-text-sm);
+    line-height: 1.6;
+  }
+  .sim-watch strong {
+    color: var(--sl-color-white);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sim * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+</style>

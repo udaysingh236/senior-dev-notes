@@ -1,0 +1,109 @@
+---
+// "Where to go next" list. Resolves topic slugs to page URLs; topics that are not written yet
+// show as "coming soon" instead of a broken link. Without `items`, falls back to the page's
+// `next` frontmatter.
+import { resolveTopic } from '../lib/topics';
+
+interface Item {
+  slug: string;
+  /** One line on why this is the natural next step. */
+  why?: string;
+}
+
+interface Props {
+  items?: Item[];
+}
+
+const { id, entry } = Astro.locals.starlightRoute;
+const items: Item[] = Astro.props.items ?? (entry.data.next ?? []).map((slug) => ({ slug }));
+const topics = await Promise.all(
+  items.map(async (item) => ({ ...item, topic: await resolveTopic(item.slug, id) })),
+);
+---
+
+<ul class="next-topics not-content">
+  {
+    topics.map(({ topic, why }) => (
+      <li class:list={['next-topic', { 'next-topic-soon': !topic.href }]}>
+        {topic.href ? (
+          <a class="next-topic-title" href={topic.href}>
+            {topic.title}
+            <span class="next-topic-arrow" aria-hidden="true">→</span>
+          </a>
+        ) : (
+          <span class="next-topic-title">
+            {topic.title}
+            <span class="chip-soon-label">coming soon</span>
+          </span>
+        )}
+        {why && <p class="next-topic-why">{why}</p>}
+        <span class="next-topic-track">{topic.trackTitle}</span>
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .next-topics {
+    list-style: none;
+    padding: 0;
+    margin-top: 1rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .next-topic {
+    position: relative;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.6rem;
+    background: var(--sl-color-bg);
+  }
+  .next-topic:has(a:hover) {
+    border-color: var(--sl-color-accent);
+  }
+
+  .next-topic-title {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: var(--sl-text-lg);
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+  a.next-topic-title {
+    color: var(--sl-color-text-accent);
+  }
+  /* Make the whole card clickable for published topics. */
+  a.next-topic-title::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  a.next-topic-title:focus-visible {
+    outline: none;
+  }
+  .next-topic:has(a:focus-visible) {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .next-topic-soon .next-topic-title {
+    color: var(--sl-color-gray-2);
+  }
+
+  .next-topic-why {
+    margin: 0.35rem 0 0;
+    color: var(--sl-color-gray-2);
+  }
+
+  .next-topic-track {
+    display: block;
+    margin-top: 0.35rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+</style>

@@ -1,0 +1,115 @@
+---
+// One card per track on the landing page, with published and planned counts from CURRICULUM.md.
+import { getTrackSummaries } from '../lib/topics';
+
+const summaries = await getTrackSummaries();
+---
+
+<ul class="track-cards not-content">
+  {
+    summaries.map(({ track, topics, publishedCount, plannedCount }) => {
+      const first = topics.find((t) => t.href);
+      const href = first?.href ?? `/roadmap/#${track.folder}`;
+      const total = publishedCount + plannedCount;
+      return (
+        <li class="track-card">
+          <span class="track-card-num">Track {track.order}</span>
+          <a class="track-card-title" href={href}>
+            {track.title}
+          </a>
+          <p class="track-card-topics">
+            {topics
+              .slice(0, 4)
+              .map((t) => t.title)
+              .join(' · ')}
+            {topics.length > 4 && ' …'}
+          </p>
+          <div class="track-card-progress" aria-hidden="true">
+            <span style={`width: ${total ? (publishedCount / total) * 100 : 0}%`} />
+          </div>
+          <p class="track-card-counts">
+            <strong>{publishedCount}</strong> published · {plannedCount} planned
+          </p>
+        </li>
+      );
+    })
+  }
+</ul>
+
+<style>
+  .track-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .track-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-bg);
+  }
+  .track-card:has(a:hover) {
+    border-color: var(--sl-color-accent);
+  }
+  .track-card:has(a:focus-visible) {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+  .track-card-num {
+    font-size: var(--sl-text-2xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .track-card-title {
+    font-size: var(--sl-text-lg);
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+  .track-card-title::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .track-card-title:focus-visible {
+    outline: none;
+  }
+  .track-card-topics {
+    flex: 1;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.55;
+    color: var(--sl-color-gray-3);
+  }
+  .track-card-progress {
+    height: 0.3rem;
+    margin-top: 0.4rem;
+    border-radius: 999px;
+    background: var(--sl-color-gray-6);
+    overflow: hidden;
+  }
+  .track-card-progress span {
+    display: block;
+    height: 100%;
+    background: var(--sl-color-accent);
+  }
+  .track-card-counts {
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .track-card-counts strong {
+    color: var(--sl-color-white);
+  }
+</style>

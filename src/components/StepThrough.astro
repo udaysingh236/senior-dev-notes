@@ -1,0 +1,554 @@
+---
+// A sequence diagram the reader walks through with Back/Next or the numbered steps.
+// Each step highlights its arrow and the actors involved, with up to three sentences of
+// explanation. A final summary step lights the whole flow. Without JavaScript every step
+// shows as a numbered list under the diagram.
+//
+// Layout: up to 3 actors fit a 360px phone; 4–6 actors scroll sideways rather than shrink.
+// Keep actor labels and arrow labels to about 14 characters.
+
+type Tone = 'flow' | 'ok' | 'warn' | 'bad';
+
+interface Actor {
+  id: string;
+  label: string;
+  /** Shape: client = rounded box, server = box, store = cylinder, queue = segmented bar. */
+  kind?: 'client' | 'server' | 'store' | 'queue';
+}
+
+interface Step {
+  /** Actor ids. When from === to the step is a note on that actor (work done locally). */
+  from: string;
+  to: string;
+  /** Short text on the arrow. */
+  label: string;
+  /** At most three sentences. */
+  text: string;
+  /** Colour meaning: flow (blue, default), ok (green), warn (amber), bad (red). */
+  tone?: Tone;
+  /** Dashed line, conventionally used for responses. */
+  dashed?: boolean;
+}
+
+interface Props {
+  title: string;
+  /** What the whole sequence shows, for screen readers. */
+  description?: string;
+  actors: Actor[];
+  steps: Step[];
+  /** The closing step: what the whole flow achieved, in up to three sentences. */
+  summary: string;
+}
+
+const { title, description, actors, steps, summary } = Astro.props;
+
+const ids = new Set(actors.map((a) => a.id));
+for (const [i, s] of steps.entries()) {
+  for (const end of [s.from, s.to]) {
+    if (!ids.has(end)) throw new Error(`StepThrough "${title}": step ${i + 1} uses unknown actor "${end}".`);
+  }
+}
+
+const uid = `st-${Math.random().toString(36).slice(2, 8)}`;
+
+// Geometry, in SVG units. Font size 16 renders at about 13–14px on a phone for 3 actors.
+const COL = 104;
+const LEFT = 40;
+const TOP = 12;
+const BOX_H = 40;
+const ROW = 52;
+const FIRST_ROW = TOP + BOX_H + 38;
+const width = LEFT + actors.length * COL;
+const height = FIRST_ROW + steps.length * ROW;
+const cx = (id: string) => LEFT + actors.findIndex((a) => a.id === id) * COL + COL / 2;
+const BOX_W = COL - 12;
+const tones: Tone[] = ['flow', 'ok', 'warn', 'bad'];
+
+const rows = steps.map((s, i) => {
+  const y = FIRST_ROW + i * ROW;
+  const x1 = cx(s.from);
+  const x2 = cx(s.to);
+  const self = s.from === s.to;
+  const dir = x2 >= x1 ? 1 : -1;
+  // Stop the line short of the lifeline so the arrowhead sits on it.
+  return { ...s, i, y, x1, x2: self ? x2 : x2 - dir * 4, self, tone: s.tone ?? 'flow', mid: (x1 + x2) / 2 };
+});
+---
+
+<div class="st not-content" data-stepthrough data-total={steps.length + 1} tabindex="-1">
+  <div class="st-head">
+    <span class="st-kicker">Step through</span>
+    <span class="st-title">{title}</span>
+  </div>
+
+  <div class="st-stage">
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      role="img"
+      aria-labelledby={`${uid}-t ${uid}-d`}
+      style={`min-width: ${Math.round(width * 0.8)}px; max-width: ${Math.round(width * 1.25)}px`}
+    >
+      <title id={`${uid}-t`}>{title}</title>
+      <desc id={`${uid}-d`}>
+        {description ?? `Sequence between ${actors.map((a) => a.label).join(', ')}, in ${steps.length} steps.`}
+      </desc>
+      <defs>
+        {
+          tones.map((t) => (
+            <marker
+              id={`${uid}-arrow-${t}`}
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M0 0 L10 5 L0 10 z" class={`st-tone-fill-${t}`} />
+            </marker>
+          ))
+        }
+        <marker
+          id={`${uid}-arrow-muted`}
+          viewBox="0 0 10 10"
+          refX="9"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" class="st-tone-fill-muted" />
+        </marker>
+      </defs>
+
+      {
+        actors.map((a) => {
+          const x = cx(a.id);
+          const left = x - BOX_W / 2;
+          const kind = a.kind ?? 'server';
+          return (
+            <g class={`st-actor st-kind-${kind}`} data-actor={a.id}>
+              <line class="st-lifeline" x1={x} x2={x} y1={TOP + BOX_H} y2={height - 6} />
+              {kind === 'store' ? (
+                <>
+                  <path
+                    class="st-actor-shape"
+                    d={`M${left} ${TOP + 7} a${BOX_W / 2} 7 0 0 1 ${BOX_W} 0 v${BOX_H - 14} a${BOX_W / 2} 7 0 0 1 ${-BOX_W} 0 z`}
+                  />
+                  <path class="st-actor-line" d={`M${left} ${TOP + 7} a${BOX_W / 2} 7 0 0 0 ${BOX_W} 0`} />
+                </>
+              ) : (
+                <rect
+                  class="st-actor-shape"
+                  x={left}
+                  y={TOP}
+                  width={BOX_W}
+                  height={BOX_H}
+                  rx={kind === 'client' ? 14 : 5}
+                />
+              )}
+              {kind === 'queue' &&
+                [1, 2, 3].map((n) => (
+                  <line
+                    class="st-actor-line"
+                    x1={left + (BOX_W / 4) * n}
+                    x2={left + (BOX_W / 4) * n}
+                    y1={TOP + BOX_H - 9}
+                    y2={TOP + BOX_H}
+                  />
+                ))}
+              <text class="st-actor-label" x={x} y={TOP + BOX_H / 2 + (kind === 'queue' ? 0 : 1)}>
+                {a.label}
+              </text>
+            </g>
+          );
+        })
+      }
+
+      {
+        rows.map((r) => (
+          <g
+            class={`st-msg st-tone-${r.tone}`}
+            data-step={r.i}
+            data-from={r.from}
+            data-to={r.to}
+            data-marker={`url(#${uid}-arrow-${r.tone})`}
+            data-marker-muted={`url(#${uid}-arrow-muted)`}
+          >
+            <circle class="st-num-bg" cx={16} cy={r.y} r={11} />
+            <text class="st-num" x={16} y={r.y + 0.5}>
+              {r.i + 1}
+            </text>
+            {r.self ? (
+              <>
+                <rect class="st-note" x={r.x1 - BOX_W / 2} y={r.y - 16} width={BOX_W} height={30} rx={6} />
+                <text class="st-msg-label st-note-label" x={r.x1} y={r.y}>
+                  {r.label}
+                </text>
+              </>
+            ) : (
+              <>
+                <line
+                  class:list={['st-line', { 'st-dashed': r.dashed }]}
+                  x1={r.x1}
+                  x2={r.x2}
+                  y1={r.y}
+                  y2={r.y}
+                  marker-end={`url(#${uid}-arrow-${r.tone})`}
+                />
+                <text class="st-msg-label" x={r.mid} y={r.y - 9}>
+                  {r.label}
+                </text>
+              </>
+            )}
+          </g>
+        ))
+      }
+    </svg>
+  </div>
+
+  <ol class="st-steps" aria-live="polite">
+    {
+      steps.map((s, i) => (
+        <li class="st-step" data-step-text={i}>
+          <span class="st-step-count">
+            Step {i + 1} of {steps.length + 1}
+          </span>
+          <strong class="st-step-label">{s.label}</strong>
+          <p>{s.text}</p>
+        </li>
+      ))
+    }
+    <li class="st-step" data-step-text={steps.length}>
+      <span class="st-step-count">
+        Step {steps.length + 1} of {steps.length + 1}
+      </span>
+      <strong class="st-step-label">The whole flow</strong>
+      <p>{summary}</p>
+    </li>
+  </ol>
+
+  <div class="st-nav">
+    <button type="button" class="st-btn" data-st-prev>← Back</button>
+    <div class="st-dots" role="group" aria-label="Jump to step">
+      {
+        [...steps, null].map((_, i) => (
+          <button
+            type="button"
+            class="st-dot"
+            data-st-goto={i}
+            aria-label={i === steps.length ? 'Summary' : `Step ${i + 1}`}
+          >
+            {i === steps.length ? '✓' : i + 1}
+          </button>
+        ))
+      }
+    </div>
+    <button type="button" class="st-btn st-btn-primary" data-st-next>Next →</button>
+  </div>
+</div>
+
+<style is:global>
+  .st {
+    margin: 2rem 0;
+    padding: 1rem;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    background: var(--sl-color-bg);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .st:focus {
+    outline: none;
+  }
+  .st-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.6rem;
+    margin-bottom: 0.75rem;
+  }
+  .st-kicker {
+    font-size: var(--sl-text-2xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--sl-color-text-accent);
+  }
+  .st-title {
+    font-size: var(--sl-text-base);
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+
+  .st-stage {
+    overflow-x: auto;
+    border-radius: 0.5rem;
+    background: var(--viz-surface);
+    padding: 0.25rem 0;
+  }
+  .st-stage svg {
+    display: block;
+    height: auto;
+    margin: 0 auto;
+  }
+  .st text {
+    font-family: var(--__sl-font);
+    font-size: 16px;
+    fill: var(--viz-ink);
+    text-anchor: middle;
+    dominant-baseline: middle;
+  }
+
+  .st-lifeline {
+    stroke: var(--viz-stroke);
+    stroke-width: 1.5;
+    stroke-dasharray: 3 5;
+  }
+  .st-actor-shape {
+    stroke-width: 2;
+    transition: stroke-width 0.2s;
+  }
+  .st-actor-line {
+    fill: none;
+    stroke-width: 2;
+  }
+  .st-kind-client .st-actor-shape { fill: var(--viz-client-soft); stroke: var(--viz-client); }
+  .st-kind-server .st-actor-shape { fill: var(--viz-server-soft); stroke: var(--viz-server); }
+  .st-kind-store .st-actor-shape { fill: var(--viz-store-soft); stroke: var(--viz-store); }
+  .st-kind-queue .st-actor-shape { fill: var(--viz-server-soft); stroke: var(--viz-server); }
+  .st-kind-client .st-actor-line { stroke: var(--viz-client); }
+  .st-kind-store .st-actor-line { stroke: var(--viz-store); }
+  .st-kind-queue .st-actor-line { stroke: var(--viz-server); }
+  .st-actor-label {
+    font-weight: 600;
+  }
+  .st-actor.is-active .st-actor-shape {
+    stroke-width: 3.5;
+  }
+
+  .st-tone-fill-flow { fill: var(--viz-flow); }
+  .st-tone-fill-ok { fill: var(--viz-ok); }
+  .st-tone-fill-warn { fill: var(--viz-warn); }
+  .st-tone-fill-bad { fill: var(--viz-bad); }
+  .st-tone-fill-muted { fill: var(--viz-muted); }
+
+  .st-msg {
+    transition: opacity 0.25s;
+  }
+  .st-line {
+    stroke-width: 2;
+  }
+  .st-tone-flow .st-line { stroke: var(--viz-flow); }
+  .st-tone-ok .st-line { stroke: var(--viz-ok); }
+  .st-tone-warn .st-line { stroke: var(--viz-warn); }
+  .st-tone-bad .st-line { stroke: var(--viz-bad); }
+  .st-dashed {
+    stroke-dasharray: 7 5;
+  }
+  .st-note {
+    stroke-width: 1.5;
+    fill: var(--viz-surface);
+  }
+  .st-tone-flow .st-note { stroke: var(--viz-flow); }
+  .st-tone-ok .st-note { stroke: var(--viz-ok); }
+  .st-tone-warn .st-note { stroke: var(--viz-warn); }
+  .st-tone-bad .st-note { stroke: var(--viz-bad); }
+  .st text.st-msg-label {
+    font-size: 15px;
+  }
+  .st-num-bg {
+    fill: var(--viz-surface);
+    stroke: var(--viz-stroke);
+    stroke-width: 1.5;
+  }
+  .st text.st-num {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  /* Enhanced (JS) states. Past steps go grey, the current one is bold, future ones are faint. */
+  .st.is-enhanced .st-msg.is-future {
+    opacity: 0.12;
+  }
+  .st.is-enhanced .st-msg.is-past .st-line,
+  .st.is-enhanced .st-msg.is-past .st-note {
+    stroke: var(--viz-muted);
+  }
+  .st.is-enhanced .st-msg.is-past text {
+    fill: var(--viz-muted);
+  }
+  .st.is-enhanced .st-msg.is-current .st-line {
+    stroke-width: 3.5;
+  }
+  .st.is-enhanced .st-msg.is-current .st-note {
+    stroke-width: 3;
+  }
+  .st.is-enhanced .st-msg.is-current text.st-msg-label {
+    font-weight: 700;
+  }
+  .st.is-enhanced .st-msg.is-current .st-num-bg {
+    fill: var(--viz-ink);
+    stroke: var(--viz-ink);
+  }
+  .st.is-enhanced .st-msg.is-current text.st-num {
+    fill: var(--viz-surface);
+  }
+
+  .st-steps {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .st-step {
+    padding: 0.75rem 0 0;
+  }
+  .st.is-enhanced .st-step {
+    display: none;
+  }
+  .st.is-enhanced .st-step.is-current {
+    display: block;
+    min-height: 7.5rem;
+  }
+  .st-step-count {
+    display: block;
+    font-size: var(--sl-text-2xs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .st-step-label {
+    display: block;
+    margin-top: 0.15rem;
+    font-size: var(--sl-text-base);
+    color: var(--sl-color-white);
+  }
+  .st-step p {
+    margin: 0.3rem 0 0;
+    font-size: var(--sl-text-base);
+    line-height: 1.65;
+  }
+
+  .st-nav {
+    display: none;
+  }
+  .st.is-enhanced .st-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .st-dots {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.3rem;
+    order: 3;
+    width: 100%;
+  }
+  @media (min-width: 40rem) {
+    .st-dots {
+      order: 0;
+      width: auto;
+    }
+  }
+  .st-btn,
+  .st-dot {
+    min-height: 2.5rem;
+    border: 1px solid var(--sl-color-gray-4);
+    border-radius: 0.5rem;
+    background: var(--sl-color-bg-nav);
+    color: var(--sl-color-white);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .st-btn {
+    padding: 0.4rem 0.9rem;
+  }
+  .st-dot {
+    min-width: 2.5rem;
+    padding: 0 0.4rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .st-dot[aria-current='step'] {
+    border-color: var(--sl-color-accent);
+    background: var(--sl-color-accent);
+    color: var(--sl-color-black);
+  }
+  .st-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .st-btn-primary:not(:disabled) {
+    border-color: var(--sl-color-accent);
+  }
+  .st-btn:focus-visible,
+  .st-dot:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .st-msg,
+    .st-actor-shape {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  for (const root of document.querySelectorAll<HTMLElement>('[data-stepthrough]')) {
+    const total = Number(root.dataset.total);
+    const summary = total - 1;
+    const msgs = [...root.querySelectorAll<SVGGElement>('.st-msg')];
+    const actors = [...root.querySelectorAll<SVGGElement>('.st-actor')];
+    const texts = [...root.querySelectorAll<HTMLElement>('[data-step-text]')];
+    const dots = [...root.querySelectorAll<HTMLButtonElement>('[data-st-goto]')];
+    const prev = root.querySelector<HTMLButtonElement>('[data-st-prev]')!;
+    const next = root.querySelector<HTMLButtonElement>('[data-st-next]')!;
+    let current = 0;
+
+    function show(i: number) {
+      current = Math.max(0, Math.min(summary, i));
+      const isSummary = current === summary;
+      const active = new Set<string>();
+      for (const [n, msg] of msgs.entries()) {
+        // On the summary every arrow shows in its own colour; otherwise past, current or future.
+        const state = isSummary ? 'is-summary' : n < current ? 'is-past' : n === current ? 'is-current' : 'is-future';
+        msg.classList.remove('is-past', 'is-current', 'is-future', 'is-summary');
+        msg.classList.add(state);
+        msg.querySelector('.st-line')?.setAttribute(
+          'marker-end',
+          state === 'is-past' ? msg.dataset.markerMuted! : msg.dataset.marker!,
+        );
+        if (n === current) active.add(msg.dataset.from!).add(msg.dataset.to!);
+      }
+      for (const a of actors) a.classList.toggle('is-active', active.has(a.dataset.actor!));
+      texts.forEach((t, n) => t.classList.toggle('is-current', n === current));
+      dots.forEach((d, n) =>
+        n === current ? d.setAttribute('aria-current', 'step') : d.removeAttribute('aria-current'),
+      );
+      prev.disabled = current === 0;
+      next.disabled = current === summary;
+    }
+
+    prev.addEventListener('click', () => show(current - 1));
+    next.addEventListener('click', () => show(current + 1));
+    dots.forEach((d, n) => d.addEventListener('click', () => show(n)));
+    root.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+      if (e.key === 'ArrowRight') show(current + 1);
+      else if (e.key === 'ArrowLeft') show(current - 1);
+      else return;
+      e.preventDefault();
+    });
+
+    root.classList.add('is-enhanced');
+    show(0);
+  }
+</script>

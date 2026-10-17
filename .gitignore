@@ -147,3 +147,8 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Astro / Netlify
+.netlify/
+.DS_Store
+pnpm-debug.log*
