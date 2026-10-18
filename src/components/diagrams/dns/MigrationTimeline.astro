@@ -1,0 +1,40 @@
+---
+// The safe way to move a name to a new address: lower the TTL first, wait out the old TTL,
+// change, keep the old server for at least the new TTL, then raise the TTL again.
+---
+
+<svg viewBox="0 0 400 392" width="100%" role="img" aria-labelledby="dns-mig-t dns-mig-d">
+  <title id="dns-mig-t">Moving a record safely</title>
+  <desc id="dns-mig-d">
+    A vertical timeline with five steps. Two days before: lower the TTL from 86,400 to 300 seconds.
+    Then wait at least the old TTL, one day, so no cache still holds a copy with the long lifetime.
+    On the day: change the record to the new address; old copies now live at most 5 minutes. Keep
+    the old server running for at least the new TTL, plus margin for caches that stretch it, and
+    watch its traffic fall to zero. Finally raise the TTL again.
+  </desc>
+
+  <line x1="24" y1="20" x2="24" y2="372" stroke-width="2" style="stroke: var(--viz-stroke)" />
+
+  <g font-size="19">
+    <circle cx="24" cy="24" r="9" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-flow)" />
+    <text x="46" y="30" font-weight="700" style="fill: var(--viz-ink)">T − 2 days: lower the TTL</text>
+    <text x="46" y="54" font-size="17" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">TTL 86400 → 300</text>
+
+    <circle cx="24" cy="100" r="9" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="46" y="106" font-weight="700" style="fill: var(--viz-ink)">Wait out the old TTL</text>
+    <text x="46" y="130" font-size="17" style="fill: var(--viz-muted)">old long-lived copies expire (1 day)</text>
+
+    <circle cx="24" cy="176" r="11" stroke-width="2.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+    <text x="46" y="182" font-weight="700" style="fill: var(--viz-ink)">T: change the record</text>
+    <text x="46" y="206" font-size="17" style="fill: var(--viz-muted)">old copies now live 5 min at most</text>
+
+    <circle cx="24" cy="252" r="9" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="46" y="258" font-weight="700" style="fill: var(--viz-ink)">Keep the old server running</text>
+    <text x="46" y="282" font-size="17" style="fill: var(--viz-muted)">at least the new TTL, plus margin;</text>
+    <text x="46" y="304" font-size="17" style="fill: var(--viz-muted)">switch off when its traffic is zero</text>
+
+    <circle cx="24" cy="350" r="9" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-flow)" />
+    <text x="46" y="356" font-weight="700" style="fill: var(--viz-ink)">Later: raise the TTL again</text>
+    <text x="46" y="380" font-size="17" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">TTL 300 → 3600</text>
+  </g>
+</svg>

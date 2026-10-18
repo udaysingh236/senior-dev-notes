@@ -1,0 +1,58 @@
+---
+// GeoDNS: one name, different answers depending on who asks. The authoritative server sees the
+// resolver's address (and, with ECS, part of the user's), and answers with the nearest site.
+---
+
+<svg viewBox="0 0 400 368" width="100%" role="img" aria-labelledby="dns-geo-t dns-geo-d">
+  <title id="dns-geo-t">One name, two answers</title>
+  <desc id="dns-geo-d">
+    Two users, one in Mumbai and one in Frankfurt, look up the same name through their own
+    resolvers. Both resolvers ask the same authoritative server, which can see where each query
+    comes from: the resolver's address, plus a slice of the user's address if the resolver sends
+    EDNS Client Subnet. It answers the Mumbai resolver with the Mumbai site's address,
+    192.0.2.10, and the Frankfurt resolver with the Frankfurt site's address, 198.51.100.10, each
+    with a short TTL so it can change its mind when a site fails health checks.
+  </desc>
+  <defs>
+    <marker id="dns-geo-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="dns-geo-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+  </defs>
+
+  <g font-size="19" text-anchor="middle">
+    <rect x="8" y="6" width="160" height="50" rx="16" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="88" y="38" font-weight="700" style="fill: var(--viz-ink)">Mumbai</text>
+    <rect x="232" y="6" width="160" height="50" rx="16" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="312" y="38" font-weight="700" style="fill: var(--viz-ink)">Frankfurt</text>
+
+    <rect x="8" y="104" width="160" height="62" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="88" y="128" font-weight="700" style="fill: var(--viz-ink)">Resolver</text>
+    <text x="88" y="154" font-size="17" font-weight="600" style="fill: var(--viz-ok); font-family: var(--sl-font-mono)">192.0.2.10</text>
+    <rect x="232" y="104" width="160" height="62" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="312" y="128" font-weight="700" style="fill: var(--viz-ink)">Resolver</text>
+    <text x="312" y="154" font-size="17" font-weight="600" style="fill: var(--viz-ok); font-family: var(--sl-font-mono)">198.51.100.10</text>
+
+    <rect x="80" y="262" width="240" height="60" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <text x="200" y="288" font-weight="700" style="fill: var(--viz-ink)">Authoritative</text>
+    <text x="200" y="310" font-size="16" style="fill: var(--viz-muted)">"where is this asker?"</text>
+  </g>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dns-geo-flow)">
+    <line x1="88" y1="58" x2="88" y2="100" />
+    <line x1="312" y1="58" x2="312" y2="100" />
+    <line x1="60" y1="168" x2="120" y2="258" />
+    <line x1="340" y1="168" x2="280" y2="258" />
+  </g>
+  <g stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-ok)" marker-end="url(#dns-geo-ok)">
+    <line x1="150" y1="258" x2="120" y2="172" />
+    <line x1="250" y1="258" x2="280" y2="172" />
+  </g>
+  <g font-size="16" font-weight="600" text-anchor="middle" style="fill: var(--viz-ok)">
+    <text x="200" y="214">nearest</text>
+    <text x="200" y="234">site</text>
+  </g>
+  <text x="200" y="356" text-anchor="middle" font-size="17" style="fill: var(--viz-muted)">two users, same name, nearest site</text>
+</svg>

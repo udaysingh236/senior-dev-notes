@@ -1,0 +1,83 @@
+---
+// The DNS namespace as a tree cut into zones. Each dashed outline is one zone, run by one
+// operator; arrows are delegations (NS records in the parent). Names inside one zone need no
+// delegation at all.
+---
+
+<svg viewBox="0 0 400 372" width="100%" role="img" aria-labelledby="dns-ov-t dns-ov-d">
+  <title id="dns-ov-t">The DNS namespace: a tree of names, cut into zones</title>
+  <desc id="dns-ov-d">
+    At the top is the root zone, shown as a dot, run by twelve operators. It delegates to three
+    top-level domains, .in, .com and .net, each run by its registry. The .in zone delegates
+    example.in to you. Your zone, drawn as one dashed outline, holds example.in itself and the names
+    shop.example.in and api.example.in, which need no further delegation. The .net zone delegates
+    cdn.net to a CDN company, which runs its own zone. Every arrow is a delegation: the parent
+    publishes NS records naming the child's servers.
+  </desc>
+  <defs>
+    <marker id="dns-ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- Zone outlines -->
+  <g fill="none" stroke-width="1.5" stroke-dasharray="6 5" style="stroke: var(--viz-muted)">
+    <rect x="140" y="4" width="120" height="56" rx="10" />
+    <rect x="2" y="104" width="116" height="56" rx="10" />
+    <rect x="142" y="104" width="116" height="56" rx="10" />
+    <rect x="282" y="104" width="116" height="56" rx="10" />
+    <rect x="2" y="208" width="252" height="160" rx="12" style="stroke: var(--viz-client)" stroke-width="2" />
+    <rect x="270" y="208" width="128" height="68" rx="10" />
+  </g>
+
+  <!-- Delegations -->
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dns-ov-arrow)">
+    <line x1="176" y1="54" x2="76" y2="110" />
+    <line x1="200" y1="54" x2="200" y2="108" />
+    <line x1="224" y1="54" x2="324" y2="110" />
+    <line x1="60" y1="154" x2="104" y2="218" />
+    <line x1="340" y1="154" x2="334" y2="214" />
+  </g>
+  <g font-size="17" font-weight="600" style="fill: var(--viz-flow)">
+    <text x="104" y="80" text-anchor="end">NS</text>
+    <text x="72" y="196" text-anchor="end">NS</text>
+    <text x="350" y="192">NS</text>
+  </g>
+
+  <g font-size="19" text-anchor="middle">
+    <rect x="150" y="12" width="100" height="40" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="200" y="38" font-weight="700" style="fill: var(--viz-ink)">. (root)</text>
+
+    <rect x="12" y="112" width="96" height="40" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="60" y="138" font-weight="700" style="fill: var(--viz-ink)">in.</text>
+    <rect x="152" y="112" width="96" height="40" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="200" y="138" font-weight="700" style="fill: var(--viz-ink)">com.</text>
+    <rect x="292" y="112" width="96" height="40" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="340" y="138" font-weight="700" style="fill: var(--viz-ink)">net.</text>
+
+    <rect x="16" y="222" width="224" height="44" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="128" y="250" font-weight="700" style="fill: var(--viz-ink)">example.in.</text>
+    <rect x="16" y="292" width="108" height="40" rx="6" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-client)" />
+    <text x="70" y="318" style="fill: var(--viz-ink)">shop</text>
+    <rect x="132" y="292" width="108" height="40" rx="6" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-client)" />
+    <text x="186" y="318" style="fill: var(--viz-ink)">api</text>
+
+    <rect x="280" y="222" width="108" height="44" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="334" y="250" font-weight="700" style="fill: var(--viz-ink)">cdn.net.</text>
+  </g>
+
+  <!-- Inside one zone, children are plain records, not delegations -->
+  <g stroke-width="1.5" style="stroke: var(--viz-client)">
+    <line x1="70" y1="266" x2="70" y2="292" />
+    <line x1="186" y1="266" x2="186" y2="292" />
+  </g>
+
+  <!-- Margin notes: who runs each zone -->
+  <g font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">
+    <text x="134" y="28" text-anchor="end">12 operators</text>
+    <text x="134" y="48" text-anchor="end">13 identities</text>
+    <text x="200" y="186" text-anchor="middle">TLD zones: registries</text>
+    <text x="128" y="358" text-anchor="middle" style="fill: var(--viz-client)">your zone, your servers</text>
+    <text x="334" y="298" text-anchor="middle">the CDN's zone</text>
+  </g>
+</svg>

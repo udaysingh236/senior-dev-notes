@@ -1,0 +1,50 @@
+---
+// DNS caches after a record change, in one of two modes. See model.ts.
+import SimShell from '../../sim/SimShell.astro';
+
+type Mode = 'propagation' | 'compare';
+
+interface Props {
+  mode: Mode;
+  /** Overrides the default "What to watch for" text for this mode. */
+  watchFor?: string;
+}
+
+const COPY: Record<Mode, { title: string; description: string; watchFor: string; viewBox: string }> = {
+  propagation: {
+    title: 'A record changes, and the caches find out one by one',
+    description:
+      'An authoritative server at the top holds the record for api. Below it, five resolver caches and one app that pinned the address at startup each hold a copy, drawn as a bar showing the time left before it expires. Amber means the old address, green the new one, red a cache still sending users to a server that has been switched off. A blue dot marks a cache asking the authoritative server again.',
+    watchFor:
+      'Nothing happens to the caches at the moment of the change. Each bar runs down on its own clock, and only when it empties does that cache ask again and turn green, so the switch takes up to one full TTL. One TTL after the change the old server is switched off, and the pinned app turns red: it never asks again.',
+    viewBox: '0 0 400 336',
+  },
+  compare: {
+    title: 'The same change with a short TTL and a long one',
+    description:
+      'Two panels, one per TTL, on the same time axis of about an hour and a half. Each shows five small resolver caches coloured by the address they hold, a line for the share of lookups that got the old address, and a count of queries that reached the authoritative server. A dashed line marks the change.',
+    watchFor:
+      'With a 1 minute TTL the amber line drops to zero almost at once; with 1 hour it falls slowly for a full hour. Now compare the query counts on the left: the short TTL pays for its agility with dozens of times more queries to the authoritative server.',
+    viewBox: '0 0 400 288',
+  },
+};
+
+const { mode, watchFor } = Astro.props;
+const copy = COPY[mode];
+---
+
+<SimShell
+  name="dns-cache"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox={copy.viewBox}
+  config={{ mode }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createDnsCacheModel } from './model';
+
+  mountAll('dns-cache', createDnsCacheModel);
+</script>

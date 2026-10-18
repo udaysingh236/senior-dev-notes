@@ -1,0 +1,56 @@
+---
+// Who asks whom, and where the caches are: app → stub resolver in the OS → recursive resolver →
+// authoritative servers. Every layer on your side keeps its own cache, with its own rules.
+---
+
+<svg viewBox="0 0 400 448" width="100%" role="img" aria-labelledby="dns-roles-t dns-roles-d">
+  <title id="dns-roles-t">The four roles in a lookup, and their caches</title>
+  <desc id="dns-roles-d">
+    From top to bottom. Your app, with its runtime's own cache, such as the browser's or the
+    JVM's. It calls getaddrinfo, which asks the stub resolver in the operating system, with the
+    OS cache. The stub sends one question over UDP port 53, or encrypted with DoH or DoT, to a
+    recursive resolver, whose cache is shared by thousands or millions of users. On a miss, the
+    recursive resolver asks the authoritative servers in turn: root, TLD and the domain's own.
+    Only those authoritative servers hold the truth; every layer above holds copies.
+  </desc>
+  <defs>
+    <marker id="dns-roles-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <g font-size="19">
+    <rect x="4" y="4" width="392" height="62" rx="16" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="18" y="30" font-weight="700" style="fill: var(--viz-ink)">Your app</text>
+    <text x="18" y="54" font-size="17" style="fill: var(--viz-muted)">cache: browser, JVM, your own code</text>
+
+    <rect x="4" y="110" width="392" height="62" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="18" y="136" font-weight="700" style="fill: var(--viz-ink)">Stub resolver (the OS)</text>
+    <text x="18" y="160" font-size="17" style="fill: var(--viz-muted)">cache: one machine; reads /etc/hosts</text>
+
+    <rect x="4" y="216" width="392" height="62" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="18" y="242" font-weight="700" style="fill: var(--viz-ink)">Recursive resolver</text>
+    <text x="18" y="266" font-size="17" style="fill: var(--viz-muted)">cache: shared by many users</text>
+
+    <text x="200" y="438" text-anchor="middle" font-size="17" style="fill: var(--viz-muted)">authoritative: no cache, the truth</text>
+    <rect x="4" y="354" width="120" height="56" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <text x="64" y="388" text-anchor="middle" font-weight="700" style="fill: var(--viz-ink)">root</text>
+    <rect x="140" y="354" width="120" height="56" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <text x="200" y="388" text-anchor="middle" font-weight="700" style="fill: var(--viz-ink)">TLD</text>
+    <rect x="276" y="354" width="120" height="56" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <text x="336" y="388" text-anchor="middle" font-weight="700" style="fill: var(--viz-ink)">yours</text>
+  </g>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dns-roles-arrow)">
+    <line x1="60" y1="68" x2="60" y2="106" />
+    <line x1="60" y1="174" x2="60" y2="212" />
+    <line x1="40" y1="280" x2="40" y2="350" />
+    <line x1="140" y1="280" x2="196" y2="350" />
+    <line x1="240" y1="280" x2="320" y2="350" />
+  </g>
+  <g font-size="17" font-weight="600" style="fill: var(--viz-flow)">
+    <text x="74" y="94" style="font-family: var(--sl-font-mono)">getaddrinfo()</text>
+    <text x="74" y="200">UDP 53, or DoH / DoT</text>
+    <text x="396" y="312" text-anchor="end">on a miss</text>
+  </g>
+</svg>

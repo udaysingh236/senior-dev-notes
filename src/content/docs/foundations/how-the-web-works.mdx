@@ -291,7 +291,9 @@ afterwards.
 
 DNS uses UDP (a protocol that sends single packets with no connection set-up) on port 53, so a
 lookup is one round trip to the resolver. If DNS fails, nothing else on this page can even start.
-That is why DNS appears in so many of the outage stories further down.
+That is why DNS appears in so many of the outage stories further down. The [DNS](/networking/dns/)
+page goes inside this step: record types, how caches treat TTLs and "no such name", and how to
+change records without an outage.
 
 ### Step 2: open a connection (TCP)
 

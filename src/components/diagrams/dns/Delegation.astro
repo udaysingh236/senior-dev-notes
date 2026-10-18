@@ -1,0 +1,46 @@
+---
+// A zone cut: the parent zone (.in) holds only the delegation for example.in, an NS record plus
+// glue; the child zone holds the real records. The NS record appears on both sides.
+---
+
+<svg viewBox="0 0 400 362" width="100%" role="img" aria-labelledby="dns-del-t dns-del-d">
+  <title id="dns-del-t">A delegation from .in to example.in</title>
+  <desc id="dns-del-d">
+    Two boxes. The top box is the parent zone, in., run by the registry. It holds two lines about
+    example.in: an NS record saying example.in is served by ns1.example.in, and a glue A record
+    giving ns1.example.in's address, 192.0.2.53. An arrow labelled "referral" points down to the
+    bottom box, the child zone example.in, run by you. It holds the SOA record, its own copy of the
+    NS record, an A record for shop.example.in and a CNAME for api.example.in. The child's records
+    are the authoritative ones.
+  </desc>
+  <defs>
+    <marker id="dns-del-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- Parent -->
+  <rect x="4" y="4" width="392" height="132" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="32" font-size="19" font-weight="700" style="fill: var(--viz-ink)">Zone in. (the registry)</text>
+  <g font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <text x="16" y="70">example.in.  NS ns1.example.in.</text>
+    <text x="16" y="102">ns1.example.in. A 192.0.2.53</text>
+  </g>
+  <text x="380" y="124" font-size="17" text-anchor="end" font-style="italic" style="fill: var(--viz-warn); font-family: var(--note-font-display)">glue: breaks the loop</text>
+
+  <!-- Referral arrow -->
+  <line x1="200" y1="138" x2="200" y2="180" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dns-del-arrow)" />
+  <text x="212" y="166" font-size="18" font-weight="600" style="fill: var(--viz-flow)">referral</text>
+
+  <!-- Child -->
+  <rect x="4" y="186" width="392" height="172" rx="8" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="16" y="214" font-size="19" font-weight="700" style="fill: var(--viz-ink)">Zone example.in. (you)</text>
+  <!-- One text per column: the HTML output collapses runs of spaces. -->
+  <g font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <text x="16" y="250">@</text><text x="76" y="250">SOA</text><text x="140" y="250">ns1 hostmaster …</text>
+    <text x="16" y="280">@</text><text x="76" y="280">NS</text><text x="140" y="280">ns1.example.in.</text>
+    <text x="16" y="310">shop</text><text x="76" y="310">A</text><text x="140" y="310">192.0.2.10</text>
+    <text x="16" y="340">api</text><text x="76" y="340">CNAME</text><text x="140" y="340">api.cdn.net.</text>
+  </g>
+  <text x="380" y="214" font-size="17" text-anchor="end" font-style="italic" style="fill: var(--viz-client); font-family: var(--note-font-display)">the truth</text>
+</svg>
