@@ -1,0 +1,46 @@
+---
+// Maximum lifetime of a public TLS certificate under the CA/Browser Forum schedule (ballot
+// SC-081v3), and what Let's Encrypt issues, as of October 2026.
+const rows = [
+  { label: 'until Mar 2026', days: 398, group: 'rule' },
+  { label: 'from Mar 2026', days: 200, group: 'rule' },
+  { label: 'from Mar 2027', days: 100, group: 'rule' },
+  { label: 'from Mar 2029', days: 47, group: 'rule' },
+  { label: "LE default", days: 90, group: 'le' },
+  { label: 'LE, Feb 2028', days: 45, group: 'le' },
+  { label: 'LE short-lived', days: 6, group: 'le' },
+];
+const X0 = 140;
+const SCALE = 172 / 398;
+const ROW = 36;
+const yOf = (i: number) => 46 + i * ROW + (i >= 4 ? 38 : 0);
+---
+
+<svg viewBox="0 0 400 362" width="100%" role="img" aria-labelledby="tls-lt-t tls-lt-d">
+  <title id="tls-lt-t">How long a public TLS certificate may live</title>
+  <desc id="tls-lt-d">
+    Bars of certificate lifetimes. The industry maximum was 398 days until March 2026, then 200
+    days, 100 days from March 2027, and 47 days from March 2029. Let's Encrypt issues 90 days by
+    default, plans 45 days by February 2028, and offers 6-day certificates.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Maximum allowed (CA/Browser Forum)</text>
+  <text x="4" y={yOf(4) - 24} font-size="17" font-weight="700" style="fill: var(--viz-ink)">Let's Encrypt (LE)</text>
+
+  {
+    rows.map((r, i) => {
+      const y = yOf(i);
+      const w = Math.max(3, r.days * SCALE);
+      return (
+        <g>
+          <text x="4" y={y + 19} font-size="17" style="fill: var(--viz-ink)">{r.label}</text>
+          <rect x={X0} y={y + 3} width={w} height="22" rx="3"
+            style={r.group === 'rule' ? 'fill: var(--viz-warn)' : 'fill: var(--viz-ok)'} />
+          <text x={X0 + w + 8} y={y + 20} font-size="17" font-weight="700" style="fill: var(--viz-ink)">{r.days} days</text>
+        </g>
+      );
+    })
+  }
+
+  <text x="4" y="352" font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">as of October 2026</text>
+</svg>

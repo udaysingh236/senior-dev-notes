@@ -1,0 +1,53 @@
+---
+// One TLS 1.3 record on the wire: a 5-byte plain header, the encrypted payload (your data plus
+// the real content type), and a 16-byte authentication tag. What an observer can and cannot learn.
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="tls-rec-t tls-rec-d">
+  <title id="tls-rec-t">Anatomy of a TLS 1.3 record</title>
+  <desc id="tls-rec-d">
+    A record is a 5-byte header in the clear, saying "application data", a version number kept for
+    old middleboxes, and the length; then the encrypted payload, holding up to 16 kilobytes of your
+    data and the real content type; then a 16-byte tag. The tag is computed over the header and the
+    payload with a nonce made from the record's sequence number, so a changed, reordered, replayed
+    or missing record fails to decrypt. An observer sees only the lengths and timing.
+  </desc>
+
+  <text x="4" y="22" font-size="17" style="fill: var(--viz-muted)">one record, as it crosses the network</text>
+
+  <!-- The record -->
+  <rect x="4" y="40" width="86" height="56" rx="4" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <rect x="90" y="40" width="234" height="56" stroke-width="2" style="fill: var(--viz-flow); stroke: var(--viz-flow)" />
+  <rect x="324" y="40" width="72" height="56" rx="4" stroke-width="2" style="fill: var(--viz-ok); stroke: var(--viz-ok)" />
+  <g font-size="17" font-weight="700" text-anchor="middle">
+    <text x="47" y="74" style="fill: var(--viz-ink)">header</text>
+    <text x="207" y="74" style="fill: var(--viz-surface)">encrypted payload</text>
+    <text x="360" y="74" style="fill: var(--viz-surface)">tag</text>
+  </g>
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="47" y="118">5 bytes,</text>
+    <text x="47" y="138">readable</text>
+    <text x="207" y="118">your data, up to 16 KB,</text>
+    <text x="207" y="138">plus the real content type</text>
+    <text x="360" y="118">16 bytes</text>
+  </g>
+
+  <!-- What the observer sees vs what is hidden -->
+  <rect x="4" y="160" width="190" height="132" rx="8" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="16" y="186" font-size="17" font-weight="700" style="fill: var(--viz-ink)">An observer sees</text>
+  <g font-size="16" style="fill: var(--viz-ink)">
+    <text x="16" y="212">• that it is TLS</text>
+    <text x="16" y="236">• each record's length</text>
+    <text x="16" y="260">• when records flow</text>
+    <text x="16" y="284">• the IP addresses</text>
+  </g>
+
+  <rect x="206" y="160" width="190" height="132" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="218" y="186" font-size="17" font-weight="700" style="fill: var(--viz-ink)">The tag catches</text>
+  <g font-size="16" style="fill: var(--viz-ink)">
+    <text x="218" y="212">• any changed byte</text>
+    <text x="218" y="236">• a reordered record</text>
+    <text x="218" y="260">• a replayed record</text>
+    <text x="218" y="284">• a dropped record</text>
+  </g>
+</svg>

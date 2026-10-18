@@ -1,0 +1,79 @@
+---
+// The hero picture: a TLS connection in two phases. A handshake, once per connection, where the
+// two sides agree on keys and the server proves who it is; then records, where every message is
+// encrypted and carries a tag. Underneath, the three promises and what provides each one.
+---
+
+<svg viewBox="0 0 400 486" width="100%" role="img" aria-labelledby="tls-ov-t tls-ov-d">
+  <title id="tls-ov-t">A TLS connection: a handshake once, then protected records</title>
+  <desc id="tls-ov-d">
+    A client on the left and a server on the right. Phase one, the handshake, happens once per
+    connection: the client sends a hello with its key share; the server answers with its own key
+    share, its certificate and a signature. Both sides then compute the same secret keys, which
+    never cross the network. Phase two: every message travels as a record that is encrypted and
+    carries an integrity tag. At the bottom, three promises: private, provided by encryption;
+    untampered, provided by the tag on every record; and the right server, provided by the
+    certificate and the signature.
+  </desc>
+  <defs>
+    <marker id="tls-ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one TLS connection</text>
+  <g transform="translate(0 34)">
+
+  <!-- The two ends -->
+  <g font-size="19" font-weight="700" text-anchor="middle">
+    <rect x="4" y="8" width="96" height="48" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="52" y="39" style="fill: var(--viz-ink)">Client</text>
+    <rect x="300" y="8" width="96" height="48" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="348" y="39" style="fill: var(--viz-ink)">Server</text>
+  </g>
+  <line x1="52" y1="56" x2="52" y2="318" stroke-width="1.5" stroke-dasharray="3 5" style="stroke: var(--viz-stroke)" />
+  <line x1="348" y1="56" x2="348" y2="318" stroke-width="1.5" stroke-dasharray="3 5" style="stroke: var(--viz-stroke)" />
+
+  <!-- Phase 1: handshake -->
+  <text x="200" y="84" font-size="17" text-anchor="middle" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">1. handshake, once per connection</text>
+  <line x1="56" y1="110" x2="342" y2="110" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tls-ov-arrow)" />
+  <text x="200" y="102" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">hello + key share</text>
+  <line x1="344" y1="154" x2="58" y2="154" stroke-width="2" stroke-dasharray="7 5" style="stroke: var(--viz-flow)" marker-end="url(#tls-ov-arrow)" />
+  <text x="200" y="146" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">key share + certificate</text>
+  <text x="200" y="176" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">+ signature</text>
+
+  <rect x="66" y="190" width="268" height="40" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="216" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">both compute the same keys</text>
+
+  <!-- Phase 2: records -->
+  <text x="200" y="260" font-size="17" text-anchor="middle" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">2. records, every message after</text>
+  <rect x="58" y="274" width="284" height="40" rx="20" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  {
+    [78, 166, 254].map((x) => (
+      <g>
+        <rect x={x} y="282" width="56" height="24" rx="3" style="fill: var(--viz-flow)" />
+        <rect x={x + 56} y="282" width="12" height="24" rx="2" style="fill: var(--viz-ok)" />
+        <text x={x + 28} y="299" font-size="15" text-anchor="middle" font-weight="700" style="fill: var(--viz-surface)">data</text>
+      </g>
+    ))
+  }
+  <text x="200" y="336" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">encrypted, each with a tag (green)</text>
+
+  <!-- The three promises -->
+  <g text-anchor="middle">
+    <rect x="4" y="356" width="124" height="88" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+    <text x="66" y="384" font-size="18" font-weight="700" style="fill: var(--viz-ink)">Private</text>
+    <text x="66" y="408" font-size="16" style="fill: var(--viz-muted)">encryption</text>
+
+    <rect x="138" y="356" width="124" height="88" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+    <text x="200" y="384" font-size="18" font-weight="700" style="fill: var(--viz-ink)">Untampered</text>
+    <text x="200" y="408" font-size="16" style="fill: var(--viz-muted)">a tag on</text>
+    <text x="200" y="428" font-size="16" style="fill: var(--viz-muted)">every record</text>
+
+    <rect x="272" y="356" width="124" height="88" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+    <text x="334" y="384" font-size="18" font-weight="700" style="fill: var(--viz-ink)">Right server</text>
+    <text x="334" y="408" font-size="16" style="fill: var(--viz-muted)">certificate</text>
+    <text x="334" y="428" font-size="16" style="fill: var(--viz-muted)">+ signature</text>
+  </g>
+  </g>
+</svg>

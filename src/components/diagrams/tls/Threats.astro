@@ -1,0 +1,60 @@
+---
+// Three things anyone on the network path can do to an unprotected connection, and the property
+// that stops each one.
+const rows = [
+  { verb: 'Read', example: 'sees "pin": 4821', property: 'Confidentiality', how: 'encryption' },
+  { verb: 'Change', example: 'turns 100 into 900', property: 'Integrity', how: 'a tag per message' },
+  { verb: 'Pretend', example: 'answers as the bank', property: 'Authentication', how: 'a certificate' },
+];
+const TOP = 92;
+const ROW = 76;
+---
+
+<svg viewBox={`0 0 400 ${TOP + rows.length * ROW + 38}`} width="100%" role="img" aria-labelledby="tls-th-t tls-th-d">
+  <title id="tls-th-t">What someone on the path can do, and what stops it</title>
+  <desc id="tls-th-d">
+    Your phone talks to the bank through networks you do not control: café Wi-Fi, your provider,
+    and others. Anyone on that path can read your data, which confidentiality (encryption) stops;
+    change it, which integrity (a tag on every message) stops; or pretend to be the bank, which
+    authentication (a certificate) stops.
+  </desc>
+  <defs>
+    <marker id="tls-th-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">your connection to the bank</text>
+  <g transform="translate(0 34)">
+
+  <!-- The path -->
+  <g font-size="18" font-weight="700" text-anchor="middle">
+    <rect x="4" y="8" width="80" height="44" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="44" y="36" style="fill: var(--viz-ink)">You</text>
+    <rect x="124" y="8" width="152" height="44" rx="8" stroke-width="2" stroke-dasharray="5 4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="200" y="36" style="fill: var(--viz-ink)">on the path</text>
+    <rect x="316" y="8" width="80" height="44" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="356" y="36" style="fill: var(--viz-ink)">Bank</text>
+  </g>
+  <line x1="84" y1="30" x2="124" y2="30" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <line x1="276" y1="30" x2="316" y2="30" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <text x="200" y="74" font-size="16" text-anchor="middle" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">café Wi-Fi, your provider, every network between</text>
+
+  {
+    rows.map((r, i) => {
+      const y = TOP + i * ROW;
+      return (
+        <g>
+          <rect x="4" y={y + 6} width="176" height="60" rx="8" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+          <text x="16" y={y + 31} font-size="18" font-weight="700" style="fill: var(--viz-ink)">{r.verb}</text>
+          <text x="16" y={y + 55} font-size="16" style="fill: var(--viz-ink)">{r.example}</text>
+          <line x1="184" y1={y + 36} x2="214" y2={y + 36} stroke-width="2" style="stroke: var(--viz-muted)" marker-end="url(#tls-th-arrow)" />
+          <rect x="220" y={y + 6} width="176" height="60" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+          <text x="232" y={y + 31} font-size="18" font-weight="700" style="fill: var(--viz-ink)">{r.property}</text>
+          <text x="232" y={y + 55} font-size="16" style="fill: var(--viz-ink)">{r.how}</text>
+        </g>
+      );
+    })
+  }
+  </g>
+</svg>

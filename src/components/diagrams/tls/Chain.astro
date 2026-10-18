@@ -1,0 +1,52 @@
+---
+// The chain of trust: the server's certificate is signed by an intermediate, the intermediate by a
+// root, and the root is already on the client's device. The client checks each signature upwards.
+---
+
+<svg viewBox="0 0 400 392" width="100%" role="img" aria-labelledby="tls-ch-t tls-ch-d">
+  <title id="tls-ch-t">A chain of trust from a server certificate to a root on your device</title>
+  <desc id="tls-ch-d">
+    Three certificates stacked. At the top, the leaf for example.com, signed by an intermediate
+    certificate authority. In the middle, the intermediate, signed by a root. At the bottom, the
+    root, which signs itself and sits inside your device's trust store, a list of about 120 roots.
+    The server sends the leaf and the intermediate; the root is already on your device. The client
+    checks each signature on the way up and trusts the leaf only if the chain ends at a root it
+    already holds.
+  </desc>
+  <defs>
+    <marker id="tls-ch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+
+  <!-- Leaf -->
+  <rect x="96" y="12" width="210" height="58" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="201" y="38" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">example.com</text>
+  <text x="201" y="60" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">leaf, 90 days</text>
+
+  <line x1="201" y1="72" x2="201" y2="118" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#tls-ch-arrow)" />
+  <text x="212" y="100" font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">signed by</text>
+
+  <!-- Intermediate -->
+  <rect x="96" y="122" width="210" height="58" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="201" y="148" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Issuing CA</text>
+  <text x="201" y="170" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">intermediate, years</text>
+
+  <line x1="201" y1="182" x2="201" y2="236" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#tls-ch-arrow)" />
+  <text x="212" y="214" font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">signed by</text>
+
+  <!-- Trust store with the root -->
+  <rect x="64" y="226" width="274" height="128" rx="10" stroke-width="2" stroke-dasharray="6 4" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <rect x="96" y="240" width="210" height="58" rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="201" y="266" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Root CA</text>
+  <text x="201" y="288" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">signs itself</text>
+  <text x="201" y="324" font-size="16" text-anchor="middle" font-weight="700" style="fill: var(--viz-ink)">your device's trust store</text>
+  <text x="201" y="344" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">about 120 roots</text>
+
+  <!-- Who provides what -->
+  <path d="M84 16 h-10 v160 h10" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <text x="66" y="88" font-size="16" text-anchor="end" style="fill: var(--viz-flow)">server</text>
+  <text x="66" y="108" font-size="16" text-anchor="end" style="fill: var(--viz-flow)">sends</text>
+
+  <text x="200" y="384" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">The client checks each signature upwards.</text>
+</svg>

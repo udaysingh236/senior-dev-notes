@@ -1,0 +1,67 @@
+---
+// Diffie-Hellman with toy numbers small enough to check by hand: p = 23, g = 5. Each side keeps a
+// secret, sends g^secret mod p, and combines what it received with its own secret. Both reach 2.
+// Real TLS uses X25519, where the numbers are 255 bits long and the reverse step is infeasible.
+const rows = [
+  { y: 92, left: 'secret a = 6', mid: '', right: 'secret b = 15', tone: 'secret' },
+  { y: 150, left: '5⁶ mod 23 = 8', mid: 'A = 8 →', right: '', tone: 'send' },
+  { y: 208, left: '', mid: '← B = 19', right: '5¹⁵ mod 23 = 19', tone: 'send' },
+  { y: 266, left: '19⁶ mod 23 = 2', mid: '', right: '8¹⁵ mod 23 = 2', tone: 'result' },
+];
+---
+
+<svg viewBox="0 0 400 406" width="100%" role="img" aria-labelledby="tls-kx-t tls-kx-d">
+  <title id="tls-kx-t">Diffie-Hellman key agreement with small numbers</title>
+  <desc id="tls-kx-d">
+    Everyone, including eavesdroppers, knows p = 23 and g = 5. The client picks a secret 6 and
+    sends 5 to the power 6 mod 23, which is 8. The bank picks a secret 15 and sends 5 to the power
+    15 mod 23, which is 19. The client computes 19 to the power 6 mod 23 and gets 2; the bank
+    computes 8 to the power 15 mod 23 and also gets 2. The wire carried 23, 5, 8 and 19, never 2,
+    and never the secrets.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">public: p = 23, g = 5</text>
+  <g transform="translate(0 34)">
+
+  <!-- Column heads -->
+  <g font-size="18" font-weight="700" text-anchor="middle">
+    <rect x="4" y="8" width="140" height="44" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="74" y="36" style="fill: var(--viz-ink)">Client</text>
+    <rect x="152" y="8" width="96" height="44" rx="8" stroke-width="2" stroke-dasharray="5 4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="200" y="36" style="fill: var(--viz-ink)">the wire</text>
+    <rect x="256" y="8" width="140" height="44" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="326" y="36" style="fill: var(--viz-ink)">Bank</text>
+  </g>
+
+  {
+    rows.map((r) => (
+      <g font-size="16" text-anchor="middle">
+        {r.left && (
+          <>
+            <rect x="4" y={r.y - 22} width="140" height="36" rx="6" stroke-width="1.5"
+              style={r.tone === 'result' ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : r.tone === 'secret' ? 'fill: var(--viz-surface); stroke: var(--viz-ink)' : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'} />
+            <text x="74" y={r.y + 1} style="fill: var(--viz-ink)">{r.left}</text>
+          </>
+        )}
+        {r.mid && <text x="200" y={r.y + 1} font-weight="700" style="fill: var(--viz-flow)">{r.mid}</text>}
+        {r.right && (
+          <>
+            <rect x="256" y={r.y - 22} width="140" height="36" rx="6" stroke-width="1.5"
+              style={r.tone === 'result' ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : r.tone === 'secret' ? 'fill: var(--viz-surface); stroke: var(--viz-ink)' : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'} />
+            <text x="326" y={r.y + 1} style="fill: var(--viz-ink)">{r.right}</text>
+          </>
+        )}
+      </g>
+    ))
+  }
+
+  <text x="74" y="122" font-size="15" text-anchor="middle" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">never sent</text>
+  <text x="326" y="122" font-size="15" text-anchor="middle" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">never sent</text>
+
+  <g font-size="17" style="fill: var(--viz-ink)">
+    <text x="4" y="318">The wire saw 23, 5, 8 and 19. Getting 2</text>
+    <text x="4" y="342">from those needs a secret. With 255-bit</text>
+    <text x="4" y="366">numbers, nobody can work one out.</text>
+  </g>
+  </g>
+</svg>

@@ -1,0 +1,60 @@
+---
+// Six certificates over two years, renewed by hand, by automation, or both compared. See model.ts.
+import SimShell from '../../sim/SimShell.astro';
+
+type Mode = 'automated' | 'manual' | 'compare';
+
+interface Props {
+  mode: Mode;
+  /** Overrides the default "What to watch for" text for this mode. */
+  watchFor?: string;
+}
+
+const COPY: Record<Mode, { title: string; description: string; watchFor: string; viewBox: string; seed?: number }> = {
+  manual: {
+    title: 'Renewing certificates by hand',
+    description:
+      'Six rows, one per certificate (api, www, admin, payments, auth, partner), on a two-year time axis that fills in as the simulation runs. A row is green while its certificate is valid, a thin amber band while a renewal is due but not yet done, and a tall red band while the certificate has expired. A dashed line marks today.',
+    watchFor:
+      'Most renewals happen quietly inside the amber band. Every so often a reminder is missed, and nothing at all happens until the certificate expires and turns red: there is no warning in between. Drag the lifetime down towards 47 days and count the renewals by hand.',
+    viewBox: '0 0 400 312',
+  },
+  automated: {
+    title: 'Automated renewal at two-thirds of the lifetime',
+    description:
+      'Six rows, one per certificate, on a two-year time axis. Green means valid, a thin amber band means the renewal is overdue, a tall red band means expired. A red cross above a row marks the day its renewal automation broke. A dashed line marks today.',
+    watchFor:
+      'Each red cross is the automation breaking. With 90-day certificates renewed at day 60 and an alert at 14 days left, a break shows up as a short amber band and is fixed long before expiry. Set the alert to 0 and every break becomes red. Then drop the lifetime to 6 days: the amber band is so short that a 3-day fix arrives too late, alert or not.',
+    viewBox: '0 0 400 312',
+  },
+  compare: {
+    title: 'Manual 200-day, automated 90-day and automated 6-day, same bad luck',
+    description:
+      'Three panels, each with six thin certificate rows on the same two-year axis, suffering identical automation breakages, CA outage days and missed reminders. Top: renewed by hand, 200-day certificates. Middle: automated, 90-day, alert at 14 days left. Bottom: automated, 6-day, alert at 2 days left. Each panel shows its days of downtime and its renewals by hand or pages to humans.',
+    watchFor:
+      'The manual panel goes red whenever a reminder is missed, with no warning. The 90-day panel absorbs the same breakages, because a third of the lifetime is a month of slack for humans to react. Six-day certificates limit the damage of a stolen key the most, but in the bottom panel every breakage that takes more than two days to fix becomes an outage.',
+    viewBox: '0 0 400 404',
+    seed: 99,
+  },
+};
+
+const { mode, watchFor } = Astro.props;
+const copy = COPY[mode];
+---
+
+<SimShell
+  name="cert-lifecycle"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox={copy.viewBox}
+  config={{ mode }}
+  seed={copy.seed}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createCertModel } from './model';
+
+  mountAll('cert-lifecycle', createCertModel);
+</script>

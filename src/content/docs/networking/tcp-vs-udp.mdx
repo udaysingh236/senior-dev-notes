@@ -201,7 +201,7 @@ Before we go inside, here are the neighbours TCP and UDP are most often confused
 | These are often confused | The difference |
 |---|---|
 | **TCP** vs **HTTP** | TCP moves bytes between two programs. HTTP is a language of requests and responses that, up to HTTP/2, travels *inside* a TCP connection. HTTP/3 travels inside QUIC instead. |
-| **TCP** vs **TLS** | TCP makes bytes arrive reliably; anyone on the path can still read and change them. TLS, layered on top, encrypts and authenticates them. "TCP is secure" is false. |
+| **TCP** vs **TLS** | TCP makes bytes arrive reliably; anyone on the path can still read and change them. [TLS](/networking/tls/), layered on top, encrypts and authenticates them. "TCP is secure" is false. |
 | **UDP** vs **QUIC** | UDP is the thin envelope. QUIC is a full transport, with reliability, streams, congestion control and built-in encryption, that happens to be carried inside UDP datagrams. |
 | **Connectionless** vs **stateless** | UDP has no handshake, but firewalls, NAT routers and Linux's connection tracking still keep state for every UDP flow, with a timer. "No connection" does not mean "nobody remembers you". |
 | **Port** vs **connection** | A port names a program on a machine. A TCP connection is named by four numbers together: both addresses and both ports. One server port can hold thousands of connections. TCP port 53 and UDP port 53 are two different sockets. |

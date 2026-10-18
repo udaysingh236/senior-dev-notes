@@ -341,7 +341,8 @@ The connection works, but anything sent on it can be read, and changed, by every
 path: the café Wi-Fi, the mobile network, any of a dozen networks in between. **TLS** (Transport
 Layer Security) fixes three things at once. It *encrypts* the data so nobody on the path can read
 it, it *protects* it so nobody can change it unnoticed, and it *authenticates* the server so you
-know you are talking to `shop.example.in` and not an impostor.
+know you are talking to `shop.example.in` and not an impostor. The [TLS](/networking/tls/) page
+builds each of those three promises up from first principles.
 
 The current version, TLS 1.3, needs one round trip to set all of this up. Its specification was
 revised in July 2026 as [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html), a minor update that

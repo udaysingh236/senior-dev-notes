@@ -1,0 +1,70 @@
+---
+// Four places TLS can end inside a system: at the edge (plain inside), re-encrypted to the
+// service, passed through untouched, or replaced by mutual TLS between services in a mesh.
+type Seg = 'tls' | 'plain' | 'mtls';
+const rows: { title: string; note: string; segs: [Seg, Seg] | null }[] = [
+  { title: 'Terminate at the edge', note: 'simple; anyone inside can read it', segs: ['tls', 'plain'] },
+  { title: 'Re-encrypt', note: 'the balancer can read and route', segs: ['tls', 'tls'] },
+  { title: 'Passthrough', note: 'balancer only forwards bytes', segs: null },
+  { title: 'Mesh with mutual TLS', note: 'encrypted, and both ends identified', segs: ['tls', 'mtls'] },
+];
+const ROW = 98;
+const STYLE: Record<Seg, { stroke: string; dash?: string; label: string; colour: string }> = {
+  tls: { stroke: 'var(--viz-ok)', label: 'TLS', colour: 'var(--viz-ok)' },
+  plain: { stroke: 'var(--viz-bad)', dash: '6 5', label: 'plain', colour: 'var(--viz-bad)' },
+  mtls: { stroke: 'var(--viz-ok)', label: 'mTLS', colour: 'var(--viz-ok)' },
+};
+---
+
+<svg viewBox={`0 0 400 ${rows.length * ROW + 4}`} width="100%" role="img" aria-labelledby="tls-tm-t tls-tm-d">
+  <title id="tls-tm-t">Where TLS ends inside a system</title>
+  <desc id="tls-tm-d">
+    Four rows, each a client, a load balancer and an app. Terminate at the edge: TLS from the client
+    to the balancer, then plain HTTP to the app, readable by anyone inside. Re-encrypt: TLS to the
+    balancer, then a new TLS connection to the app. Passthrough: one TLS connection from the client
+    straight to the app; the balancer only forwards encrypted bytes. Mesh with mutual TLS: TLS to
+    the edge, then mutual TLS between services, where both sides present certificates.
+  </desc>
+
+  {
+    rows.map((r, i) => {
+      const y = i * ROW;
+      const mid = y + 58;
+      return (
+        <g>
+          <text x="4" y={y + 22} font-size="18" font-weight="700" style="fill: var(--viz-ink)">{r.title}</text>
+          <g font-size="16" font-weight="700" text-anchor="middle">
+            <rect x="4" y={mid - 18} width="70" height="36" rx="12" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+            <text x="39" y={mid + 6} style="fill: var(--viz-ink)">client</text>
+            <rect x="160" y={mid - 18} width="82" height="36" rx="5" stroke-width="2"
+              stroke-dasharray={r.segs ? undefined : '5 4'}
+              style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+            <text x="201" y={mid + 6} style="fill: var(--viz-ink)">balancer</text>
+            <rect x="326" y={mid - 18} width="70" height="36" rx="5" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+            <text x="361" y={mid + 6} style="fill: var(--viz-ink)">app</text>
+          </g>
+          {r.segs ? (
+            r.segs.map((s, k) => {
+              const [x1, x2] = k === 0 ? [74, 160] : [242, 326];
+              const st = STYLE[s];
+              return (
+                <g>
+                  <line x1={x1} y1={mid} x2={x2} y2={mid} stroke-width={s === 'mtls' ? 5 : 3} stroke-dasharray={st.dash} style={`stroke: ${st.stroke}`} />
+                  {s === 'mtls' && <line x1={x1} y1={mid} x2={x2} y2={mid} stroke-width="1.5" style="stroke: var(--viz-surface)" />}
+                  <text x={(x1 + x2) / 2} y={mid - 10} font-size="15" font-weight="700" text-anchor="middle" style={`fill: ${st.colour}`}>{st.label}</text>
+                </g>
+              );
+            })
+          ) : (
+            <g>
+              <path d={`M74 ${mid} H160 M242 ${mid} H326`} stroke-width="3" style="stroke: var(--viz-ok)" />
+              <text x="117" y={mid - 10} font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ok)">TLS</text>
+              <text x="284" y={mid - 10} font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ok)">same TLS</text>
+            </g>
+          )}
+          <text x="4" y={mid + 36} font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">{r.note}</text>
+        </g>
+      );
+    })
+  }
+</svg>

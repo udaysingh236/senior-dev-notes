@@ -1,0 +1,45 @@
+---
+// Round trips the TLS handshake adds on top of TCP's own, for each way of starting a session, and
+// the price of each shortcut.
+const rows = [
+  { label: 'TLS 1.2, full', rtts: 2, note: 'cert checked', tone: 'warn' },
+  { label: 'TLS 1.3, full', rtts: 1, note: 'cert checked', tone: 'ok' },
+  { label: 'TLS 1.3, resumed', rtts: 1, note: 'no cert', tone: 'ok' },
+  { label: 'TLS 1.3, 0-RTT', rtts: 0, note: 'replayable', tone: 'bad' },
+];
+const X0 = 160;
+const BLOCK = 50;
+const ROW = 46;
+const TOP = 40;
+---
+
+<svg viewBox={`0 0 400 ${TOP + rows.length * ROW + 36}`} width="100%" role="img" aria-labelledby="tls-rt-t tls-rt-d">
+  <title id="tls-rt-t">Round trips the TLS handshake adds</title>
+  <desc id="tls-rt-d">
+    One block per round trip, after the TCP connection is open. A full TLS 1.2 handshake takes two,
+    with the certificate sent and checked. A full TLS 1.3 handshake takes one. A resumed TLS 1.3
+    session also takes one, but skips the certificate. TLS 1.3 with 0-RTT early data sends the
+    request in the first flight, at the price that an attacker can replay it.
+  </desc>
+
+  <text x="4" y="22" font-size="17" style="fill: var(--viz-muted)">round trips before the request can go</text>
+
+  {
+    rows.map((r, i) => {
+      const y = TOP + i * ROW;
+      return (
+        <g>
+          <text x="4" y={y + 22} font-size="17" font-weight="600" style="fill: var(--viz-ink)">{r.label}</text>
+          {Array.from({ length: r.rtts }, (_, k) => (
+            <rect x={X0 + k * (BLOCK + 4)} y={y + 4} width={BLOCK} height="26" rx="4" stroke-width="1.5"
+              style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+          ))}
+          {r.rtts === 0 && <line x1={X0} y1={y + 2} x2={X0} y2={y + 32} stroke-width="3" style="stroke: var(--viz-bad)" />}
+          <text x={X0 + r.rtts * (BLOCK + 4) + 8} y={y + 22} font-size="17" style={r.tone === 'bad' ? 'fill: var(--viz-bad)' : 'fill: var(--viz-muted)'}>{r.note}</text>
+        </g>
+      );
+    })
+  }
+
+  <text x="4" y={TOP + rows.length * ROW + 24} font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one block = one round trip, after TCP's own</text>
+</svg>
