@@ -36,7 +36,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | DNS | dns | 60 | published (2026-10-18) |
-| 2 | TCP vs UDP | tcp-vs-udp | 59 | planned |
+| 2 | TCP vs UDP | tcp-vs-udp | 59 | published (2026-10-18) |
 | 3 | TLS and encryption in transit | tls | 49, 51 | planned |
 | 4 | HTTP/1.1 → HTTP/2 → HTTP/3 | http-evolution | 58 | planned |
 | 5 | REST API design | rest-api-design | new | planned |

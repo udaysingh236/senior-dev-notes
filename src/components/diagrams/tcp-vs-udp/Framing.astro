@@ -1,0 +1,76 @@
+---
+// Message boundaries: what the application wrote, what a TCP read returns, what a UDP receive
+// returns, and the length-prefix fix that lets a TCP reader find the boundaries again.
+// The same horizontal scale on every row: msg 1 is 100 bytes wide, msg 2 is 150, msg 3 is 70.
+---
+
+<svg viewBox="0 0 400 404" width="100%" role="img" aria-labelledby="tu-fr-t tu-fr-d">
+  <title id="tu-fr-t">TCP keeps the bytes but not the boundaries; UDP keeps the boundaries</title>
+  <desc id="tu-fr-d">
+    Four rows. First, the application writes three messages of different lengths. Second, TCP:
+    the receiver's reads return the same bytes cut in different places, read 1 holding message 1
+    and half of message 2, read 2 the rest; the original boundaries are only faint dashed lines
+    nobody can see. Third, UDP: each receive returns exactly one whole datagram, matching the
+    writes. Fourth, the fix for TCP: each message is preceded by a small length field, so the
+    reader knows where each one ends.
+  </desc>
+
+  <g font-size="17" style="fill: var(--viz-ink)">
+    <text x="4" y="20">Your app writes three messages</text>
+    <text x="4" y="118">TCP: what each read returns</text>
+    <text x="4" y="226">UDP: what each receive returns</text>
+    <text x="4" y="334">TCP with a length before each one</text>
+  </g>
+
+  <!-- Writes -->
+  <g font-size="18" text-anchor="middle" stroke-width="2">
+    <rect x="4" y="30" width="116" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="62" y="56" style="fill: var(--viz-ink)">msg 1</text>
+    <rect x="124" y="30" width="166" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="207" y="56" style="fill: var(--viz-ink)">msg 2</text>
+    <rect x="294" y="30" width="86" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="337" y="56" style="fill: var(--viz-ink)">msg 3</text>
+  </g>
+
+  <!-- TCP reads: same bytes, different cuts -->
+  <g font-size="18" text-anchor="middle" stroke-width="2">
+    <rect x="4" y="128" width="200" height="40" rx="4" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="63" y="154" font-weight="700" style="fill: var(--viz-ink)">read 1</text>
+    <rect x="208" y="128" width="172" height="40" rx="4" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="250" y="154" font-weight="700" style="fill: var(--viz-ink)">read 2</text>
+  </g>
+  <!-- Where the message boundaries were: invisible to the reader -->
+  <g stroke-width="1.5" stroke-dasharray="3 4" style="stroke: var(--viz-muted)">
+    <line x1="122" y1="130" x2="122" y2="166" />
+    <line x1="292" y1="130" x2="292" y2="166" />
+  </g>
+  <text x="380" y="190" font-size="16" font-style="italic" text-anchor="end" style="fill: var(--viz-warn); font-family: var(--note-font-display)">where do the messages end?</text>
+
+  <!-- UDP: datagrams stay whole -->
+  <g font-size="18" text-anchor="middle" stroke-width="2">
+    <rect x="4" y="236" width="116" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="62" y="262" style="fill: var(--viz-ink)">msg 1</text>
+    <rect x="124" y="236" width="166" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="207" y="262" style="fill: var(--viz-ink)">msg 2</text>
+    <rect x="294" y="236" width="86" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="337" y="262" style="fill: var(--viz-ink)">msg 3</text>
+  </g>
+  <text x="380" y="298" font-size="16" font-style="italic" text-anchor="end" style="fill: var(--viz-ok); font-family: var(--note-font-display)">each whole, or not at all</text>
+
+  <!-- Framing: a length field before each message -->
+  <g font-size="18" text-anchor="middle" stroke-width="2">
+    <rect x="4" y="344" width="26" height="40" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="17" y="370" font-weight="700" style="fill: var(--viz-ink)">L</text>
+    <rect x="30" y="344" width="98" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="79" y="370" style="fill: var(--viz-ink)">msg 1</text>
+    <rect x="128" y="344" width="26" height="40" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="141" y="370" font-weight="700" style="fill: var(--viz-ink)">L</text>
+    <rect x="154" y="344" width="140" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="224" y="370" style="fill: var(--viz-ink)">msg 2</text>
+    <rect x="294" y="344" width="26" height="40" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="307" y="370" font-weight="700" style="fill: var(--viz-ink)">L</text>
+    <rect x="320" y="344" width="60" height="40" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x="350" y="370" style="fill: var(--viz-ink)">msg 3</text>
+  </g>
+  <text x="380" y="400" font-size="16" font-style="italic" text-anchor="end" style="fill: var(--viz-muted); font-family: var(--note-font-display)">L: "the next 150 bytes are one message"</text>
+</svg>

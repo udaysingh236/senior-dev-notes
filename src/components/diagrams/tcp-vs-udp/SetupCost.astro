@@ -1,0 +1,54 @@
+---
+// Round trips spent before the first byte of a request can reach the server, for each common
+// way of opening a conversation. Each block is one round trip; at 100 ms per round trip.
+const rows = [
+  { label: 'UDP', rtts: 0, note: 'send at once' },
+  { label: 'TCP', rtts: 1, note: '100 ms' },
+  { label: 'TCP + TLS 1.3', rtts: 2, note: '200 ms' },
+  { label: 'TCP + TLS 1.2', rtts: 3, note: '300 ms' },
+  { label: 'QUIC, new', rtts: 1, note: '100 ms' },
+  { label: 'QUIC, resumed', rtts: 0, note: '0-RTT' },
+];
+const X0 = 150;
+const BLOCK = 54;
+const ROW = 40;
+const TOP = 44;
+---
+
+<svg viewBox={`0 0 400 ${TOP + rows.length * ROW + 34}`} width="100%" role="img" aria-labelledby="tu-sc-t tu-sc-d">
+  <title id="tu-sc-t">Round trips before the first request byte reaches the server</title>
+  <desc id="tu-sc-d">
+    A bar per way of starting a conversation, one block per round trip, at 100 milliseconds per
+    round trip. UDP: none, the first datagram carries data. TCP: one. TCP with TLS 1.3: two. TCP
+    with TLS 1.2: three. QUIC on a new connection: one, because it sets up transport and
+    encryption together. QUIC resuming an earlier connection: none, with 0-RTT data.
+  </desc>
+
+  <text x="4" y="22" font-size="17" style="fill: var(--viz-muted)">round trips before the request can go</text>
+
+  {
+    rows.map((r, i) => {
+      const y = TOP + i * ROW;
+      return (
+        <g>
+          <text x="4" y={y + 22} font-size="18" font-weight="600" style="fill: var(--viz-ink)">{r.label}</text>
+          {Array.from({ length: r.rtts }, (_, k) => (
+            <rect
+              x={X0 + k * (BLOCK + 4)}
+              y={y + 4}
+              width={BLOCK}
+              height={26}
+              rx="4"
+              stroke-width="1.5"
+              style={r.label.startsWith('QUIC') ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'}
+            />
+          ))}
+          {r.rtts === 0 && <line x1={X0} y1={y + 2} x2={X0} y2={y + 32} stroke-width="3" style="stroke: var(--viz-ok)" />}
+          <text x={X0 + Math.max(r.rtts, 0) * (BLOCK + 4) + 8} y={y + 22} font-size="17" style="fill: var(--viz-muted)">{r.note}</text>
+        </g>
+      );
+    })
+  }
+
+  <text x="4" y={TOP + rows.length * ROW + 22} font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one block = one round trip, here 100 ms</text>
+</svg>

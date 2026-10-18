@@ -1,0 +1,1424 @@
+---
+title: TCP vs UDP
+description: What TCP and UDP really promise, what each promise costs, and how to choose between them, from handshakes, acknowledgements, windows and congestion control to head-of-line blocking, QUIC, and the duties you take on when you build on UDP.
+tagline: Reliable, ordered and patient, or fast, alone and forgetful. Know which one you asked for.
+difficulty: beginner
+track: networking
+prerequisites: [how-the-web-works, dns]
+next: [tls, http-evolution, connection-pooling, timeouts, websockets, backpressure]
+lastReviewed: 2026-10-18
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import Overview from '../../../components/diagrams/tcp-vs-udp/Overview.astro';
+import Headers from '../../../components/diagrams/tcp-vs-udp/Headers.astro';
+import Framing from '../../../components/diagrams/tcp-vs-udp/Framing.astro';
+import SlidingWindow from '../../../components/diagrams/tcp-vs-udp/SlidingWindow.astro';
+import CongestionWindow from '../../../components/diagrams/tcp-vs-udp/CongestionWindow.astro';
+import SetupCost from '../../../components/diagrams/tcp-vs-udp/SetupCost.astro';
+import NatTimeout from '../../../components/diagrams/tcp-vs-udp/NatTimeout.astro';
+import TransportSim from '../../../components/sims/tcp-vs-udp/TransportSim.astro';
+
+## A quiz app that froze on the train
+
+Imagine you have recently joined a small team in Pune that builds a live quiz app for cricket fans.
+During a match, friends join a room, answer questions about the next over together, and talk to
+each other over voice chat. The first version sends everything over one WebSocket: voice in small
+chunks every 20 milliseconds, and score updates as JSON. In the office, on good Wi-Fi, it is
+perfect.
+
+Then comes the first big match. The reviews are not kind. On mobile data, voice freezes for half a
+second, then plays back too fast to catch up, and the delay between friends slowly grows to
+several seconds. Someone senior says, "Voice should never go over TCP. Use UDP, it's faster." So a
+teammate moves everything, voice *and* score updates, to UDP.
+
+Voice gets better at once. But new bugs arrive. Some players' scores never update. Sometimes the
+"question closed" message arrives before "question opened" and the app shows a closed question that
+never opened. The end-of-match leaderboard, about 200 KB of JSON, never arrives at all; the server
+logs say "Message too long". And in the old WebSocket server, someone finally finds the cause of a
+rare crash: when the server is busy, the JSON parser fails with "Extra data", because two messages
+arrived glued together in one read.
+
+Nothing here is a network failure. Every one of these bugs is TCP or UDP doing exactly what it
+promises, and the team not knowing what that was. The foundations page,
+[What happens when you type a URL](/foundations/how-the-web-works/), showed TCP's handshake as one
+step of a page load, and the [DNS](/networking/dns/) page showed DNS using UDP first and TCP when an
+answer is too big. This page answers one question: **what do TCP and UDP actually promise, what does
+each promise cost, and how do you choose, or build on top of, the right one?**
+
+## Why this problem exists
+
+The internet moves data in **packets**: chunks of at most about 1,500 bytes on most links, each
+carrying a source address and a destination address. The layer that moves them is **IP**, the
+Internet Protocol, and it makes exactly one promise: it will try. A packet can be dropped when a
+router's queue is full, corrupted by a noisy radio link, duplicated, or overtaken by a later packet
+that took a faster path. IP does not tell anyone when any of this happens. This is called
+**best-effort delivery**.
+
+Best effort is a deliberate design. Routers stay simple and fast because they never remember
+anything about the conversations passing through them. Everything that needs memory, such as
+"which packets have arrived?" or "is the other side overwhelmed?", is pushed to the two computers at
+the ends. That leaves two jobs for the layer above IP, the **transport layer**:
+
+1. **Find the right program.** An address gets a packet to a machine, but a machine runs a web
+   server, a database and a hundred other programs. A 16-bit **port** number says which one.
+2. **Repair what IP breaks, if you want it repaired.** Put things back in order, resend what was
+   lost, drop duplicates, and send no faster than the receiver and the network can take.
+
+The two classic answers split those jobs differently. **UDP**, the User Datagram Protocol
+([RFC 768](https://www.rfc-editor.org/rfc/rfc768), 1980), does only the first job, in a
+specification three pages long. **TCP**, the Transmission Control Protocol (first standardised in
+1981; today [RFC 9293](https://www.rfc-editor.org/rfc/rfc9293), 2022), does both, and its
+specification runs to about a hundred pages. Nearly everything you use daily sits on one of them:
+HTTP/1.1 and HTTP/2, databases, SSH and email on TCP; DNS, voice and video calls, online games, VPN
+tunnels and HTTP/3 on UDP.
+
+Who gets hurt when engineers pick the wrong one, or use the right one wrongly? Users first, as
+freezes, timeouts and missing data, and almost always on the networks where they can least afford
+it: crowded Wi-Fi, mobile data on the move, a village tower. Then engineers, because these bugs
+hide in testing. Your laptop and the office network rarely lose packets, so lab tests rarely show
+them. They appear only in production, under load, on bad networks, and in the slowest one percent
+of requests.
+
+A few terms we will use throughout:
+
+- A **segment** is one TCP packet's worth of data; a **datagram** is one UDP message. Both travel
+  inside IP packets.
+- A **socket** is the handle your program uses to send and receive, bound to an address and port.
+- The **round-trip time** (RTT) is how long a packet takes to reach the other side and an answer to
+  come back. From India to a server in Mumbai it may be 10 ms; to Frankfurt about 150 ms.
+- The **loss rate** is the share of packets that never arrive.
+- The **MTU** (maximum transmission unit) is the largest packet a link can carry, 1,500 bytes on
+  Ethernet and most of the internet.
+
+## The obvious picture, and why it breaks
+
+The picture most of us start with fits in one line: **TCP is reliable but slow; UDP is fast but
+unreliable.** It appears in every comparison table, and it is not exactly wrong. It is
+dangerously incomplete, and three beliefs that grow from it are behind every bug in our story.
+
+**Belief one: a send on one side is a receive on the other.** Here is a server that receives
+JSON messages over TCP and parses each read as one message. It is the code most people write
+first. The client sends five small score updates and one large leaderboard; the server happens to be
+busy for 50 ms before it starts reading:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="naive_framing.py"
+# runnable version: examples/tcp-vs-udp/python/naive_framing.py
+def server(listener: socket.socket, done: threading.Event) -> None:
+    conn, _ = listener.accept()
+    with conn:
+        time.sleep(0.05)  # the server was busy for 50 ms; bytes piled up in the kernel buffer
+        reads = 0
+        while True:
+            chunk = conn.recv(65536)  # "one recv = one message" -- the naive assumption
+            if not chunk:
+                break
+            reads += 1
+            start = chunk[:24].decode(errors="replace")
+            try:
+                message = json.loads(chunk)
+                print(f"  recv #{reads}: {len(chunk):>6} bytes, starts {start!r} -> parsed {message['type']}")
+            except json.JSONDecodeError as err:
+                print(f"  recv #{reads}: {len(chunk):>6} bytes, starts {start!r} -> {err.msg}")
+    done.set()
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="naive-framing.mjs"
+// runnable version: examples/tcp-vs-udp/js/naive-framing.mjs
+const server = net.createServer((socket) => {
+  socket.pause(); // the server was busy for 50 ms; bytes piled up in the kernel buffer
+  setTimeout(() => socket.resume(), 50);
+  socket.on('data', (chunk) => {
+    // "one 'data' event = one message" -- the naive assumption
+    reads++;
+    const start = `'${chunk.subarray(0, 24)}'`;
+    try {
+      const message = JSON.parse(chunk);
+      console.log(`  data #${reads}: ${String(chunk.length).padStart(6)} bytes, starts ${start} -> parsed ${message.type}`);
+    } catch (err) {
+      console.log(`  data #${reads}: ${String(chunk.length).padStart(6)} bytes, starts ${start} -> ${err.message.split(/ at position|, "/)[0]}`);
+    }
+  });
+```
+  </TabItem>
+</Tabs>
+
+```text title="naive_framing.py output (Windows 11 and Linux gave the same)"
+  recv #1:  65536 bytes, starts '{"type": "score", "playe' -> Extra data
+  recv #2:  65536 bytes, starts '{"player": "p1824", "poi' -> Extra data
+  recv #3:  65536 bytes, starts ': "p3595", "points": 359' -> Expecting value
+  recv #4:  23440 bytes, starts ', "points": 5366}, {"pla' -> Expecting value
+
+client: 6 send() calls of [47, 47, 47, 47, 47, 219813] bytes
+server: the reads above. Message boundaries did not survive the trip.
+```
+
+Six messages went in, four reads came out, and not one parsed. The first read holds all five small
+messages *and* the start of the leaderboard; the other three cut the leaderboard wherever they
+happened to. TCP delivered every byte, in order, exactly as promised. What it never promised was to
+keep your messages apart.
+
+**Belief two: UDP is TCP minus the overhead.** If UDP is "TCP but faster", sending data with it
+should be the same, only quicker. Our second demo sends 5,000 numbered datagrams of 1,000 bytes from
+one process to another *on the same machine*, with no network involved at all. The receiver does
+0.2 ms of work per datagram, so it can handle 5,000 a second:
+
+```text title="udp_loss.py output (Windows 11)"
+full speed:
+sender:   5000 datagrams sent in 127 ms, 0 send errors
+receiver: 645 received, 4355 lost (87%), 561 gaps, 0 out of order
+
+paced to 3,000 per second:
+sender:   5000 datagrams sent in 1667 ms, 0 send errors
+receiver: 5000 received, 0 lost (0%), 0 gaps, 0 out of order
+```
+
+At full speed, 87% of the datagrams vanished, and neither side got a single error. The receiver's
+socket buffer filled up and the operating system dropped the rest, as UDP allows it to. On Linux
+we saw 93–96% lost. Only when the sender slowed itself down did everything arrive. TCP would have
+slowed the sender for us; UDP never slows anyone down. That is not overhead removed. It is a job
+handed to you.
+
+**Belief three: "reliable" means "delivered".** When `send()` returns on a TCP socket, your bytes
+have been copied into a buffer in your own operating system's kernel. Nothing more. They may not
+have left the machine yet. If the other side's process crashes after its kernel acknowledged the
+bytes but before the application read them, they are gone, and your side was already told
+"success". TCP's promise is narrower than people think: **every byte arrives, in order, or the
+connection reports an error**, between two kernels. Whether the other *application* acted on your
+request is something only an application-level reply can tell you, which is why payment APIs use
+their own acknowledgements and idempotency keys, a later page on this site, on top of TCP.
+
+Before we go inside, here are the neighbours TCP and UDP are most often confused with.
+
+| These are often confused | The difference |
+|---|---|
+| **TCP** vs **HTTP** | TCP moves bytes between two programs. HTTP is a language of requests and responses that, up to HTTP/2, travels *inside* a TCP connection. HTTP/3 travels inside QUIC instead. |
+| **TCP** vs **TLS** | TCP makes bytes arrive reliably; anyone on the path can still read and change them. TLS, layered on top, encrypts and authenticates them. "TCP is secure" is false. |
+| **UDP** vs **QUIC** | UDP is the thin envelope. QUIC is a full transport, with reliability, streams, congestion control and built-in encryption, that happens to be carried inside UDP datagrams. |
+| **Connectionless** vs **stateless** | UDP has no handshake, but firewalls, NAT routers and Linux's connection tracking still keep state for every UDP flow, with a timer. "No connection" does not mean "nobody remembers you". |
+| **Port** vs **connection** | A port names a program on a machine. A TCP connection is named by four numbers together: both addresses and both ports. One server port can hold thousands of connections. TCP port 53 and UDP port 53 are two different sockets. |
+| **Unreliable** vs **bad** | UDP is not a worse TCP. It is a smaller promise, and for some data, a voice frame due in 20 ms for example, a smaller promise is exactly the right one. |
+
+## The core idea
+
+Think of the post office. TCP is like a courier service that delivers a long book page by page,
+the way a careful office does it. Before starting, the courier phones you to agree that you are
+ready. Every page gets a number. You sign for what arrives, and anything unsigned for is sent again.
+Pages are handed to you strictly in order: if page 7 is missing, page 8 waits on the counter,
+even though it is right there, until page 7 turns up. And if the roads are jammed or your desk is
+full, the courier slows down.
+
+UDP is a stack of postcards. No phone call first, no numbers unless you write them, no receipts.
+Each postcard is read on its own the moment it arrives. Most arrive. Some arrive in a different
+order from the one you posted them in. Some never arrive, and the post office will not tell you.
+
+The analogy breaks in three places, and each one matters.
+
+- **TCP does not keep pages.** It delivers a continuous stream of characters with no page breaks
+  at all. Where one of your messages ends is invisible to it, which was belief one.
+- **Postcards have no manners.** The courier slows down for traffic; a person posting postcards
+  can post ten thousand a second and jam the sorting office for everyone else. Slowing down is
+  the sender's job with UDP, which was belief two.
+- **The post office does remember postcards, for a while.** Home routers and firewalls note every
+  UDP conversation and forget it after a short silence, sometimes as little as 30 seconds.
+
+Put precisely: **UDP adds ports and a checksum to IP and nothing else. Each datagram is delivered
+whole, at most once, or not at all, with no order and no pacing. TCP builds a connection with a
+handshake and turns IP's packets into a reliable, ordered stream of bytes, using sequence numbers,
+acknowledgements and retransmissions, while flow control protects the receiver and congestion
+control protects the network. TCP's guarantees are paid for in round trips before data moves and
+in waiting whenever something is lost; UDP's freedom is paid for by doing yourself whatever you
+need of the rest.**
+
+The diagram puts the two side by side. Look at what travels between the applications in each
+half.
+
+<Figure caption="TCP sets up a connection and carries one ordered stream, resending what is lost. UDP sends separate datagrams with no setup; they can be lost or overtake each other, and nobody resends them.">
+  <Overview />
+</Figure>
+
+In the top half, the numbers inside the pipe are in order and the ACKs coming back are how the
+sender knows what to resend. In the bottom half there is nothing coming back at all: datagram 5 is
+gone for good, and datagram 4 arriving before 3 is the receiving application's problem.
+
+## How it works, piece by piece
+
+We will build TCP up piece by piece and keep UDP alongside for contrast: what the two share, what
+UDP adds, how a TCP connection opens and closes, how lost data is repaired, why a stream has no
+message boundaries, how TCP avoids drowning the receiver and the network, what all that order
+costs when packets are lost, how QUIC rebuilds the same ideas on top of UDP, and what you owe the
+network if you build on UDP yourself.
+
+Where we measured something, we say so. The demos in "Build it yourself" ran on Windows 11 and on
+Linux (Ubuntu in WSL 2) in October 2026, and the internet measurements from a network in India.
+
+### What both share: IP, ports and checksums
+
+Both protocols sit inside IP packets and start with the same two fields, a source port and a
+destination port. That is where the similarity ends: UDP's whole header is 8 bytes, TCP's is at
+least 20.
+
+<Figure caption="UDP's header is two ports, a length and a checksum: 8 bytes. TCP starts with the same ports, then adds the sequence and acknowledgment numbers, flags and a window, where all of its reliability and pacing lives.">
+  <Headers />
+</Figure>
+
+The tinted fields are TCP's machinery, and the rest of this page is about what they do. A few
+things about the shared parts are worth knowing:
+
+- **Ports are 16 bits**, 0 to 65,535. Servers listen on well-known ports (443 for HTTPS, 53 for DNS,
+  5432 for PostgreSQL). Clients get a temporary **ephemeral port** from a range the operating system
+  chooses: 32,768 to 60,999 on Linux by default as of October 2026
+  ([kernel docs](https://docs.kernel.org/networking/ip-sysctl.html)), which is 28,232 ports. Keep
+  that number in mind; it comes back in the war stories.
+- **A conversation is named by five things**: the protocol, both addresses and both ports. This is
+  why one laptop can hold hundreds of connections to the same server: each uses a different
+  ephemeral port.
+- **The checksum is weak.** It is a 16-bit sum that catches most random corruption, and a packet
+  that fails it is dropped silently. It is mandatory for TCP, and for UDP over IPv6. It does not
+  protect against anyone deliberately changing your data; that is what TLS is for.
+
+### UDP: a thin layer over IP
+
+What UDP gives you is short enough to list in full:
+
+- **Ports**, so the datagram reaches the right program.
+- **A checksum**, so a corrupted datagram is dropped rather than delivered.
+- **Message boundaries.** One send is one receive. A datagram arrives whole or not at all, never
+  merged with another and never split.
+
+And what it does not give you is everything else: no handshake, no acknowledgement, no
+retransmission, no ordering, no duplicate removal, no flow control and no congestion control. A
+`sendto()` call returns as soon as the datagram is handed to the kernel. You learn nothing about
+what happens next.
+
+Size matters more than people expect. A datagram's payload can be at most 65,507 bytes over IPv4,
+and in practice must be much smaller. When a datagram is bigger than the path's MTU, IP cuts it into
+**fragments**, and if any one fragment is lost the whole datagram is lost; many firewalls drop
+fragments on sight. So real protocols stay small:
+
+- On Ethernet the largest unfragmented UDP payload is 1,500 − 20 (IPv4 header) − 8 (UDP header) =
+  **1,472 bytes**.
+- The UDP usage guidelines, [RFC 8085](https://www.rfc-editor.org/rfc/rfc8085), say to stay under
+  the path MTU and, when it is unknown, to fall back to 576 bytes for IPv4 or 1,280 for IPv6.
+- DNS defaults to answers of at most **1,232 bytes**, and QUIC requires its first datagrams to be
+  at least **1,200 bytes** and assumes paths carry at least that.
+
+That explains our story's leaderboard. A 219,813-byte JSON document cannot be one datagram at all.
+We tried: sending 65,507 bytes worked, and 65,508 failed at once with "Message too long" on Linux
+(`EMSGSIZE`) and error 10040 on Windows. Anything bigger has to be split into numbered pieces by
+your own code, and then you need to notice and resend lost pieces, which is the start of rebuilding
+TCP.
+
+Why use something that promises so little? Because sometimes the promise you need is exactly
+that small, and anything more gets in the way:
+
+- **Small, independent questions**, where a handshake would double the cost. A DNS question and its
+  answer each fit in one datagram; if the answer does not come, the client asks again.
+- **Real-time data, where late is the same as lost.** A voice frame for the 20 ms that already
+  played, or a game's position update that a newer one has replaced, is worth nothing late.
+- **One sender, many receivers.** Broadcast and multicast on a local network, such as a printer
+  announcing itself, exist only for UDP.
+- **Building a new transport.** QUIC and WireGuard are built on UDP precisely because it adds
+  almost nothing and gets through almost every network.
+
+### TCP connections: opening and closing
+
+TCP is **connection-oriented**: before any data moves, both sides agree to talk and agree on where
+their byte numbering starts. The foundations page drew the three-way handshake; here is the whole
+life of a connection, including the parts that cause production incidents.
+
+<StepThrough
+  title="The life of a TCP connection"
+  actors={[
+    { id: 'client', label: 'Client', kind: 'client' },
+    { id: 'server', label: 'Server', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'client', to: 'server', label: 'SYN seq=x', text: 'The client picks a random starting number x for the bytes it will send, and asks to connect. The starting number is random so that an attacker off the path cannot guess it and inject fake data.' },
+    { from: 'server', to: 'client', label: 'SYN-ACK', text: 'The server agrees, acknowledges x + 1, and picks its own random starting number y. It now remembers a half-open connection, which is what a SYN flood attack tries to exhaust.', dashed: true },
+    { from: 'client', to: 'server', label: 'ACK + request', text: 'The client acknowledges y + 1, and its first data can travel in the same moment. Setting up costs exactly one round trip before the server sees a byte of the request.' },
+    { from: 'server', to: 'client', label: 'response', text: 'Data now flows both ways, each side acknowledging the other by byte number. A connection is two independent streams: either side can send at any time.', tone: 'ok', dashed: true },
+    { from: 'client', to: 'server', label: 'FIN', text: 'The side that finishes first sends FIN: "I will send nothing more." It can still receive. This is called a half-close.' },
+    { from: 'server', to: 'client', label: 'ACK', text: 'The server acknowledges the FIN. Its kernel now waits for its own application to close the socket. Until then the socket sits in CLOSE_WAIT.', dashed: true },
+    { from: 'server', to: 'client', label: 'FIN', text: 'When the server application closes its socket, the server sends its own FIN. If the application never closes it, the socket stays in CLOSE_WAIT for ever: a leak in your code, not in the network.', dashed: true },
+    { from: 'client', to: 'server', label: 'ACK', text: 'The client acknowledges. As far as the server is concerned, the connection is gone.' },
+    { from: 'client', to: 'client', label: 'TIME_WAIT 60 s', text: 'The side that closed first waits before its address and port pair can be reused, so that a late packet from this connection is never mistaken for data in a new one. The standard says twice the maximum packet lifetime; Linux waits 60 seconds.', tone: 'warn' },
+  ]}
+  summary="One round trip to open, four messages to close, and a quiet minute of TIME_WAIT afterwards. The opening costs latency on every new connection; the closing creates the two states, CLOSE_WAIT and TIME_WAIT, that you will meet in netstat during incidents."
+/>
+
+Three practical consequences come straight out of this sequence:
+
+- **New connections cost a round trip, before any encryption.** At 150 ms to Frankfurt, that is
+  150 ms of nothing for every new connection. With TLS 1.3 on top, the first request byte reaches
+  the server after two round trips. This is why every serious client reuses connections, the
+  subject of the Connection pooling page.
+- **The side that closes first carries TIME_WAIT.** A client that opens and closes thousands of
+  short connections a second to one server piles up thousands of sockets in TIME_WAIT, each holding
+  an ephemeral port for 60 seconds. At 28,232 ports per destination, that is about 470 new
+  connections a second before the client runs out.
+- **An abrupt end is a reset.** If one side sends **RST** instead of FIN, because the process died
+  or a port is closed, the other side's next read or write fails with "connection reset by peer".
+
+### Reliability: numbers, acknowledgements and retransmission
+
+TCP numbers every **byte**, not every packet. Each segment carries the number of its first byte,
+and each acknowledgement carries the number of the next byte the receiver expects: "ACK 5001"
+means "I have everything up to byte 5,000; send 5,001 next". That single number lets the sender
+know exactly what is safe and what may need sending again.
+
+There are two ways a sender discovers a loss. The fast one needs no timer at all: watch the
+acknowledgements.
+
+<StepThrough
+  title="One lost segment, repaired"
+  actors={[
+    { id: 'sender', label: 'Sender', kind: 'client' },
+    { id: 'receiver', label: 'Receiver', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'sender', to: 'receiver', label: 'segment 1', text: 'Bytes 1 to 1,000 arrive.', tone: 'ok' },
+    { from: 'receiver', to: 'sender', label: 'ACK 1001', text: 'The ACK names the next byte the receiver wants. Everything before byte 1,001 is safe and can be forgotten by the sender.', dashed: true, tone: 'ok' },
+    { from: 'sender', to: 'receiver', label: 'segment 2', text: 'Bytes 1,001 to 2,000 are dropped by a full router queue somewhere on the path. Nobody is told.', tone: 'bad' },
+    { from: 'sender', to: 'receiver', label: 'segments 3–5', text: 'The sender does not stop and wait; its window lets it keep sending. These three arrive, but the receiver cannot give them to the application, because there is a gap before them.' },
+    { from: 'receiver', to: 'sender', label: 'ACK 1001 ×3', text: 'Each arrival triggers the same ACK again, a duplicate ACK. With SACK (selective acknowledgement), each one also says "but I do have 2,001 to 5,000".', tone: 'warn', dashed: true },
+    { from: 'sender', to: 'receiver', label: 'resend 2', text: 'Three duplicate ACKs mean "lost", not "a little late". The sender resends segment 2 at once (fast retransmit) and lowers its sending rate, because a loss usually means a queue somewhere is full.', tone: 'warn' },
+    { from: 'receiver', to: 'receiver', label: 'deliver 2–5', text: 'The gap is filled. Segments 2 to 5 go to the application in one burst: three of them had arrived long ago and waited.', tone: 'ok' },
+    { from: 'receiver', to: 'sender', label: 'ACK 5001', text: 'One ACK now covers everything up to byte 5,000.', tone: 'ok', dashed: true },
+  ]}
+  summary="A loss in the middle of a busy stream is repaired in about one round trip, using duplicate ACKs as the signal. When too few later segments arrive to produce three duplicates, such as at the end of a transfer or on a quiet connection, only the much slower timeout is left."
+/>
+
+The slow way is the **retransmission timeout** (RTO). For every segment the sender starts a timer;
+if no acknowledgement arrives in time, it resends. How long to wait is the hard part: too short and
+you resend data that was only late, too long and you sit idle. [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298)
+keeps a smoothed average of measured round trips (SRTT) and of how much they vary (RTTVAR), and sets
+
+> RTO = SRTT + 4 × RTTVAR
+
+with three rules around it: before any measurement, start at **1 second**; never go below a
+minimum, which the RFC sets at 1 second and Linux sets at **200 ms**; and **double the timeout after
+each expiry**, so a dead path is not flooded with retries. Retransmitted segments are never used to
+measure the round trip, because you cannot tell which copy the ACK was for (Karn's rule).
+
+**A worked example.** A connection with a steady 100 ms round trip has an RTTVAR close to zero, so
+on Linux its RTO is about 100 + 200 = **300 ms**. A segment at the end of a burst is lost, with
+nothing behind it to trigger duplicate ACKs. The sender waits 300 ms and resends. If that copy is
+lost too, it waits 600 ms, then 1.2 s. One unlucky segment has now cost over two seconds. And the
+handshake is worse: a lost SYN has no measurement yet, so the client waits the initial **1 second**
+before trying again.
+
+That last fact explains a pattern every on-call engineer eventually sees: a latency graph where the
+slowest one percent of requests cluster at almost exactly 1 second or 3 seconds above normal. Those
+are lost SYNs, retried at 1 s and then 1 + 2 s. Linux tries 6 times before reporting that a connect
+failed, about 131 seconds in total, and keeps retrying data on an established connection for at
+least 924.6 seconds, over 15 minutes, before declaring it dead
+([kernel docs](https://docs.kernel.org/networking/ip-sysctl.html), `tcp_syn_retries` and
+`tcp_retries2`). That is why your application needs its own timeouts, the subject of the Timeouts
+page: TCP's patience is measured in minutes.
+
+### A byte stream, not messages
+
+Our first naive demo showed the consequence; here is the reason. TCP's specification says plainly
+that there is no correlation between how the application writes and how the segments are cut
+([RFC 9293 §3.7](https://www.rfc-editor.org/rfc/rfc9293)). The sender's kernel may combine several
+small writes into one segment, and must split a large write into segments of about 1,460 bytes.
+The receiver's kernel puts all arriving bytes into one buffer, and a read returns whatever is there,
+up to the size you asked for.
+
+<Figure caption="The application writes three messages. TCP delivers the same bytes in whatever chunks happen to be ready, so a read can hold one and a half messages. UDP keeps each datagram whole. With a length field before each message, a TCP reader can find the boundaries again.">
+  <Framing />
+</Figure>
+
+So every protocol on top of TCP must mark where its messages end. There are three common ways,
+and you have used all of them without noticing:
+
+- **A length prefix.** Write the length first, then the bytes. DNS over TCP uses a 2-byte length;
+  HTTP/2 starts every frame with a 9-byte header holding a 24-bit length
+  ([RFC 9113](https://www.rfc-editor.org/rfc/rfc9113)); gRPC puts a 1-byte flag and a 4-byte length
+  before every message. This is the most robust choice and the one we build below.
+- **A delimiter.** End each message with a byte that cannot appear inside it. Newline-delimited JSON
+  works this way, and HTTP/1.1 ends its headers with an empty line.
+- **A higher-level protocol that does it for you.** WebSocket, HTTP and gRPC libraries frame
+  messages so your code never sees the raw stream. Our quiz team's WebSocket server was fine; the
+  bug was in a raw TCP side channel someone had added later.
+
+### Flow control: not drowning the receiver
+
+A fast sender can easily outrun a slow receiver; our UDP demo lost 87% of its datagrams exactly
+that way. TCP prevents this with the **receive window**: every ACK carries a number saying how many
+more bytes the receiver has room for. The sender may have at most that many bytes sent but not yet
+acknowledged. If the receiver's application stops reading, the window shrinks to zero and the
+sender stops, without losing a byte.
+
+<Figure caption="The window is the number of bytes that may be sent but not yet acknowledged. Every ACK moves its left edge forward, which lets the sender send more at the right edge: the window slides.">
+  <SlidingWindow />
+</Figure>
+
+This is TCP's built-in **backpressure**: a slow consumer automatically slows the producer, all the
+way back through the network. It is also a source of a classic limit. The window field is 16 bits,
+so without extensions the most a sender can have in flight is 65,535 bytes. That caps throughput at
+one window per round trip:
+
+**A worked example.** To fill a 100 Mbit/s link to a server 100 ms away, you need 100,000,000 ÷ 8 ×
+0.1 = **1.25 MB** in flight at all times. This amount, bandwidth × round trip, is called the
+**bandwidth-delay product**. A 64 KB window allows only 65,535 × 8 ÷ 0.1 ≈ **5.2 Mbit/s**, however
+fast the link is. The **window scale** option ([RFC 7323](https://www.rfc-editor.org/rfc/rfc7323))
+multiplies the field, up to about 1 GB, and modern kernels grow buffers automatically. When a bulk
+transfer between two distant data centres is mysteriously slow on a fast link, a small window or
+buffer somewhere is the first suspect.
+
+### Congestion control: not drowning the network
+
+The receive window protects the receiver. Nothing in it protects the routers in between, and that
+nearly killed the early internet. In October 1986, throughput between Lawrence Berkeley Laboratory
+and UC Berkeley, 400 yards apart, fell from 32 kbit/s to 40 bit/s, about 800 times slower. The
+network was full of retransmissions of packets that were being dropped because the network was full
+of retransmissions. Van Jacobson and Michael Karels' fix, published in 1988
+([Congestion Avoidance and Control](https://ee.lbl.gov/papers/congavoid.pdf)), is still the shape
+of every TCP today.
+
+The sender keeps a second limit, the **congestion window** (cwnd), its own estimate of how much the
+network can take. It may have in flight only the smaller of the receive window and the congestion
+window, so its sending rate is roughly min(cwnd, receive window) ÷ RTT.
+
+- **Slow start.** A new connection does not know the path, so it starts small, 10 segments, about
+  14.6 KB ([RFC 6928](https://www.rfc-editor.org/rfc/rfc6928)), and doubles the window every round
+  trip while everything is acknowledged. "Slow" is a historical joke: the growth is exponential.
+- **Loss means congestion.** When a loss is detected, the sender assumes a queue overflowed and cuts
+  its window. Classic TCP (Reno) halves it.
+- **Then it probes again.** It grows the window slowly until the next loss, giving the famous
+  sawtooth.
+
+<Figure caption="Slow start doubles the window every round trip until the first loss. CUBIC cuts the window to 70%, climbs back quickly, slows down near the old peak where the last loss happened, then speeds up again to probe for more. Numbers are illustrative.">
+  <CongestionWindow />
+</Figure>
+
+The algorithm in the drawing is **CUBIC** ([RFC 9438](https://www.rfc-editor.org/rfc/rfc9438), 2023),
+which its RFC notes is the default in the Linux, Windows and Apple TCP stacks. It cuts the window to
+70% instead of 50% and grows it along a cubic curve shaped around the window size where the last
+loss happened. Google's **BBR** takes a different approach entirely: instead of treating loss as the
+signal, it measures the bottleneck's bandwidth and the minimum round trip and paces packets to match
+([ACM Queue, 2016](https://queue.acm.org/detail.cfm?id=3022184)); its third version is an IETF draft
+as of October 2026.
+
+Two consequences matter in everyday work. A **new connection is slow at first**: a 100 KB response
+takes several round trips to arrive in full on a fresh connection, and one on a warm connection
+whose window has already grown does not. And by default Linux **restarts slow start after an idle
+period** (`tcp_slow_start_after_idle`), so a connection that has been quiet for a while may start
+slow again.
+
+UDP has none of this. That is fine for a DNS question, and a disaster for a program that sends
+megabytes as fast as the socket will take them. RFC 8085 is blunt: applications that send more than
+a little over UDP must control their rate in a way comparable to TCP, and those that cannot should
+have a circuit breaker that stops them.
+
+### Head-of-line blocking: the price of order
+
+Here is where the two protocols really part ways. TCP's promise of order means that when one
+segment is lost, **every byte behind it waits** until the retransmission arrives, even though
+those bytes are already sitting in the receiver's memory. This is **head-of-line blocking**, named
+after a queue where the person at the front holds up everyone behind.
+
+For a file download this hardly matters; you want the whole file anyway. For our quiz app's voice
+chat it is the whole problem. The simulation sends 50 small messages a second, one every 20 ms, like
+voice frames, over a link with a 100 ms round trip and 4% loss. Each bar is one message's delay
+from sending to reaching the application; the dashed line is 150 ms, roughly the most delay a
+conversation can take before it starts to feel awkward
+([ITU-T G.114](https://www.itu.int/rec/T-REC-G.114)).
+
+<TransportSim mode="tcp" />
+
+Every loss in TCP looks the same: one tall amber bar for the lost message, then a staircase of
+shorter amber bars descending from it, all messages that had already arrived and were waiting
+behind the gap. Then a burst: they reach the app at the same moment. That is exactly the "freeze,
+then fast-forward" the quiz app's users heard.
+
+**A worked example with the simulation's numbers.** Message *n* is lost at time 0. The next three
+messages are sent at 20, 40 and 60 ms, and each arrives 50 ms later. The duplicate ACK triggered by
+the third one gets back to the sender at 60 + 100 = **160 ms**; the resend leaves then and arrives
+at **210 ms**. Meanwhile messages *n*+1 to *n*+7 arrived between 70 and 190 ms, and all of them were
+held until 210 ms too. So *n* reaches the application 210 ms after it was sent, *n*+1 after 190 ms,
+*n*+2 after 170 ms and *n*+3 after exactly 150 ms: one loss pushed three messages past the
+deadline and dragged four more towards it. At 4% loss and 50 messages a second, the simulation's
+model ends up with about **14%** of messages late, more than three times the loss rate, because now
+and then a resend is lost too and only the slower timeout recovers it.
+
+Now the same traffic, the same losses, over UDP:
+
+<TransportSim mode="udp" />
+
+No bar is ever tall: every message that arrives goes to the application at once, 50 ms after it was
+sent. The price is visible too: about 4% of messages never arrive. For voice, that is the
+better trade by far. A good voice codec hides a missing 20 ms frame by stretching its neighbours, and
+the listener barely notices. Nobody can hide a 200 ms freeze.
+
+Raise the round-trip time to 200 ms in the TCP simulation and watch the staircases grow: the
+repair takes longer, so more messages pile up behind each loss. This is why TCP feels worst for
+real-time use exactly where users are far away and on lossy networks.
+
+### QUIC: TCP's ideas, rebuilt on top of UDP
+
+If TCP's ideas are good and its head-of-line blocking hurts, why not fix TCP? Because TCP lives in
+operating system kernels and inside millions of routers, firewalls and load balancers that inspect
+its headers. A new TCP feature takes years to reach phones and is often broken by some middlebox on
+the path that does not recognise it. TCP Fast Open, which lets data ride on the SYN
+([RFC 7413](https://www.rfc-editor.org/rfc/rfc7413), 2014), is the cautionary tale: middleboxes that
+drop SYNs carrying data kept it from wide use in browsers. Engineers call this **ossification**: the
+network has frozen around what it already knows.
+
+**QUIC** ([RFC 9000](https://www.rfc-editor.org/rfc/rfc9000), 2021) avoids all of that by running
+in the application's own process, on top of UDP, which every network already passes. Inside, it
+rebuilds TCP's ideas and changes several:
+
+- **Streams.** One QUIC connection carries many independent streams. A loss holds up only the
+  stream it belongs to, so a lost packet of one image does not stall the others.
+- **Encryption built in.** QUIC always uses TLS 1.3 and sets up transport and encryption in one
+  round trip instead of two; a client returning to a server it knows can send data in its very first
+  packet (**0-RTT**).
+- **Connection IDs.** A connection is not named by addresses and ports, so it survives your phone
+  moving from Wi-Fi to mobile data.
+- **Better loss detection.** Packet numbers are never reused, so the sender always knows which copy
+  an ACK refers to ([RFC 9002](https://www.rfc-editor.org/rfc/rfc9002)). It still uses TCP's ideas:
+  a packet counts as lost when three later packets are acknowledged.
+- **Nearly everything encrypted**, headers included, so middleboxes cannot learn to depend on it
+  and ossify it.
+
+<Figure caption="Round trips spent before the first byte of a request can reach the server, at 100 ms each. QUIC sets up transport and encryption together, and a returning client can send data in its first packet.">
+  <SetupCost />
+</Figure>
+
+HTTP/3 is HTTP over QUIC, and as of 2025 it carried about 21% of the requests Cloudflare saw
+([Cloudflare Radar Year in Review](https://radar.cloudflare.com/year-in-review/2025)). The costs
+are real too: QUIC runs in user space and encrypts every packet, so it usually needs more CPU per
+byte than a kernel TCP stack with decades of hardware offloads behind it, and a few corporate
+networks block UDP entirely, which is why every HTTP/3 client falls back to TCP.
+
+QUIC is not magic for a single stream, though. If all your data is one ordered stream, a loss still
+holds up everything behind it, exactly as in TCP. The win comes from splitting independent data
+across streams. We will see that side by side in the comparison below.
+
+### If you build on UDP yourself
+
+Sometimes you will want UDP directly: a game server, a metrics pipe, a custom protocol between
+your own services. RFC 8085, the IETF's guidelines for UDP applications, is a good checklist of
+what you take on:
+
+- **Stay small.** Keep datagrams within the path MTU, about 1,200 bytes if you cannot know it.
+- **Control your rate.** Pace your sends, back off when you see loss, and stop entirely if things
+  look badly wrong. Our demo needed only to slow down to stop losing everything.
+- **Add the reliability you need, and only that.** Sequence numbers to detect loss and reordering,
+  acknowledgements and timeouts if something must arrive. "Build it yourself" below does this.
+- **Expect duplicates and reordering.** Design messages so applying one twice does no harm, or
+  remember what you have seen.
+- **Keep NATs and firewalls awake.** Home routers and mobile networks translate addresses (**NAT**,
+  network address translation) and must remember each UDP flow to let replies back in. They
+  forget after a silence.
+- **Do not amplify attacks.** UDP has no handshake, so anyone can send a request with a forged
+  source address. If your reply is much bigger than the request, you become a weapon pointed at the
+  forged address. QUIC's rule: before an address is verified, send at most three times the bytes
+  you received from it.
+
+The NAT point deserves a picture, because it surprises everyone who thought UDP had no state.
+
+<Figure caption="A NAT keeps a row for each UDP flow and deletes it after a silence. With a small keep-alive every 25 seconds the server's reply gets back in; after 30 seconds of silence the row is gone and the reply is dropped without a word.">
+  <NatTimeout />
+</Figure>
+
+How long NATs remember varies wildly. The standard says at least 2 minutes and recommends 5
+([RFC 4787](https://www.rfc-editor.org/rfc/rfc4787)); QUIC's authors found that in practice
+sending something every 30 seconds is necessary to keep most middleboxes from forgetting
+([RFC 9000 §10.1.2](https://www.rfc-editor.org/rfc/rfc9000)). RFC 8085 asks you not to send
+keep-alives more often than every 15 seconds. Somewhere between 15 and 30 seconds is the usual
+compromise, and it is exactly why voice and game apps send a tiny packet even in silence.
+
+## Choosing between them
+
+Here is everything side by side. Read it as "what you get without writing code", because you can
+always build more on top of UDP, at a cost.
+
+| | TCP | UDP | QUIC (over UDP) |
+|---|---|---|---|
+| Setup before data | 1 round trip, 2 with TLS 1.3 | none | 1 round trip with encryption, 0 when resuming |
+| Lost data | resent | gone | resent |
+| Order | one ordered stream | none | ordered within each stream |
+| Message boundaries | none: a byte stream | kept: one datagram per message | per stream, a byte stream |
+| A loss delays | everything behind it | nothing | only its own stream |
+| Flow and congestion control | yes, in the kernel | none: your job | yes, in the application |
+| Encryption | add TLS | add DTLS or your own | always on |
+| Through firewalls and NATs | almost always | usually; flows forgotten after silence | usually; falls back to TCP |
+| Typical uses | HTTP/1.1 and HTTP/2, databases, SSH, email | DNS, voice and video media, games, VPN tunnels, metrics | HTTP/3, modern mobile apps |
+
+The simulation below runs all three on identical traffic with identical losses. In the QUIC lane,
+the messages are spread over four independent streams, like four images on one web page.
+
+<TransportSim mode="compare" />
+
+The three charts show three kinds of damage from the same network. TCP turns each loss into a
+staircase of late messages. QUIC repairs the same loss, but only the lost message and its own
+stream wait, so usually a single bar goes amber. UDP never delivers anything late, and loses exactly
+the messages the network dropped. At the default 4% loss, our model shows about 14% of TCP messages
+late, 5% of QUIC messages late and 4% of UDP messages lost.
+
+**How to choose.** In practice you rarely choose TCP or UDP directly; you choose a protocol that
+sits on one of them. So the useful questions are these:
+
+1. **Must every byte arrive, and in order?** Payments, API calls, file transfers, database
+   queries: use TCP, through HTTP, gRPC or your database driver. This is the default for almost
+   everything, and the right one.
+2. **Is late data worthless?** Voice, video, game state, live sensor readings: use UDP, usually
+   through a library that adds what you need (WebRTC for media, a game networking library), and
+   send a fresh update rather than repairing an old one.
+3. **Is it one tiny question and one tiny answer?** DNS, time sync (NTP): UDP, with a retry and a
+   TCP fallback for big answers.
+4. **Do you need TCP's guarantees on lossy mobile networks, or many parallel streams, or
+   connections that survive a network change?** Use HTTP/3 or QUIC through a library or your CDN.
+   Do not write QUIC yourself.
+
+:::tip[Mixing is normal]
+Most real products use both. Our quiz app's final design sent voice over UDP (through WebRTC),
+and scores, questions and the leaderboard over a WebSocket on TCP, framed by the WebSocket
+protocol. Each kind of data got the promise it needed.
+:::
+
+## Build it yourself
+
+We will build four things, each closer to what production code needs: framing on top of TCP,
+reliability on top of UDP, the fix for a famous TCP latency trap, and a measurement of what a
+handshake costs on the real internet. Everything uses only the standard library. Every file is in
+[examples/tcp-vs-udp](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/tcp-vs-udp),
+and every output on this page came from running them in October 2026.
+
+### Step 1: framing messages on a TCP stream
+
+The fix for belief one is a length prefix: send 4 bytes saying how long the message is, then the
+message. The reader reads exactly 4 bytes, then exactly that many more, looping because `recv()`
+may return less than it was asked for:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="framing.py"
+# runnable version: examples/tcp-vs-udp/python/framing.py
+HEADER = struct.Struct(">I")  # 4-byte unsigned length, network byte order
+MAX_MESSAGE = 1 << 20  # refuse anything over 1 MB: a bad length must not make us allocate 4 GB
+
+
+class ConnectionClosed(Exception):
+    pass
+
+
+def send_message(sock: socket.socket, message: dict) -> None:
+    body = json.dumps(message).encode()
+    sock.sendall(HEADER.pack(len(body)) + body)  # one buffer: header and body leave together
+
+
+def recv_exactly(sock: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes. recv() may return fewer than asked for, so loop."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(min(n - len(buf), 65536))
+        if not chunk:  # the peer closed: clean only if we were between messages
+            raise ConnectionClosed("peer closed mid-message" if buf else "peer closed")
+        buf += chunk
+    return bytes(buf)
+
+
+def recv_message(sock: socket.socket) -> dict:
+    (length,) = HEADER.unpack(recv_exactly(sock, HEADER.size))
+    if length > MAX_MESSAGE:
+        raise ValueError(f"message of {length} bytes is over the {MAX_MESSAGE}-byte limit")
+    return json.loads(recv_exactly(sock, length))
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="framing.mjs"
+// runnable version: examples/tcp-vs-udp/js/framing.mjs
+const MAX_MESSAGE = 1 << 20; // refuse anything over 1 MB: a bad length must not make us buffer 4 GB
+
+function encode(message) {
+  const body = Buffer.from(JSON.stringify(message));
+  const header = Buffer.alloc(4);
+  header.writeUInt32BE(body.length);
+  return Buffer.concat([header, body]); // one buffer: header and body leave together
+}
+
+/** Turns a stream of chunks into whole messages. Call push() with each chunk. */
+class MessageReader {
+  buffer = Buffer.alloc(0);
+
+  constructor(onMessage) {
+    this.onMessage = onMessage;
+  }
+
+  push(chunk) {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    while (this.buffer.length >= 4) {
+      const length = this.buffer.readUInt32BE(0);
+      if (length > MAX_MESSAGE) throw new Error(`message of ${length} bytes is over the ${MAX_MESSAGE}-byte limit`);
+      if (this.buffer.length < 4 + length) return; // not all here yet: wait for more chunks
+      this.onMessage(JSON.parse(this.buffer.subarray(4, 4 + length)));
+      this.buffer = this.buffer.subarray(4 + length);
+    }
+  }
+
+  end() {
+    if (this.buffer.length) throw new Error('peer closed mid-message');
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
+Same traffic as the naive version, same 50 ms of busy server:
+
+```text title="framing.py output"
+  message #1:     47 bytes -> parsed score
+  message #2:     47 bytes -> parsed score
+  message #3:     47 bytes -> parsed score
+  message #4:     47 bytes -> parsed score
+  message #5:     47 bytes -> parsed score
+  message #6: 219813 bytes -> parsed leaderboard
+
+6 messages sent, every one parsed, whatever the chunks looked like.
+```
+
+Two production details are hiding in there. `MAX_MESSAGE` matters because the length comes from the
+network: without a limit, one corrupt or malicious 4-byte header claiming 4 GB makes your server try
+to allocate 4 GB. And "peer closed mid-message" is different from a clean close between messages;
+treating them the same hides truncated data.
+
+### Step 2: reliability on top of UDP
+
+Now the other direction: we start from UDP and add enough of TCP's machinery to deliver 100
+messages completely and in order over a bad link. To make the link bad on purpose, every datagram,
+in both directions, goes through a small wrapper that drops 10% of them and delays the rest by 20 to
+30 ms, so they also arrive out of order. The sockets are real; only the losses are simulated.
+
+The receiver keeps messages that arrive early in a buffer and hands them over strictly in order. The
+sender keeps a timer per message, resends on timeout with doubling, and estimates the timeout from
+measured round trips with the same formula as RFC 6298:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="reliable_udp.py"
+# runnable version: examples/tcp-vs-udp/python/reliable_udp.py
+# Receiver.datagram_received(), after acking every copy:
+        if seq < self.expected or seq in self.buffer:
+            return  # a duplicate, from a retransmission whose original was not lost after all
+        self.buffer[seq] = time.perf_counter()
+        while self.expected in self.buffer:  # deliver in order; a gap holds everything behind it
+            self.waits.append(time.perf_counter() - self.buffer.pop(self.expected))
+            self.delivered.append(self.expected)
+            self.expected += 1
+
+# Sender:
+    def fill_window(self) -> None:
+        while self.next_seq < COUNT and len(self.in_flight) < self.window:
+            self.transmit(self.next_seq, retries=0)
+            self.next_seq += 1
+        if self.next_seq == COUNT and not self.in_flight:
+            self.done.set()
+
+    def transmit(self, seq: int, retries: int) -> None:
+        self.link.send(DATA.pack(seq) + bytes(200), self.peer)
+        if not self.reliable:
+            return
+        timeout = self.rto * 2**retries  # back off: each timeout doubles the wait
+        timer = asyncio.get_running_loop().call_later(timeout, self.on_timeout, seq)
+        self.in_flight[seq] = {"sent": time.perf_counter(), "retries": retries, "timer": timer}
+
+    def on_timeout(self, seq: int) -> None:
+        self.retransmissions += 1
+        self.transmit(seq, self.in_flight[seq]["retries"] + 1)
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        _, seq = ACK.unpack(data)
+        entry = self.in_flight.pop(seq, None)
+        if entry is None:
+            return  # a duplicate ack
+        entry["timer"].cancel()
+        if entry["retries"] == 0:  # Karn's rule: never time a retransmitted message
+            self.update_rto(time.perf_counter() - entry["sent"])
+        self.fill_window()
+
+    def update_rto(self, rtt: float) -> None:
+        if self.srtt is None:
+            self.srtt, self.rttvar = rtt, rtt / 2
+        else:
+            self.rttvar = 0.75 * self.rttvar + 0.25 * abs(self.srtt - rtt)
+            self.srtt = 0.875 * self.srtt + 0.125 * rtt
+        self.rto = max(0.05, self.srtt + 4 * self.rttvar)  # a 50 ms floor, like TCP's minimum
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="reliable-udp.mjs"
+// runnable version: examples/tcp-vs-udp/js/reliable-udp.mjs
+// receiver, after acking every copy:
+    if (seq < state.expected || state.buffer.has(seq)) return; // a duplicate from a retransmission
+    state.buffer.set(seq, performance.now());
+    while (state.buffer.has(state.expected)) {
+      // deliver in order; a gap holds everything behind it
+      state.waits.push(performance.now() - state.buffer.get(state.expected));
+      state.buffer.delete(state.expected);
+      state.delivered.push(state.expected++);
+    }
+
+// sender:
+  function transmit(seq, retries) {
+    const data = Buffer.alloc(204);
+    data.writeUInt32BE(seq);
+    linkSend(socket, data, peerPort);
+    if (!reliable) return;
+    const timer = setTimeout(() => { // back off: each timeout doubles the wait
+      s.retransmissions++;
+      transmit(seq, retries + 1);
+    }, s.rto * 2 ** retries);
+    inFlight.set(seq, { sent: performance.now(), retries, timer });
+  }
+
+  function fillWindow() {
+    while (s.nextSeq < COUNT && inFlight.size < window) transmit(s.nextSeq++, 0);
+    if (s.nextSeq === COUNT && inFlight.size === 0) onDone(s);
+  }
+
+  socket.on('message', (data) => {
+    const seq = data.readUInt32BE(0);
+    const entry = inFlight.get(seq);
+    if (!entry) return; // a duplicate ack
+    clearTimeout(entry.timer);
+    inFlight.delete(seq);
+    if (entry.retries === 0) { // Karn's rule: never time a retransmitted message
+      const rtt = performance.now() - entry.sent;
+      if (s.srtt === null) [s.srtt, s.rttvar] = [rtt, rtt / 2];
+      else {
+        s.rttvar = 0.75 * s.rttvar + 0.25 * Math.abs(s.srtt - rtt);
+        s.srtt = 0.875 * s.srtt + 0.125 * rtt;
+      }
+      s.rto = Math.max(50, s.srtt + 4 * s.rttvar); // a 50 ms floor, like TCP's minimum
+    }
+    fillWindow();
+  });
+```
+  </TabItem>
+</Tabs>
+
+The same code runs three ways: as plain UDP with no acknowledgements, as **stop-and-wait** (a
+window of 1: send one message, wait for its ACK), and with a **sliding window** of 16:
+
+```text title="reliable_udp.py output (Linux)"
+link: 10% loss each way, 20-30 ms delay each way
+
+1. plain UDP, no acks
+    91/100 arrived, 9 lost, 46 arrived after a later one
+2. stop-and-wait (window of 1)
+    100/100 delivered, in order: True, in 6.74 s
+    18 retransmissions; final RTO 65 ms
+3. sliding window of 16
+    100/100 delivered, in order: True, in 0.80 s
+    26 retransmissions; final RTO 72 ms
+    93 messages arrived but waited for an earlier one; longest wait 207 ms
+```
+
+Each line teaches something. Plain UDP lost 9 messages and delivered nearly half out of order,
+over a link with only 10% loss. Stop-and-wait delivered everything, but spent one round trip per
+message, so 100 messages took almost 7 seconds. The window delivered everything in 0.8 seconds,
+over eight times faster, because 16 messages were always on their way. And the last line is
+head-of-line blocking again, this time in our own code: 93 of 100 messages arrived and then sat in
+the buffer waiting for an earlier one, one of them for 207 ms.
+
+That is roughly TCP, without congestion control, flow control, SACK, fast retransmit,
+connection setup, or the twenty years of tuning in a real kernel. It is a good way to understand
+TCP and a bad thing to ship. If you need reliability over UDP in production, use QUIC through a
+library, not a home-made protocol.
+
+### Step 3: the 40 millisecond mystery
+
+Here is a TCP trap that has puzzled engineers for decades. A client sends each request in two
+writes, a small header and then the body, and waits for the reply. On Linux every request takes
+about 40 ms, even on the same machine.
+
+Two good ideas are colliding. **Nagle's algorithm**, on by default, says: while you have unacknowledged
+data in flight, hold back small writes and combine them, to avoid flooding the network with tiny
+packets. **Delayed ACKs** say: don't send an ACK at once; wait up to about 40 ms on Linux (up to
+200 ms on some systems) in case you can piggyback it on a reply. So the client holds the body
+until the header is acknowledged, and the server holds the acknowledgement because it has nothing to
+reply until the body arrives. Each waits for the other until the delayed-ACK timer fires.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="nagle.py"
+# runnable version: examples/tcp-vs-udp/python/nagle.py
+def client(port: int, nodelay: bool, one_write: bool) -> list[float]:
+    timings = []
+    with socket.create_connection((HOST, port)) as sock:
+        if nodelay:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        body = b'{"op": "get", "key": "user:42"}'
+        for _ in range(REQUESTS):
+            start = time.perf_counter()
+            header = struct.pack(">I", len(body))
+            if one_write:
+                sock.sendall(header + body)
+            else:
+                sock.sendall(header)  # write...
+                sock.sendall(body)  # ...write...
+            recv_exactly(sock, 2)  # ...read
+            timings.append((time.perf_counter() - start) * 1000)
+    return timings[10:]  # skip the first few: Linux ACKs at once early in a connection
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="nagle.mjs"
+// runnable version: examples/tcp-vs-udp/js/nagle.mjs
+function client(port, noDelay, oneWrite) {
+  return new Promise((resolve) => {
+    const socket = net.connect(port, '127.0.0.1');
+    socket.setNoDelay(noDelay); // false is the default for a new net.Socket: Nagle on
+    const body = Buffer.from('{"op": "get", "key": "user:42"}');
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(body.length);
+    const timings = [];
+    let start;
+    const send = () => {
+      start = performance.now();
+      if (oneWrite) socket.write(Buffer.concat([header, body]));
+      else {
+        socket.write(header); // write...
+        socket.write(body); // ...write...
+      }
+    };
+    socket.on('data', () => { // ...read (the reply is 2 bytes, so one 'data' event is one reply here)
+      timings.push(performance.now() - start);
+      if (timings.length < REQUESTS) send();
+      else {
+        socket.end();
+        resolve(timings.slice(10)); // skip the first few: Linux ACKs at once early in a connection
+      }
+    });
+    socket.on('connect', send);
+  });
+}
+```
+  </TabItem>
+</Tabs>
+
+```text title="nagle.py output (Linux; node nagle.mjs gave the same)"
+nagle on, two writes     median  43.99 ms   worst  48.40 ms
+TCP_NODELAY, two writes  median   0.35 ms   worst   1.37 ms
+nagle on, one write      median   0.28 ms   worst   2.52 ms
+```
+
+A hundred times slower, from one extra write. Two fixes work, and the last line shows the better
+one: build the whole message in memory and write it once, as our framing code already does. Setting
+`TCP_NODELAY` turns Nagle off for the socket, which is what most RPC libraries and Node's HTTP
+server do (Node's `http.createServer` has defaulted to `noDelay: true` since version 18, per
+[the Node docs](https://nodejs.org/api/http.html)); a plain `net.Socket` still starts with Nagle on.
+On Windows, the loopback path did not show the stall at all, which is a good reminder to test
+network behaviour on the operating system you deploy to.
+
+### Step 4: what a handshake costs on the real internet
+
+Finally, a measurement. We ask Cloudflare's resolver 1.1.1.1 the same DNS question three ways:
+over UDP, over a fresh TCP connection, and again on that open connection. DNS over TCP frames its
+messages with a 2-byte length, the same idea as Step 1:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="dns_udp_vs_tcp.py"
+# runnable version: examples/tcp-vs-udp/python/dns_udp_vs_tcp.py
+    for _ in range(ROUNDS):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(2)
+            t = time.perf_counter()
+            s.sendto(q, SERVER)
+            s.recvfrom(4096)
+            udp.append(time.perf_counter() - t)
+
+        t = time.perf_counter()
+        with socket.create_connection(SERVER, timeout=2) as s:
+            tcp_connect.append(time.perf_counter() - t)  # SYN, SYN-ACK: one round trip
+            for timings in (tcp_first, tcp_reused):
+                t2 = time.perf_counter()
+                s.sendall(struct.pack(">H", len(q)) + q)  # 2-byte length, then the message
+                (length,) = struct.unpack(">H", recv_exactly(s, 2))
+                recv_exactly(s, length)
+                timings.append(time.perf_counter() - t2)
+        time.sleep(0.2)
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="dns-udp-vs-tcp.mjs"
+// runnable version: examples/tcp-vs-udp/js/dns-udp-vs-tcp.mjs
+for (let i = 0; i < ROUNDS; i++) {
+  udp.push(await askUdp(q));
+  const t = performance.now();
+  const socket = net.connect(PORT, HOST);
+  await new Promise((r, j) => socket.once('connect', r).once('error', j));
+  connect.push(performance.now() - t); // SYN, SYN-ACK: one round trip
+  const ask = tcpAsker(socket);
+  first.push(await ask(q));
+  reused.push(await ask(q));
+  socket.end();
+  await new Promise((r) => setTimeout(r, 200));
+}
+```
+  </TabItem>
+</Tabs>
+
+```text title="dns_udp_vs_tcp.py output (Windows 11, a network in India)"
+median of 7 rounds, asking 1.1.1.1 for example.com A
+  UDP                         12.1 ms   one round trip, no setup
+  TCP, new connection         24.2 ms   = connect 12.2 ms + query 12.0 ms
+  TCP, connection reused      11.4 ms   the handshake is already paid for
+```
+
+The round trip to Cloudflare's nearest site is about 12 ms. UDP needs one; a new TCP connection
+needs two, exactly double; and a TCP connection that is already open costs the same as UDP. This is
+the whole case for UDP in DNS, and the whole case for connection reuse everywhere else: TCP's
+expense is in opening connections, not in using them.
+
+:::tip[See it on your own machine]
+`ss -tan` on Linux, or `netstat -an` on Windows and macOS, lists every TCP socket and its state:
+ESTABLISHED, TIME_WAIT, CLOSE_WAIT and the rest. `ss -s` gives totals. When something feels wrong
+with connections, count the states first; a pile of CLOSE_WAIT or TIME_WAIT tells you most of the
+story. `tcpdump -i any port 53` (or Wireshark) shows every packet, and watching a handshake once is
+worth a page of reading.
+:::
+
+## How real systems do it
+
+The protocols barely change, but the habits around them do. Facts in this section can change, so
+each is marked with when we checked.
+
+**DNS: UDP first, TCP when needed.** As the [DNS](/networking/dns/) page showed, a resolver asks
+over UDP and retries over TCP when an answer comes back truncated, and RFC 9210 requires both. Our
+measurement above is the reason: for one small question, UDP halves the time.
+
+**Voice and video calls ride on UDP.** WebRTC, used by browsers for calls, sends media over UDP
+and can fall back to relaying over TCP when UDP is blocked. Discord described its voice system in
+2018: native clients send voice over UDP to Discord's own servers, which forward it to everyone in
+the channel, with periodic pings to keep firewalls open. At the time it served over 2.6 million
+concurrent voice users from more than 850 voice servers in 13 regions
+([Discord engineering](https://discord.com/blog/how-discord-handles-two-and-half-million-concurrent-voice-users-using-webrtc)).
+
+**Games send state, not history.** Fast multiplayer games send frequent snapshots of the world over
+UDP. A lost snapshot is never resent, because the next one, a few milliseconds later, replaces it.
+Glenn Fiedler's long-running series on game networking makes the case that time-critical game data
+should never go over TCP, precisely because of the stalls we simulated
+([Gaffer on Games](https://gafferongames.com/post/udp_vs_tcp/)).
+
+**HTTP/3 brings TCP's guarantees to lossy networks.** Google's 2017 paper on QUIC reported lower
+search latency and 15–18% fewer YouTube rebuffers, with bigger gains on slower, longer paths
+([Google Research](https://research.google/pubs/the-quic-transport-protocol-design-and-internet-scale-deployment/)).
+Uber moved its rider and driver apps to QUIC in 2019 and reported a 10–30% drop in tail latency for
+HTTPS traffic on mobile networks ([Uber engineering](https://www.uber.com/blog/employing-quic-protocol/)).
+As of 2025, about one HTTP request in five on Cloudflare used HTTP/3.
+
+**VPN tunnels use UDP so they don't fight themselves.** WireGuard deliberately does not run over TCP
+([WireGuard](https://www.wireguard.com/known-limitations/)). If you carry TCP connections inside a
+tunnel that is itself TCP, a single loss makes both layers retransmit and both back off, and their
+timers fight each other, so performance collapses. Over UDP, only the inner TCP connections repair
+losses.
+
+**Metrics go over UDP so they never block requests.** StatsD-style metric clients traditionally
+send each counter increment as a small UDP datagram. If the metrics server is slow or down, a few
+counts are lost, and no request in your application ever waits on a metrics write. That is the
+right trade for metrics and the wrong one for logs you need for an audit.
+
+**Load balancers forget idle connections.** As of October 2026, AWS's Network Load Balancer drops
+TCP flows idle for 350 seconds by default (configurable from 60 to 6,000 since September 2024) and
+UDP flows after 120 seconds ([AWS](https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-nlb-tcp-configurable-idle-timeout/));
+its Application Load Balancer closes idle connections after 60 seconds by default
+([AWS docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html)).
+Linux's TCP keep-alive, when enabled at all, waits 2 hours before its first probe. Keep that gap in
+mind for the war stories.
+
+**Inside Kubernetes, UDP state is a real cost.** Linux's connection tracking removes a TCP entry
+when the connection closes, but a UDP entry stays until it times out, 30 seconds by default. The
+Kubernetes docs recommend a per-node DNS cache partly to keep short-lived UDP DNS flows from
+filling that table, and to send DNS to the cluster's servers over TCP instead
+([Kubernetes docs](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/)).
+
+## Gotchas and war stories
+
+:::danger[A real outage: 1.35 Tbps from a UDP amplifier]
+On 28 February 2018, GitHub was hit by what was then the largest attack ever reported publicly:
+1.35 Tbps at its peak. Attackers sent small requests to tens of thousands of memcached servers left
+open to the internet on UDP port 11211, with GitHub's address forged as the source. Each server sent
+its large reply to GitHub, amplifying the traffic up to 51,000 times. GitHub was unreachable from
+17:21 to 17:26 UTC and intermittently until 17:30, when it moved its traffic behind Akamai's DDoS
+protection ([GitHub incident report](https://github.blog/2018-03-01-ddos-incident-report/)).
+:::
+
+The lesson for anyone building on UDP: **without a handshake, the source address is a claim, not a
+fact.** Never send a large reply to an address that has not proved it can receive, which is why
+QUIC limits its first replies to three times the request and why DNS servers rate-limit answers.
+
+:::caution[The five-second DNS lookups in Kubernetes]
+Around 2017 to 2019, many Kubernetes clusters saw DNS lookups that occasionally took exactly 5
+seconds. The C library sends the A and AAAA queries in parallel from the same UDP socket. A race in
+Linux's connection tracking, during the address translation that routes those queries to the DNS
+service, sometimes dropped one of the pair. Nothing retries a lost UDP packet except the
+application, so the client waited out the resolver's default 5-second timeout. The kernel races were
+fixed in Linux 4.19 and 5.0, and the common workarounds were a per-node DNS cache or the
+`single-request-reopen` resolver option
+([kernel patch discussion](https://lists.snapcraft.io/archives/kernel-team/2019-July/102291.html),
+[kubernetes/kubernetes#56903](https://github.com/kubernetes/kubernetes/issues/56903)).
+:::
+
+A latency that is always the same odd number, 1 s, 3 s or 5 s, is almost never your code. It is a
+timer somewhere: TCP's initial retransmission timeout, its first backoff, or a resolver's timeout.
+
+:::danger[TCP itself can be the bug: SACK Panic]
+In June 2019, Jonathan Looney at Netflix reported that a remote attacker could crash Linux machines
+with crafted selective acknowledgements: by forcing a tiny segment size, an attacker could overflow a
+counter in the kernel's TCP code and trigger a kernel panic. Kernels back to 2.6.29 were affected
+(CVE-2019-11477). The fixes shipped in patched kernels, and the mitigations until then were to turn
+SACK off or drop connections with a very small segment size
+([Red Hat](https://access.redhat.com/security/vulnerabilities/tcpsack),
+[Ubuntu](https://ubuntu.com/security/vulnerabilities/sack-panic)).
+:::
+
+**Idle connections that are dead without anyone knowing.** Your service keeps a pool of database or
+HTTP connections behind a load balancer. Overnight, a connection sits idle for 10 minutes. The load
+balancer forgot it at 350 seconds; Linux's keep-alive would not have probed for 2 hours. In the
+morning, the first request on that connection fails with "connection reset". The fixes are to make
+the pool discard connections idle for less than the shortest idle timeout on the path, or to enable
+keep-alives with an interval below it. The mirror image bites HTTP servers behind an ALB: if your
+server closes idle connections *before* the load balancer does, the load balancer may send a request
+down a connection your server has closed a moment earlier and return a 502. AWS's advice is to make your
+application's idle timeout longer than the load balancer's.
+
+**CLOSE_WAIT is always your bug.** A growing number of sockets in CLOSE_WAIT means the other side
+closed and your application never did: a missing `close()`, usually on an error path. The kernel
+will wait for ever. Find the code path that leaks the socket.
+
+**Ephemeral port exhaustion.** A client that opens many short connections to one destination can run
+out of its 28,232 ports, between connections in use and those resting in TIME_WAIT. The symptom is
+bizarre: errors such as "address already in use" or "cannot assign requested address" from code
+that never binds a port. Cloudflare hit a version of this as WebSocket traffic grew its number of
+long-lived outbound connections, and wrote up the careful socket options needed to go beyond one
+port range ([Cloudflare](https://blog.cloudflare.com/how-to-stop-running-out-of-ephemeral-ports-and-start-to-love-long-lived-connections/)).
+For most of us the fix is simpler: reuse connections instead of opening a new one per request.
+
+:::caution["send() succeeded" means "the kernel has it"]
+On TCP, a successful write means your bytes are in your own machine's buffer. On UDP it means even
+less. Never treat a successful send as proof that the other side received or acted on anything;
+only a reply from the other application can tell you that.
+:::
+
+**Big datagrams vanish.** A UDP message slightly over the path MTU is fragmented, and on paths that
+drop fragments it disappears every time, while smaller messages work. If some messages never
+arrive and they are all the big ones, this is why. Keep datagrams under about 1,200 bytes.
+
+**Corporate networks block UDP.** Some firewalls allow only TCP to ports 80 and 443. HTTP/3
+clients fall back to HTTP/2 over TCP, and WebRTC falls back to relays over TCP. If you build your
+own UDP protocol, you need a TCP fallback too, or some users cannot connect at all.
+
+## Trade-offs and when not to use it
+
+**What TCP costs.** A round trip to open every connection, more with TLS. Head-of-line blocking,
+which turns every loss into a stall for everything behind it. A byte stream you must frame yourself.
+Kernel timers, measured in seconds and minutes, that your application must cut short with its own
+timeouts. And slow evolution: improvements take years to reach every kernel and middlebox.
+
+**When not to use TCP.** When late data is useless: live voice and video, game state, live sensor
+feeds. When you need one-to-many delivery on a local network. When the whole exchange is one tiny
+question and answer, and the handshake would double its cost.
+
+**What UDP costs.** Everything TCP would have done, if you need it: loss detection, ordering,
+pacing and congestion control, NAT keep-alives, protection against spoofing and amplification,
+and the fallback for networks that block it. Each one can go subtly wrong, and the failures
+appear only on bad networks you do not test on.
+
+**When not to use UDP.** When all your data must arrive, in order: payments, API calls, file
+transfers, anything a user expects to be complete. You would end up rebuilding TCP, and the first
+version of a home-made TCP is always worse than the real one. If you need TCP's guarantees without
+its head-of-line blocking, use QUIC through a well-tested library.
+
+:::note[From the trenches]
+Teams usually discover their transport choices during an incident, not a design review. The pattern
+repeats: a protocol that worked perfectly on office Wi-Fi, a launch, and then complaints only from
+users on trains, in basements and in small towns. Before you ship anything real-time, test it on a
+bad network on purpose. On Linux, `tc qdisc add dev eth0 root netem loss 3% delay 100ms` turns a
+good link into a mobile one in a second; browser developer tools can throttle too. Ten minutes of
+that finds the head-of-line freeze, the missing timeout and the glued-together messages before
+your users do.
+:::
+
+## Interview corner
+
+TCP versus UDP is one of the most common networking warm-up questions. A weak answer recites
+"reliable versus fast". A strong one talks about what each promise costs and what happens when
+packets are lost.
+
+1. **"What's the difference between TCP and UDP?"** Connection and handshake versus none; reliable,
+   ordered byte stream versus independent datagrams with boundaries kept; flow and congestion control
+   versus none. Then the trade-off: TCP costs a round trip to open and stalls everything behind a
+   loss; UDP leaves loss, order and pacing to the application. Give one example of each, and QUIC as
+   the modern middle ground.
+2. **"Why does DNS use UDP? When does it use TCP?"** One small question and answer fits in a
+   datagram; UDP takes one round trip, TCP two. TCP when the answer is truncated (too big), for zone
+   transfers, and because RFC 9210 requires support for it.
+3. **"How does TCP guarantee delivery?"** Byte sequence numbers, cumulative ACKs, retransmission on
+   timeout (RTO from smoothed RTT and variance, with exponential backoff) and on three duplicate
+   ACKs, plus SACK. Bonus: the guarantee ends at the receiving kernel, not the application.
+4. **"Why would you build a voice or game protocol on UDP?"** Head-of-line blocking: a lost packet
+   delays everything behind it by at least a round trip, and late audio is useless. A strong answer
+   adds what you then must build: sequence numbers, jitter buffers, rate control, keep-alives for
+   NATs, encryption.
+5. **"What is QUIC and why is it on UDP?"** Reliable, encrypted, multi-stream transport in user
+   space. On UDP because middleboxes and kernels ossified TCP, and UDP passes almost everywhere.
+   Benefits: no head-of-line blocking across streams, one round trip setup (zero when resuming),
+   connection migration.
+
+In system design interviews, the transport usually comes up when you design chat, video, gaming or
+real-time features: say which data needs which promise, as our quiz app's final design did.
+
+## Check yourself
+
+<details>
+<summary>1. A server reads messages over a raw TCP socket, one read per message. It passes every test and fails in production under load with JSON errors. Why, and what is the fix?</summary>
+
+TCP is a byte stream with no message boundaries. Under load, several messages pile up in the
+receive buffer and one read returns them together, or a large message is split across reads. In
+tests, messages arrived one at a time by luck. The fix is framing: a length prefix (read exactly
+the header, then exactly that many bytes), a delimiter, or a protocol such as WebSocket that frames
+messages for you.
+
+</details>
+
+<details>
+<summary>2. A voice app sends 50 packets a second over TCP. The round trip is 120 ms, and one packet is lost in the middle of the stream. Roughly how late is the lost packet, and how many packets miss a 150 ms deadline?</summary>
+
+The three packets after it are sent at 20, 40 and 60 ms and arrive 60 ms later; the third duplicate
+ACK gets back to the sender at 60 + 120 = 180 ms. The resend arrives at 180 + 60 = 240 ms, so the
+lost packet's delay is 240 ms. Every packet that arrived before 240 ms waits until then: packets sent
+at 20, 40, 60 and 80 ms have delays of 220, 200, 180 and 160 ms. So five packets miss the deadline
+from a single loss, where UDP would have lost one and delivered the rest on time.
+
+</details>
+
+<details>
+<summary>3. Two processes on the same laptop talk over UDP. No network is involved, yet the receiver gets only a fraction of the datagrams. How is that possible?</summary>
+
+The receiving socket has a fixed buffer. If the sender is faster than the receiver reads, the
+buffer fills and the kernel drops new datagrams without telling anyone. UDP has no flow control, so
+nothing slows the sender down. Sequence numbers reveal the gaps; pacing the sender, a bigger
+buffer or a faster receiver fixes it. Our demo lost 87% at full speed and none when paced.
+
+</details>
+
+<details>
+<summary>4. Every morning, the first few API calls from your service fail with "connection reset", then everything works. The service keeps a pool of TCP connections to another service behind an AWS Network Load Balancer, and traffic is near zero overnight. What is happening?</summary>
+
+The connections sat idle for longer than the load balancer's idle timeout (350 seconds by default
+for TCP), so it forgot them. Neither end was told; Linux's keep-alive, if enabled, would not probe
+for 2 hours. The first request on each stale connection reaches the load balancer, which has no
+record of it, and the connection is reset. Make the pool discard connections idle for, say, under 5
+minutes, or enable keep-alives with an interval below the timeout, and retry idempotent requests
+once on a reset.
+
+</details>
+
+<details>
+<summary>5. A user is 100 ms away. Counting only round trips, when can the first byte of an HTTPS request reach the server over HTTP/2 (TCP with TLS 1.3), over HTTP/3 on a first visit, and over HTTP/3 when resuming?</summary>
+
+HTTP/2 needs one round trip for TCP and one for TLS 1.3, so the request leaves after 200 ms and
+reaches the server half a round trip later, at 250 ms. HTTP/3 sets up transport and encryption
+together in one round trip, so the request reaches the server at about 150 ms. When resuming with
+0-RTT, the request travels in the first flight and reaches the server after 50 ms.
+
+</details>
+
+<details>
+<summary>6. Why is QUIC built on top of UDP instead of being a new protocol next to TCP and UDP?</summary>
+
+Because the internet's middleboxes, the firewalls, NAT routers and load balancers, pass TCP and
+UDP and very often drop anything else, and they also interfere with new TCP features. Building on
+UDP gets QUIC through nearly every network, and running in the application rather than the kernel
+lets it change at the speed of a library update. Encrypting nearly all of its headers stops
+middleboxes from depending on its details, so it can keep evolving.
+
+</details>
+
+## Recap
+
+- **IP is best effort**: packets can be lost, duplicated, reordered or corrupted, and nobody is told.
+  The transport layer adds ports, and optionally repair.
+- **UDP** adds ports, a checksum and message boundaries, nothing else: no setup, no resends, no
+  order, no pacing. Keep datagrams under about 1,200 bytes.
+- **TCP** opens a connection with a one-round-trip handshake and delivers a **reliable, ordered byte
+  stream**, using sequence numbers, ACKs, fast retransmit and a timeout that starts at 1 s and
+  doubles.
+- **A byte stream has no message boundaries.** Frame your messages: a length prefix, a delimiter, or
+  a protocol that does it for you.
+- **Flow control** (the receive window) protects the receiver; **congestion control** (slow start,
+  CUBIC, BBR) protects the network. Throughput is at most one window per round trip.
+- **Head-of-line blocking** is TCP's price for order: one loss delays everything behind it. For
+  real-time data, late equals lost, so UDP wins.
+- **QUIC** rebuilds TCP's guarantees on UDP with independent streams, built-in TLS 1.3, one-round-trip
+  setup and connection migration. It is what HTTP/3 runs on.
+- **Building on UDP means taking on its duties**: rate control, the reliability you need, NAT
+  keep-alives every 15 to 30 seconds, and never amplifying spoofed requests.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'tls', why: 'The layer that makes a TCP connection private and proves who is on the other end, and what its handshake adds to the round trips on this page.' },
+  { slug: 'http-evolution', why: 'How HTTP/1.1, HTTP/2 and HTTP/3 each work around TCP, and why HTTP/2 still suffered head-of-line blocking until QUIC.' },
+  { slug: 'connection-pooling', why: 'The practical answer to TCP\'s setup cost: open connections once and reuse them, and the idle-timeout traps that come with it.' },
+  { slug: 'timeouts', why: 'TCP will wait minutes before giving up. Your application should not. How to choose timeouts that match what users can tolerate.' },
+  { slug: 'websockets', why: 'A long-lived, framed, two-way channel on top of TCP, the right tool for most real-time features that are not voice or video.' },
+  { slug: 'backpressure', why: 'TCP\'s receive window generalised: how any system tells a fast producer to slow down before something overflows.' },
+]} />
+
+## Further reading
+
+**Specs & official docs**
+
+- [RFC 768, UDP](https://www.rfc-editor.org/rfc/rfc768) (1980) and [RFC 9868, Transport Options for UDP](https://www.rfc-editor.org/rfc/rfc9868.html) (2025) — the whole of UDP in three pages, and its first real extension.
+- [RFC 9293, TCP](https://www.rfc-editor.org/rfc/rfc9293) (2022) — the current TCP specification: header, handshake, states, TIME-WAIT, keep-alives and the byte-stream rule.
+- [RFC 6298, Computing TCP's retransmission timer](https://www.rfc-editor.org/rfc/rfc6298) — SRTT, RTTVAR, the 1-second initial and minimum RTO, and backoff.
+- [RFC 7323, TCP extensions for high performance](https://www.rfc-editor.org/rfc/rfc7323) — window scaling and timestamps.
+- [RFC 6928, Increasing TCP's initial window](https://www.rfc-editor.org/rfc/rfc6928) — why new connections start at 10 segments.
+- [RFC 9438, CUBIC](https://www.rfc-editor.org/rfc/rfc9438) (2023) — the default congestion control in Linux, Windows and Apple stacks.
+- [BBR, an IETF draft](https://datatracker.ietf.org/doc/html/draft-cardwell-ccwg-bbr) — the model-based alternative, version 3.
+- [RFC 7413, TCP Fast Open](https://www.rfc-editor.org/rfc/rfc7413) — data in the SYN, and its deployment problems.
+- [RFC 9000, QUIC](https://www.rfc-editor.org/rfc/rfc9000) and [RFC 9002, QUIC loss detection and congestion control](https://www.rfc-editor.org/rfc/rfc9002) — streams, connection IDs, anti-amplification, keep-alives, and how QUIC detects loss.
+- [RFC 8085, UDP usage guidelines](https://www.rfc-editor.org/rfc/rfc8085) — the checklist for anyone building on UDP: sizes, congestion control, reliability, keep-alives.
+- [RFC 4787, NAT behavioural requirements for UDP](https://www.rfc-editor.org/rfc/rfc4787) — why NATs forget UDP flows, and the 2-minute minimum.
+- [RFC 9113, HTTP/2](https://www.rfc-editor.org/rfc/rfc9113) — an example of length-prefixed framing on TCP.
+- [ITU-T G.114, one-way transmission time](https://www.itu.int/rec/T-REC-G.114) — the 150 ms guideline for natural conversation.
+- [Linux kernel: IP sysctl documentation](https://docs.kernel.org/networking/ip-sysctl.html) — ephemeral ports, SYN retries, retries2, keep-alive and minimum RTO defaults.
+- [Node.js http module](https://nodejs.org/api/http.html) — the `noDelay` default and keep-alive timeouts.
+- [AWS: NLB configurable TCP idle timeout](https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-nlb-tcp-configurable-idle-timeout/) and [ALB connection idle timeout](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html) — the idle timeouts behind the dead-connection war story.
+- [Kubernetes: NodeLocal DNSCache](https://kubernetes.io/docs/tasks/administer-cluster/nodelocaldns/) — conntrack, UDP entries and why DNS moves to TCP inside clusters.
+- [WireGuard: known limitations](https://www.wireguard.com/known-limitations/) — why it does not tunnel over TCP.
+
+**Engineering blogs & papers**
+
+- [Jacobson and Karels: Congestion Avoidance and Control](https://ee.lbl.gov/papers/congavoid.pdf) (1988) — the 1986 congestion collapse and the ideas behind every TCP since.
+- [Cardwell et al.: BBR, congestion-based congestion control](https://queue.acm.org/detail.cfm?id=3022184) (ACM Queue, 2016) — measuring the path instead of reacting to loss.
+- [Google: The QUIC transport protocol, design and Internet-scale deployment](https://research.google/pubs/the-quic-transport-protocol-design-and-internet-scale-deployment/) (SIGCOMM 2017) — why QUIC exists and what it improved at Google.
+- [Uber: Employing QUIC to optimise app performance](https://www.uber.com/blog/employing-quic-protocol/) (2019) — tail latency on lossy mobile networks.
+- [Discord: How Discord handles 2.5 million concurrent voice users](https://discord.com/blog/how-discord-handles-two-and-half-million-concurrent-voice-users-using-webrtc) (2018) — voice over UDP at scale.
+- [GitHub: February 28th DDoS incident report](https://github.blog/2018-03-01-ddos-incident-report/) (2018) — UDP amplification at 1.35 Tbps.
+- [Cloudflare: How to stop running out of ephemeral ports](https://blog.cloudflare.com/how-to-stop-running-out-of-ephemeral-ports-and-start-to-love-long-lived-connections/) (2022) — port exhaustion and the socket options around it.
+- [Red Hat: TCP SACK Panic](https://access.redhat.com/security/vulnerabilities/tcpsack) and [Ubuntu: SACK Panic](https://ubuntu.com/security/vulnerabilities/sack-panic) (2019) — a remote crash in TCP's own code.
+- [kubernetes/kubernetes#56903](https://github.com/kubernetes/kubernetes/issues/56903) and the [Linux conntrack race fix discussion](https://lists.snapcraft.io/archives/kernel-team/2019-July/102291.html) — the 5-second DNS delays.
+- [Cloudflare Radar Year in Review 2025](https://radar.cloudflare.com/year-in-review/2025) — how much traffic uses HTTP/3.
+
+**Explainers**
+
+- [Ilya Grigorik: High Performance Browser Networking, Building Blocks of TCP](https://hpbn.co/building-blocks-of-tcp/) and [of UDP](https://hpbn.co/building-blocks-of-udp/) — the classic explanation of handshakes, slow start, the bandwidth-delay product and NAT traversal. Written in 2013, so it predates QUIC and BBR.
+- [Glenn Fiedler: UDP vs. TCP](https://gafferongames.com/post/udp_vs_tcp/) — the game developer's case against TCP for real-time data.
+- [What happens when you type a URL](/foundations/how-the-web-works/) and [DNS](/networking/dns/) — this site's pages on the handshake in a page load, and on DNS over UDP and TCP.

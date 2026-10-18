@@ -606,7 +606,9 @@ t=0.0s  2. an answer too big for UDP
 
 [RFC 9210](https://www.rfc-editor.org/rfc/rfc9210) (2022) is blunt about it: every DNS resolver
 and server must support both UDP and TCP, and network operators must allow both. "DNS is UDP" is
-the most common half-truth in networking.
+the most common half-truth in networking. The [TCP vs UDP](/networking/tcp-vs-udp/) page measures
+what the choice costs: the same question to 1.1.1.1 took one round trip over UDP and two over a new
+TCP connection.
 
 ### Private DNS: DoT, DoH and DoQ
 

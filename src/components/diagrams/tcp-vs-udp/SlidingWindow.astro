@@ -1,0 +1,76 @@
+---
+// The sender's view of a TCP connection as a row of numbered segments, cut into four zones by
+// the window: acknowledged, sent but not yet acknowledged, allowed to send now, not allowed yet.
+const N = 14;
+const X0 = 18;
+const SIZE = 24;
+const GAP = 3;
+const TOP = 74;
+const x = (i: number) => X0 + i * (SIZE + GAP);
+const zone = (i: number) => (i < 4 ? 'acked' : i < 9 ? 'flight' : i < 12 ? 'free' : 'blocked');
+const STYLE: Record<string, string> = {
+  acked: 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)',
+  flight: 'fill: var(--viz-flow); stroke: var(--viz-flow)',
+  free: 'fill: var(--viz-surface); stroke: var(--viz-flow)',
+  blocked: 'fill: var(--viz-surface); stroke: var(--viz-stroke)',
+};
+const winLeft = x(4) - 2;
+const winRight = x(11) + SIZE + 2;
+---
+
+<svg viewBox="0 0 400 322" width="100%" role="img" aria-labelledby="tu-sw-t tu-sw-d">
+  <title id="tu-sw-t">The sliding window</title>
+  <desc id="tu-sw-d">
+    Fourteen numbered segments in a row. Segments 1 to 4 are acknowledged. Segments 5 to 9 have
+    been sent and are waiting for an acknowledgment. Segments 10 to 12 may be sent right now.
+    Segments 13 and 14 must wait. A bracket over segments 5 to 12 marks the window of 8 segments:
+    the most that may be unacknowledged at once. When the acknowledgment for segment 5 arrives,
+    the whole window slides one place to the right.
+  </desc>
+  <defs>
+    <marker id="tu-sw-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+  </defs>
+
+  <!-- The window bracket -->
+  <rect x={winLeft} y={TOP - 6} width={winRight - winLeft} height={SIZE + 12} rx="6" fill="none" stroke-width="2.5" style="stroke: var(--viz-ink)" />
+  <path d={`M${winLeft} 48 v-8 h${winRight - winLeft} v8`} fill="none" stroke-width="1.5" style="stroke: var(--viz-ink)" />
+  <text x={(winLeft + winRight) / 2} y="30" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">window: 8 segments</text>
+
+  <g font-size="15" font-weight="600" text-anchor="middle">
+    {
+      Array.from({ length: N }, (_, i) => (
+        <g>
+          <rect x={x(i)} y={TOP} width={SIZE} height={SIZE} rx="3" stroke-width="1.5" stroke-dasharray={zone(i) === 'blocked' ? '3 3' : undefined} style={STYLE[zone(i)]} />
+          <text x={x(i) + SIZE / 2} y={TOP + 17} style={zone(i) === 'flight' ? 'fill: var(--viz-surface)' : 'fill: var(--viz-ink)'}>{i + 1}</text>
+        </g>
+      ))
+    }
+  </g>
+
+  <!-- Zone labels -->
+  <g stroke-width="1.5" style="stroke: var(--viz-stroke)">
+    <line x1={x(0)} y1="112" x2={x(3) + SIZE} y2="112" />
+    <line x1={x(4)} y1="112" x2={x(8) + SIZE} y2="112" />
+    <line x1={x(9)} y1="112" x2={x(11) + SIZE} y2="112" />
+    <line x1={x(12)} y1="112" x2={x(13) + SIZE} y2="112" />
+  </g>
+  <g font-size="17">
+    <text x={x(0)} y="136" style="fill: var(--viz-ok)">ACKed</text>
+    <text x={x(4)} y="136" style="fill: var(--viz-flow)">sent, no ACK yet</text>
+    <text x={x(9)} y="160" style="fill: var(--viz-ink)">may send now</text>
+    <text x="396" y="184" text-anchor="end" style="fill: var(--viz-muted)">must wait</text>
+  </g>
+
+  <!-- What an ACK does -->
+  <path d={`M${x(4) + SIZE / 2} 206 h${SIZE + GAP}`} stroke-width="2.5" style="stroke: var(--viz-ok)" marker-end="url(#tu-sw-arrow)" />
+  <g font-size="17" style="fill: var(--viz-ink)">
+    <text x="4" y="236">ACK for 5 arrives: the window slides</text>
+    <text x="4" y="258">one place, and 13 may now be sent</text>
+  </g>
+  <g font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">
+    <text x="4" y="292">Window = the smaller of what the receiver</text>
+    <text x="4" y="314">can buffer and what the network can take</text>
+  </g>
+</svg>

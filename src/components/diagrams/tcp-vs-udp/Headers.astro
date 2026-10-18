@@ -1,0 +1,86 @@
+---
+// The UDP and TCP headers side by side, drawn as 32-bit rows (4 bytes per row). Fields both have
+// are plain; fields only TCP has are tinted, because they are where all of TCP's work happens.
+const ROW = 34;
+const X = 80;
+const W = 316;
+const HALF = W / 2;
+const udpTop = 34;
+const tcpTop = udpTop + 2 * ROW + 56;
+
+type Cell = { label: string; span: 1 | 2; tcpOnly?: boolean; dashed?: boolean };
+const udp: Cell[][] = [
+  [{ label: 'Source port', span: 1 }, { label: 'Destination port', span: 1 }],
+  [{ label: 'Length', span: 1 }, { label: 'Checksum', span: 1 }],
+];
+const tcp: Cell[][] = [
+  [{ label: 'Source port', span: 1 }, { label: 'Destination port', span: 1 }],
+  [{ label: 'Sequence number', span: 2, tcpOnly: true }],
+  [{ label: 'Acknowledgment number', span: 2, tcpOnly: true }],
+  [{ label: 'Length, flags', span: 1, tcpOnly: true }, { label: 'Window', span: 1, tcpOnly: true }],
+  [{ label: 'Checksum', span: 1 }, { label: 'Urgent pointer', span: 1, tcpOnly: true }],
+  [{ label: 'Options: 0 to 40 bytes', span: 2, tcpOnly: true, dashed: true }],
+];
+
+function cells(rows: Cell[][], top: number) {
+  return rows.flatMap((row, r) => {
+    let x = X;
+    return row.map((c) => {
+      const w = c.span === 2 ? W : HALF;
+      const cell = { ...c, x, y: top + r * ROW, w };
+      x += w;
+      return cell;
+    });
+  });
+}
+const udpCells = cells(udp, udpTop);
+const tcpCells = cells(tcp, tcpTop);
+const height = tcpTop + tcp.length * ROW + 38;
+---
+
+<svg viewBox={`0 0 400 ${height}`} width="100%" role="img" aria-labelledby="tu-hd-t tu-hd-d">
+  <title id="tu-hd-t">The UDP header is 8 bytes; the TCP header is 20 to 60</title>
+  <desc id="tu-hd-d">
+    Headers drawn four bytes per row. UDP has two rows: source port and destination port, then
+    length and checksum, 8 bytes in all. TCP starts with the same two ports, then adds a sequence
+    number, an acknowledgment number, a row with the header length, the flags (SYN, ACK, FIN, RST
+    and others) and the window, then checksum and urgent pointer, and up to 40 bytes of options:
+    20 bytes without options, 60 at most. The fields only TCP has are tinted.
+  </desc>
+
+  <text x="200" y="20" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">← 4 bytes per row →</text>
+
+  <g font-size="19" font-weight="700" style="fill: var(--viz-ink)">
+    <text x="4" y={udpTop + 24}>UDP</text>
+    <text x="4" y={tcpTop + 24}>TCP</text>
+  </g>
+  <g font-size="16" style="fill: var(--viz-muted)">
+    <text x="4" y={udpTop + 46}>8 bytes</text>
+    <text x="4" y={tcpTop + 46}>20 to</text>
+    <text x="4" y={tcpTop + 66}>60 bytes</text>
+  </g>
+
+  <g font-size="17" text-anchor="middle">
+    {
+      [...udpCells, ...tcpCells].map((c) => (
+        <g>
+          <rect
+            x={c.x}
+            y={c.y}
+            width={c.w}
+            height={ROW}
+            stroke-width="1.5"
+            stroke-dasharray={c.dashed ? '5 4' : undefined}
+            style={c.tcpOnly ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'}
+          />
+          <text x={c.x + c.w / 2} y={c.y + 23} style="fill: var(--viz-ink)">{c.label}</text>
+        </g>
+      ))
+    }
+  </g>
+
+  <g font-size="16" font-style="italic" style="font-family: var(--note-font-display)">
+    <rect x={X} y={height - 26} width="16" height="16" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <text x={X + 24} y={height - 13} style="fill: var(--viz-ink)">fields only TCP has</text>
+  </g>
+</svg>

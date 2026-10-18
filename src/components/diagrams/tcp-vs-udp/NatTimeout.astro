@@ -1,0 +1,71 @@
+---
+// Why "connectionless" UDP still has state: a home router or firewall (NAT) remembers each UDP
+// flow for a while after the last packet. Two timelines: with keep-alives the mapping stays; with
+// silence it expires and the server's next packet is dropped.
+const X0 = 20;
+const X1 = 380;
+const T = 120; // seconds shown
+const px = (s: number) => X0 + (s / T) * (X1 - X0);
+const keepalives = [0, 25, 50, 75, 100];
+---
+
+<svg viewBox="0 -44 400 374" width="100%" role="img" aria-labelledby="tu-nat-t tu-nat-d">
+  <title id="tu-nat-t">A NAT forgets a silent UDP flow</title>
+  <desc id="tu-nat-d">
+    Top: a phone talks to a server through a router doing NAT, which keeps a table row mapping
+    the phone's private address and port to a public port, with a timer of 30 seconds that
+    restarts with every packet. Below, two timelines of 120 seconds. With a small keep-alive
+    packet every 25 seconds the mapping never expires and the server's message at 110 seconds
+    gets through. Without keep-alives the mapping expires 30 seconds after the last packet, and
+    the server's message at 45 seconds is dropped, with nobody told.
+  </desc>
+  <defs>
+    <marker id="tu-nat-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- Phone, NAT, server -->
+  <g font-size="19" font-weight="700" text-anchor="middle">
+    <rect x="4" y="8" width="84" height="44" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="46" y="36" style="fill: var(--viz-ink)">Phone</text>
+    <rect x="144" y="8" width="112" height="44" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="200" y="36" style="fill: var(--viz-ink)">NAT</text>
+    <rect x="312" y="8" width="84" height="44" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="354" y="36" style="fill: var(--viz-ink)">Server</text>
+  </g>
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tu-nat-arrow)">
+    <line x1="90" y1="30" x2="140" y2="30" />
+    <line x1="258" y1="30" x2="308" y2="30" />
+  </g>
+  <rect x="72" y="64" width="256" height="50" rx="6" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <text x="200" y="85">10.0.0.5:51000 ↔ :40001</text>
+    <text x="200" y="105" style="fill: var(--viz-warn)">forget after 30 s silent</text>
+  </g>
+
+  <!-- Timeline 1: keep-alives -->
+  <text x="4" y="152" font-size="17" font-weight="600" style="fill: var(--viz-ink)">Keep-alive every 25 s</text>
+  <rect x={X0} y="164" width={X1 - X0} height="16" rx="3" style="fill: var(--viz-ok-soft)" />
+  <g style="fill: var(--viz-flow)">
+    {keepalives.map((s) => <circle cx={px(s)} cy="172" r="5" />)}
+  </g>
+  <path d={`M${px(110) - 7} 160 l7 -10 l7 10 z`} style="fill: var(--viz-ok)" />
+  <text x={px(110)} y="200" font-size="16" text-anchor="middle" style="fill: var(--viz-ok)">reply gets in</text>
+
+  <!-- Timeline 2: silence -->
+  <text x="4" y="238" font-size="17" font-weight="600" style="fill: var(--viz-ink)">No keep-alives</text>
+  <rect x={X0} y="250" width={px(30) - X0} height="16" rx="3" style="fill: var(--viz-ok-soft)" />
+  <rect x={px(30)} y="250" width={X1 - px(30)} height="16" rx="3" stroke-width="1.5" stroke-dasharray="4 4" style="fill: none; stroke: var(--viz-stroke)" />
+  <circle cx={px(0)} cy="258" r="5" style="fill: var(--viz-flow)" />
+  <line x1={px(30)} y1="244" x2={px(30)} y2="272" stroke-width="2" style="stroke: var(--viz-warn)" />
+  <text x={px(30) + 6} y="288" font-size="16" style="fill: var(--viz-warn)">mapping gone</text>
+  <path d={`M${px(45) - 7} 238 l14 14 M${px(45) + 7} 238 l-14 14`} transform="translate(0 4)" stroke-width="3" style="stroke: var(--viz-bad)" />
+  <text x={px(48) + 10} y="246" font-size="16" style="fill: var(--viz-bad)">reply dropped</text>
+
+  <g font-size="15" style="fill: var(--viz-muted)">
+    <text x={X0} y="318" text-anchor="middle">0 s</text>
+    <text x={px(60)} y="318" text-anchor="middle">60 s</text>
+    <text x={X1} y="318" text-anchor="middle">120 s</text>
+  </g>
+</svg>

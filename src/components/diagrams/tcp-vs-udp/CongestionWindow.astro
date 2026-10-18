@@ -1,0 +1,85 @@
+---
+// The congestion window over time, illustrative numbers: slow start from 10 segments, a loss,
+// a cut to 70% (CUBIC's beta, RFC 9438), the cubic climb back towards the old peak, a plateau,
+// probing beyond it, and the next loss. The curve is computed from W(t) = C(t - K)^3 + Wmax.
+const X0 = 46;
+const X1 = 392;
+const Y0 = 236; // y of cwnd = 0
+const Y1 = 40; // y of cwnd = 120
+const T_MAX = 34; // round trips shown
+const W_MAX_AXIS = 120;
+const px = (t: number) => X0 + (t / T_MAX) * (X1 - X0);
+const py = (w: number) => Y0 - (w / W_MAX_AXIS) * (Y0 - Y1);
+
+// Slow start: 10, 20, 40, 80 segments per round trip, then a loss at the first peak.
+const points: [number, number][] = [];
+for (let t = 0; t <= 3; t += 0.25) points.push([t, Math.min(10 * 2 ** t, 80)]);
+const lossTimes: number[] = [3];
+// CUBIC after each loss: cut to 70%, climb back to Wmax in K round trips, then probe beyond.
+const C = 0.111; // chosen so K is about 6 round trips here (illustrative)
+let start = 3;
+let wMax = 80;
+for (const nextPeak of [100, 96]) {
+  const k = Math.cbrt((wMax * (1 - 0.7)) / C);
+  let t = 0;
+  for (;;) {
+    const w = C * (t - k) ** 3 + wMax;
+    points.push([start + t, w]);
+    if (w >= nextPeak || start + t >= T_MAX) break;
+    t += 0.25;
+  }
+  start += t;
+  lossTimes.push(start);
+  wMax = points[points.length - 1][1];
+}
+const path = points
+  .filter(([t]) => t <= T_MAX)
+  .map(([t, w], i) => `${i ? 'L' : 'M'}${px(t).toFixed(1)} ${py(w).toFixed(1)}`)
+  .join(' ');
+const firstLoss = lossTimes[0];
+const secondLoss = lossTimes[1];
+---
+
+<svg viewBox="0 0 400 290" width="100%" role="img" aria-labelledby="tu-cw-t tu-cw-d">
+  <title id="tu-cw-t">The congestion window: slow start, a loss, and CUBIC's climb back</title>
+  <desc id="tu-cw-d">
+    A line chart of the congestion window, in segments, against time in round trips. It starts at
+    10 and doubles every round trip during slow start, reaching 80 after 3 round trips, when a
+    loss occurs. The window is cut to 70 per cent, 56 segments. It then climbs quickly at first,
+    flattens as it nears the old peak of 80, and speeds up again as it probes for more, until the
+    next loss at about 100, after which the pattern repeats. The numbers are illustrative.
+  </desc>
+
+  <!-- Axes -->
+  <g stroke-width="1.5" style="stroke: var(--viz-stroke)">
+    <line x1={X0} y1={Y0} x2={X1} y2={Y0} />
+    <line x1={X0} y1={Y0} x2={X0} y2={Y1 - 8} />
+  </g>
+  <g font-size="16" style="fill: var(--viz-muted)">
+    <text x={X0 - 6} y={py(0) + 5} text-anchor="end">0</text>
+    <text x={X0 - 6} y={py(80) + 5} text-anchor="end">80</text>
+    <text x={X0 - 6} y={py(56) + 5} text-anchor="end">56</text>
+    <text x={X0 - 6} y={py(10) + 5} text-anchor="end">10</text>
+    <text x={X1} y={Y0 + 24} text-anchor="end">time, in round trips →</text>
+    <text x="4" y="22">window (segments)</text>
+  </g>
+
+  <!-- The old peak, which CUBIC aims back at -->
+  <line x1={px(firstLoss)} y1={py(80)} x2={X1} y2={py(80)} stroke-width="1.5" stroke-dasharray="4 5" style="stroke: var(--viz-muted)" />
+
+  <path d={path} fill="none" stroke-width="3" stroke-linejoin="round" style="stroke: var(--viz-flow)" />
+
+  <!-- Losses -->
+  <g stroke-width="2.5" style="stroke: var(--viz-bad)">
+    <path d={`M${px(firstLoss) - 6} ${py(80) - 16} l12 12 M${px(firstLoss) + 6} ${py(80) - 16} l-12 12`} />
+    <path d={`M${px(secondLoss) - 6} ${py(100) - 16} l12 12 M${px(secondLoss) + 6} ${py(100) - 16} l-12 12`} />
+  </g>
+
+  <g font-size="16" font-style="italic" style="font-family: var(--note-font-display)">
+    <text x={px(4.2)} y={py(24)} style="fill: var(--viz-flow)">← slow start: doubles</text>
+    <text x={px(4.2)} y={py(24) + 19} style="fill: var(--viz-flow)">every round trip</text>
+    <text x={px(firstLoss) + 12} y={py(114)} style="fill: var(--viz-bad)">loss: cut to 70%</text>
+    <text x={px(12)} y={py(46)} style="fill: var(--viz-ink)">climbs fast, slows near</text>
+    <text x={px(12)} y={py(46) + 19} style="fill: var(--viz-ink)">the old peak, then probes</text>
+  </g>
+</svg>

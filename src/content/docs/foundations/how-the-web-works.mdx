@@ -331,7 +331,9 @@ how fast the path is, so it starts cautiously. Under [RFC 6928](https://www.rfc-
 the first flight of data is at most 10 packets, about 14.6 KB, and the amount roughly doubles with
 each round trip that goes well. This is called **slow start**. A 100 KB HTML page therefore takes
 about three round trips to arrive in full (14.6, then 29.2, then 58.4 KB), which is where the
-well-known advice "fit what the first screen needs into the first 14 KB" comes from.
+well-known advice "fit what the first screen needs into the first 14 KB" comes from. The
+[TCP vs UDP](/networking/tcp-vs-udp/) page goes inside this step: how TCP repairs losses, why a lost
+packet stalls everything behind it, and when UDP is the better choice.
 
 ### Step 3: make it private (TLS)
 
