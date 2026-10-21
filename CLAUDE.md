@@ -29,8 +29,9 @@ src/components/landing/               landing page hero, animated drawings and 4
 src/styles/custom.css                 the notebook theme: colours, fonts, --viz-* diagram tokens
 examples/<slug>/python|js/            runnable code behind every snippet on the page
 research/<slug>.md                    research notes and sources (not published)
-CURRICULUM.md                         master topic list: track, order, slug, status
-.claude/skills/add-topic/             the workflow, page template, style guide and visuals guide
+CURRICULUM.md                         master topic list: track, order, slug, status, plus the Inbox of saved ideas
+.claude/skills/add-topic/             the workflow, page templates (single topic, comparison), style guide, visuals guide
+.claude/skills/save-topic/            quick capture of topic ideas into the CURRICULUM.md Inbox
 ```
 
 ## Commands
@@ -41,12 +42,14 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 
 ## Rules
 
-1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`.
-2. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`.
-3. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
-4. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
+1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`,
+   or `template-compare.mdx` for "X vs Y vs Z" pages. Save ideas for later with `/save-topic`.
+2. Reading budget: 35–45 minutes for a topic page, 20–30 for a comparison page (style guide, "Length").
+3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`.
+4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
+5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
    Credit every source in the page's Further reading.
-5. Every code snippet on a page has a runnable twin in `examples/<slug>/` that was actually run.
-6. Visuals work in light and dark mode, at 360px and 1280px wide, and with reduced motion.
-7. Keep `CURRICULUM.md` in sync with what exists on disk.
-8. One topic per session works best. Run `/clear` before starting the next topic.
+6. Every code snippet on a page has a runnable twin in `examples/<slug>/` that was actually run.
+7. Visuals work in light and dark mode, at 360px and 1280px wide, and with reduced motion.
+8. Keep `CURRICULUM.md` in sync with what exists on disk.
+9. One topic per session works best. Run `/clear` before starting the next topic.

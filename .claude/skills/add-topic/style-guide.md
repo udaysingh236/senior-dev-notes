@@ -103,5 +103,18 @@ About one aside per 500 words. More than that and they stop being noticed.
 
 ## Length
 
-- A typical page is 3,000–7,000 words. Algorithm-heavy topics can go past 10,000.
-- Long is fine. Padding is not: every section must teach something the reader didn't know.
+Readers should finish a page in one sitting. The "min read" in the page header is the budget
+(it counts about 220 words a minute plus about 20 lines of code a minute):
+
+| Page shape | Reading time | Prose | Code shown on the page |
+|---|---|---|---|
+| Single topic (`template.mdx`) | 35–45 min | about 6,000–7,500 words | at most ~150 lines |
+| Comparison (`template-compare.mdx`) | 20–30 min | about 4,000–5,500 words | at most ~100 lines |
+
+- Everything on the page counts, including `<details>` answers and asides.
+- When a page runs long, cut in this order: repeated explanations, a fourth or fifth real-world
+  example, extra gotchas, code that the `examples/` folder already holds. Keep the story, the
+  core idea and the worked examples with numbers.
+- A topic that truly cannot fit is two topics. Split it into an overview page and child pages
+  rather than going over budget.
+- Short is not the goal; clear is. Every section must teach something the reader didn't know.

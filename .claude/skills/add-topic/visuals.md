@@ -15,6 +15,9 @@ Every page should let the reader see the idea, and where it moves, watch it move
 - Algorithm topics: one sim mode per algorithm, plus a compare mode that runs them side by side on
   the same input when that teaches something.
 - Protocol and flow topics (TLS, OAuth, DCR, 2PC): a step-through sequence diagram.
+- Comparison pages (`template-compare.mdx`): one overlap (hero) diagram, one small diagram per
+  concept drawn in the same layout so they can be compared at a glance, and a decision-flow
+  diagram or list. A sim is optional: add one only when the concepts differ in behaviour over time.
 
 ## Diagram rules (SVG)
 

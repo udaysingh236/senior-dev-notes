@@ -229,3 +229,11 @@ Each case study ties many concepts together and links back to their pages.
 | 6 | Design a payment system | payment-system | new | planned |
 | 7 | Design a distributed cache | distributed-cache | new | planned |
 | 8 | Design a web crawler | web-crawler | new | planned |
+
+## Inbox
+
+Topic ideas saved with `/save-topic`, oldest first. `/add-topic` offers these first and moves each
+one into its track's table when the page is written. Bullets, not a table: the site build reads
+only the track tables above.
+
+- 2026-10-21 · Reverse proxy vs load balancer vs API gateway · `traffic/proxy-lb-gateway` · compare
