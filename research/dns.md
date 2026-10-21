@@ -183,3 +183,14 @@ rollover page, Kubernetes DNS docs, Node dns docs, Route 53 routing policies, Cl
 flattening.
 Engineering: AWS DynamoDB summary, DENIC analysis, Cloudflare .de post, APNIC on Dyn.
 Explainers: Julia Evans, Cloudflare Learning Center.
+
+## Update 2026-10-21: trimmed to the reading budget
+
+- Page cut from about 63 min (9,850 words, 357 code lines) to about 43 min (about 7,700 words,
+  157 code lines). Removed: the toy server and DoH code on the page (still in examples/),
+  repeated TCP 53, ndots and resolve-once gotchas, the second TTL table, the HTTPS-record and
+  DNSSEC-adoption paragraph. All diagrams, both step-throughs and both sim modes kept.
+- "As of" facts re-checked: the network in this session could not reach IANA, root-servers.org or
+  ICANN, so the 1,437 TLD count and the root key rollover are still from the 2026-10-18 reading.
+  A search confirmed KSK-2024 was scheduled to sign the root zone from 11 October 2026; no
+  post-rollover report was found, so the page no longer claims "no widespread disruption".
