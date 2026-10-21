@@ -44,7 +44,7 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 
 1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`,
    or `template-compare.mdx` for "X vs Y vs Z" pages. Save ideas for later with `/save-topic`.
-2. Reading budget: 35–45 minutes for a topic page, 20–30 for a comparison page (style guide, "Length").
+2. Reading budget: 40–45 minutes per page, up to 50 when the topic needs it (style guide, "Length").
 3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
 5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
@@ -53,3 +53,9 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 7. Visuals work in light and dark mode, at 360px and 1280px wide, and with reduced motion.
 8. Keep `CURRICULUM.md` in sync with what exists on disk.
 9. One topic per session works best. Run `/clear` before starting the next topic.
+
+## Git
+
+- Commit directly on `main`. Don't push unless Uday asks: every push to `main` is a Netlify
+  deploy, and the monthly build quota is limited. Uday pushes when a batch is ready.
+- Run `npm run build` before every commit, since Netlify no longer catches failures per commit.

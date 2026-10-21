@@ -3,7 +3,7 @@ name: save-topic
 description: Save one or more topic ideas to the Inbox in CURRICULUM.md for a future /add-topic run. Checks for duplicates, suggests a track and slug, and records the user's note. Does not research or write pages.
 argument-hint: "<topic name>[; another topic] [-- note on the angle you care about]"
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
+allowed-tools: Bash(git status *) Bash(git add *) Bash(git commit *)
 ---
 
 # Save a topic idea: $ARGUMENTS
@@ -31,8 +31,8 @@ This is a quick capture, not research. Read `CURRICULUM.md` and nothing else. Fi
 
    Fields: date added · title · `track/slug` · `compare` only for comparison pages · `note:` only
    when the user gave one. Keep bullets, not a table: track tables are parsed by the site build.
-5. Commit only `CURRICULUM.md`: `docs(curriculum): save <title> to inbox` (or `save N topics`).
-   Push to the current branch.
+5. Commit only `CURRICULUM.md` on `main`: `docs(curriculum): save <title> to inbox` (or
+   `save N topics`). Don't push (see CLAUDE.md, "Git").
 
 ## Reply
 

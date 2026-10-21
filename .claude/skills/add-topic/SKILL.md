@@ -1,7 +1,7 @@
 ---
 name: add-topic
-description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push so it goes live. Works for topics already in CURRICULUM.md and brand-new ones.
-argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--no-push] [--update]"
+description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build and commit to main (push only with --push). Works for topics already in CURRICULUM.md and brand-new ones.
+argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--push] [--update]"
 disable-model-invocation: true
 allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node *) Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
 ---
@@ -25,7 +25,7 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
   everything in those notes.
 - Flags:
   - `--review` stop after the outline (Phase 3) and wait for approval
-  - `--no-push` commit but don't push
+  - `--push` also push after committing (pushing `main` deploys the site; see CLAUDE.md, "Git")
   - `--update` rewrite or extend an existing page instead of creating one
 - Expand abbreviations before searching (for example DCR = Dynamic Client Registration,
   CIMD = Client ID Metadata Documents). If an abbreviation is ambiguous, pick the meaning that fits
@@ -100,8 +100,8 @@ If `--review` was given: show the outline and wait for the user.
 Create `src/content/docs/<track>/<slug>.mdx` from the template chosen in Phase 1.
 
 - Follow the section order and the voice and clarity rules in `style-guide.md`.
-- Stay inside the reading budget in `style-guide.md`: 35–45 minutes for a single topic, 20–30 for
-  a comparison, as shown by the "min read" in the page header. When a section runs long, cut or
+- Stay inside the reading budget in `style-guide.md`: 40–45 minutes, up to 50 when the topic
+  needs the extra visuals, as shown by the "min read" in the page header. When a section runs long, cut or
   move detail to the page that owns it; don't squeeze the opening story or the core idea.
 - Weave in the user's notes from Phase 0.
 - Remove every template comment.
@@ -134,7 +134,7 @@ Follow `visuals.md`.
 Fix anything that fails. Don't publish with known failures.
 
 - [ ] All sections of the chosen template present, in order, with no leftover template comments
-- [ ] Reading time in the page header is inside the budget (35–45 min single, 20–30 min comparison)
+- [ ] Reading time in the page header is inside the budget (40–45 min, 50 at most)
 - [ ] Opens with a problem story; nothing explained before it's motivated
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
@@ -152,7 +152,8 @@ Fix anything that fails. Don't publish with known failures.
    `research/<slug>.md`, `CURRICULUM.md`, and any pages or shared components touched in Phase 5
    and Phase 7.
 3. Commit: `docs(<track>): add <Title>` (or `update <Title>` with `--update`).
-4. Unless `--no-push`: `git push`. Netlify builds and deploys `main` in a minute or two.
+4. Commit on `main`. Don't push unless `--push` was given: every push to `main` is a Netlify
+   deploy, and the build quota is limited. Tell the user the commit is ready to push.
 5. If the push or build fails, report the error plainly and don't retry blindly.
 
 ## Final report to the user
