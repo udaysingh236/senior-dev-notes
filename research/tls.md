@@ -226,3 +226,14 @@ Radar PQ post, GAO-18-559, Ericsson press release, Azure Feb 2013 post-mortem, F
 interim report, Let's Encrypt 2020 revocation thread, heartbleed.com, netmeister hybrid kex.
 
 Explainers: The Illustrated TLS 1.3 Connection, HPBN ch. 4, Cloudflare Learning.
+
+## Re-check, 2026-10-21 (page trimmed to the reading budget)
+
+- Let's Encrypt: 64-day default from 10 February 2027 (announced 7 October 2026; staging from
+  14 October 2026); 45 days still planned for February 2028; 90-day default until then.
+  https://letsencrypt.org/2026/10/07/64-day-certs
+- AWS ALB: console default still ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09; CLI / CloudFormation /
+  CDK default still ELBSecurityPolicy-2016-08.
+  https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html
+- Mozilla root count (121, Sept 2026), Cloudflare 0-RTT methods and Istio 24 h default not re-fetched:
+  those hosts were unreachable from this session; values from 2026-10-18 kept.
