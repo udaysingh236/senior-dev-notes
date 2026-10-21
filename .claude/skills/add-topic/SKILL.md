@@ -1,7 +1,7 @@
 ---
 name: add-topic
-description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build and commit to main (push only with --push). Works for topics already in CURRICULUM.md and brand-new ones.
-argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--push] [--update]"
+description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
+argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--no-push] [--update]"
 disable-model-invocation: true
 allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node *) Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
 ---
@@ -9,7 +9,7 @@ allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node 
 # Add a topic: $ARGUMENTS
 
 Before starting, read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
-`style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
+`template-case-study.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
 
 Work through the phases in order. Don't skip a phase because the topic feels familiar.
 
@@ -25,7 +25,7 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
   everything in those notes.
 - Flags:
   - `--review` stop after the outline (Phase 3) and wait for approval
-  - `--push` also push after committing (pushing `main` deploys the site; see CLAUDE.md, "Git")
+  - `--no-push` commit on `develop` but don't push
   - `--update` rewrite or extend an existing page instead of creating one
 - Expand abbreviations before searching (for example DCR = Dynamic Client Registration,
   CIMD = Client ID Metadata Documents). If an abbreviation is ambiguous, pick the meaning that fits
@@ -53,6 +53,10 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
      and does not repeat their mechanics.
    - Topics such as "TCP vs UDP" or "SQL vs NoSQL", where one page teaches both sides in depth and
      no separate deep pages exist, stay single-topic pages.
+   - **Case study** ("How X works" for one real system, or "Design X"), where the page traces one
+     system end to end and pulls many concepts together: `template-case-study.mdx`, in the
+     `case-studies` track. Each deep dive links to its concept's own page; add missing concepts
+     to `CURRICULUM.md` as `planned`.
 7. Decide `prerequisites` and `next` slugs (planned pages are fine).
 8. Create `research/<slug>.md`.
 
@@ -147,20 +151,20 @@ Fix anything that fails. Don't publish with known failures.
 
 ## Phase 9 — Publish
 
-1. `git pull --rebase`
+1. `git checkout develop && git pull --rebase origin develop`
 2. Stage only the files for this topic: the page, its components, `examples/<slug>/`,
    `research/<slug>.md`, `CURRICULUM.md`, and any pages or shared components touched in Phase 5
    and Phase 7.
 3. Commit: `docs(<track>): add <Title>` (or `update <Title>` with `--update`).
-4. Commit on `main`. Don't push unless `--push` was given: every push to `main` is a Netlify
-   deploy, and the build quota is limited. Tell the user the commit is ready to push.
+4. Unless `--no-push`: `git push origin develop`. Never push to `main`: every push there is a
+   Netlify deploy. Uday merges `develop` into `main` once a week (see CLAUDE.md, "Git").
 5. If the push or build fails, report the error plainly and don't retry blindly.
 
 ## Final report to the user
 
 Keep it short:
 
-- the live URL of the page (site URL + `/<track>/<slug>/`)
+- the URL the page will have once `develop` is merged (site URL + `/<track>/<slug>/`)
 - word count, number of diagrams, sims or step-throughs, code examples, and sources
 - any assumption made (abbreviation meaning, placement, merged or split pages)
 - anything that deserves a human double-check, such as fast-moving facts

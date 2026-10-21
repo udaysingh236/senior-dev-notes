@@ -3,7 +3,7 @@ name: save-topic
 description: Save one or more topic ideas to the Inbox in CURRICULUM.md for a future /add-topic run. Checks for duplicates, suggests a track and slug, and records the user's note. Does not research or write pages.
 argument-hint: "<topic name>[; another topic] [-- note on the angle you care about]"
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git add *) Bash(git commit *)
+allowed-tools: Bash(git status *) Bash(git checkout *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
 ---
 
 # Save a topic idea: $ARGUMENTS
@@ -20,6 +20,8 @@ This is a quick capture, not research. Read `CURRICULUM.md` and nothing else. Fi
      user's note adds an angle, append the note to that Inbox entry or mention it for `/add-topic`.
    - **A comparison of existing rows** ("X vs Y vs Z" where X, Y and Z are rows): add it to the
      Inbox and say it will use the comparison template.
+   - **A walkthrough of one real system** ("How X works", "Design X"): add it to the Inbox in the
+     `case-studies` track and say it will use the case-study template.
    - **New:** add it to the Inbox.
 3. For each new Inbox entry, suggest a track (a folder from `CURRICULUM.md`) and a kebab-case slug.
    Don't create a new track; if nothing fits, write `track?`.
@@ -29,10 +31,11 @@ This is a quick capture, not research. Read `CURRICULUM.md` and nothing else. Fi
    - 2026-10-21 · Reverse proxy vs load balancer vs API gateway · `traffic/proxy-lb-gateway` · compare — note: why people mix them up in interviews
    ```
 
-   Fields: date added · title · `track/slug` · `compare` only for comparison pages · `note:` only
+   Fields: date added · title · `track/slug` · `compare` or `case-study` only for those page shapes · `note:` only
    when the user gave one. Keep bullets, not a table: track tables are parsed by the site build.
-5. Commit only `CURRICULUM.md` on `main`: `docs(curriculum): save <title> to inbox` (or
-   `save N topics`). Don't push (see CLAUDE.md, "Git").
+5. On `develop` (`git checkout develop && git pull --rebase origin develop`), commit only
+   `CURRICULUM.md`: `docs(curriculum): save <title> to inbox` (or `save N topics`). Push with
+   `git push origin develop`. Never push to `main` (see CLAUDE.md, "Git").
 
 ## Reply
 

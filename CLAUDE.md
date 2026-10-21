@@ -30,7 +30,7 @@ src/styles/custom.css                 the notebook theme: colours, fonts, --viz-
 examples/<slug>/python|js/            runnable code behind every snippet on the page
 research/<slug>.md                    research notes and sources (not published)
 CURRICULUM.md                         master topic list: track, order, slug, status, plus the Inbox of saved ideas
-.claude/skills/add-topic/             the workflow, page templates (single topic, comparison), style guide, visuals guide
+.claude/skills/add-topic/             the workflow, page templates (single topic, comparison, case study), style guide, visuals guide
 .claude/skills/save-topic/            quick capture of topic ideas into the CURRICULUM.md Inbox
 ```
 
@@ -43,7 +43,8 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 ## Rules
 
 1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`,
-   or `template-compare.mdx` for "X vs Y vs Z" pages. Save ideas for later with `/save-topic`.
+   `template-compare.mdx` for "X vs Y vs Z" pages, or `template-case-study.mdx` for "How X works"
+   walkthroughs of one real system. Save ideas for later with `/save-topic`.
 2. Reading budget: 40–45 minutes per page, up to 50 when the topic needs it (style guide, "Length").
 3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
@@ -56,6 +57,8 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 
 ## Git
 
-- Commit directly on `main`. Don't push unless Uday asks: every push to `main` is a Netlify
-  deploy, and the monthly build quota is limited. Uday pushes when a batch is ready.
+- All work goes on the `develop` branch: commit there and push `develop`, so nothing is lost if a
+  cloud container is reclaimed.
+- Never push to `main` and never open a PR into it. Every push to `main` is a Netlify deploy, and
+  the monthly build quota is limited. Uday merges `develop` into `main` once a week.
 - Run `npm run build` before every commit, since Netlify no longer catches failures per commit.

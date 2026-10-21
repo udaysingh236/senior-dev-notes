@@ -93,6 +93,9 @@ About one aside per 500 words. More than that and they stop being noticed.
 - Prefer primary sources: RFCs, specs, official docs, original papers.
 - If sources disagree, say so and explain why.
 - No invented statistics. If a number is only illustrative, say so.
+- Case studies of real systems: most companies publish little about their internals. Source every
+  claim about the real system, and label everything else as a design for a system like it
+  ("one way to build this is…"). Never present a guess as the company's actual design.
 
 ## Originality
 
@@ -110,6 +113,7 @@ Readers should finish a page in one sitting. The "min read" in the page header i
 |---|---|---|---|
 | Single topic (`template.mdx`) | 40–45 min | about 7,000–8,000 words | at most ~150 lines |
 | Comparison (`template-compare.mdx`) | 40–45 min | about 7,000–8,000 words | at most ~100 lines |
+| Case study (`template-case-study.mdx`) | 40–50 min | about 7,500–8,500 words | at most ~150 lines |
 
 - Up to 50 minutes is fine when the topic needs it: comparisons of three or more concepts, and
   end-to-end topics that need several diagrams, step-throughs or sims. Past 50, split the page.
