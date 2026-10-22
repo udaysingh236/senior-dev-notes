@@ -1,0 +1,64 @@
+---
+// What each box can read in one HTTPS request. A layer 4 balancer reads only the IP and TCP
+// headers; anything that ends TLS can read the HTTP request and its body too.
+const rows = [
+  { label: 'IP: 203.0.113.7 → server', layer: 'L3', enc: false },
+  { label: 'TCP: port 51234 → 443', layer: 'L4', enc: false },
+  { label: 'TLS record (encrypted)', layer: 'TLS', enc: true },
+  { label: 'GET /orders/42', layer: 'L7', enc: true, inner: true },
+  { label: 'X-Api-Key, Cookie', layer: 'L7', enc: true, inner: true },
+  { label: 'body {"qty": 2}', layer: 'L7', enc: true, inner: true },
+];
+const TOP = 10;
+const H = 40;
+---
+
+<svg viewBox="0 0 400 386" width="100%" role="img" aria-labelledby="plg-ws-t plg-ws-d">
+  <title id="plg-ws-t">What each box can see in one HTTPS request</title>
+  <desc id="plg-ws-d">
+    One HTTPS request drawn as stacked layers: the IP header with source and destination
+    addresses, the TCP header with ports, then a TLS record that hides the HTTP request line, the
+    headers such as the API key and cookies, and the body. A bracket shows that a layer 4 load
+    balancer reads only the IP and TCP headers. A second bracket shows that a reverse proxy, layer 7
+    load balancer or API gateway, once it ends TLS, can read everything.
+  </desc>
+
+  <g font-size="16">
+    {
+      rows.map((r, i) => {
+        const y = TOP + i * H;
+        const x = r.inner ? 24 : 8;
+        const w = r.inner ? 270 : 302;
+        return (
+          <g>
+            <rect x={x} y={y} width={w} height={H - 6} rx="4" stroke-width="1.5"
+              style={r.layer === 'TLS'
+                ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'
+                : r.inner
+                  ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'
+                  : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'} />
+            <text x={x + 8} y={y + 23} style="fill: var(--viz-ink); font-family: var(--sl-font-mono)" font-size="16">{r.label}</text>
+          </g>
+        );
+      })
+    }
+  </g>
+  <rect x="8" y={TOP + 2 * H} width="302" height={4 * H - 6} rx="6" fill="none" stroke-width="2" stroke-dasharray="5 4" style="stroke: var(--viz-ok)" />
+
+  <g stroke-width="2" fill="none">
+    <path d={`M318 ${TOP} h10 v${2 * H - 6} h-10`} style="stroke: var(--viz-server)" />
+    <path d={`M318 ${TOP} h30 v${6 * H - 6} h-30`} style="stroke: var(--viz-client)" />
+  </g>
+  <g font-size="15" font-weight="700">
+    <text x="334" y={TOP + 44} style="fill: var(--viz-server)">L4</text>
+    <text x="354" y={TOP + 140} style="fill: var(--viz-client)">L7</text>
+  </g>
+
+  <g font-size="16">
+    <text x="8" y="276" font-weight="700" style="fill: var(--viz-server)">L4 load balancer</text>
+    <text x="8" y="298" style="fill: var(--viz-muted)">reads addresses and ports, then forwards</text>
+    <text x="8" y="320" style="fill: var(--viz-muted)">bytes it cannot read</text>
+    <text x="8" y="350" font-weight="700" style="fill: var(--viz-client)">Proxy, L7 balancer, gateway</text>
+    <text x="8" y="372" style="fill: var(--viz-muted)">end TLS, then read and change everything</text>
+  </g>
+</svg>

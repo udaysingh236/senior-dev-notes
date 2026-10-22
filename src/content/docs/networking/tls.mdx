@@ -1111,6 +1111,7 @@ balancer, or use mTLS between services.
 <NextTopics items={[
   { slug: 'http-evolution', why: 'TLS 1.3 and ALPN are how HTTP/2 and HTTP/3 get negotiated. How each HTTP version uses the connection TLS sets up, and why HTTP/3 builds TLS into QUIC.' },
   { slug: 'reverse-proxies', why: 'Where TLS termination actually happens: what a proxy in front of your services does with the decrypted traffic, and how to configure re-encryption.' },
+  { slug: 'proxy-lb-gateway', why: 'The boxes that terminate TLS in front of your services: reverse proxies, layer 4 and layer 7 load balancers, and API gateways, and which one can read what.' },
   { slug: 'cdn-and-edge-caching', why: 'CDNs terminate TLS close to users to cut handshake round trips. How they do it, and how the edge-to-origin leg should be protected.' },
   { slug: 'encryption-at-rest', why: 'The other half of encryption: protecting data once it arrives, in databases, disks and backups, and the key management behind it.' },
   { slug: 'secrets-management', why: 'Private keys are secrets. Where to keep them, how services get them, and how to rotate them without outages.' },

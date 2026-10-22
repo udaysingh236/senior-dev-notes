@@ -1,0 +1,113 @@
+---
+// One role drawn in a fixed layout (client, the box in front, what sits behind it), so the three
+// roles can be compared at a glance: same positions, different jobs.
+interface Props {
+  kind: 'proxy' | 'lb' | 'gateway';
+}
+const { kind } = Astro.props;
+const id = `plg-role-${kind}`;
+
+const ROLE = {
+  proxy: {
+    title: 'A reverse proxy in front of one app',
+    name: ['reverse', 'proxy'],
+    backends: [{ label: 'app', y: 74 }],
+    sees: 'sees: the whole HTTP request',
+    does: 'does: TLS, buffer, cache, headers',
+    desc: 'A client sends a request to the reverse proxy, which forwards it to a single app server. The proxy sees the whole HTTP request and can end TLS, buffer slow clients, cache answers and add headers.',
+  },
+  lb: {
+    title: 'A load balancer in front of three copies of one app',
+    name: ['load', 'balancer'],
+    backends: [
+      { label: 'app #1', y: 22 },
+      { label: 'app #2', y: 74, down: true },
+      { label: 'app #3', y: 126 },
+    ],
+    sees: 'sees: connections (L4) or requests (L7)',
+    does: 'does: spread load, skip the unhealthy',
+    desc: 'A client sends a request to the load balancer, which picks one of three identical copies of the app. The middle copy has failed its health check and gets no traffic. It works on connections at layer 4 or on requests at layer 7.',
+  },
+  gateway: {
+    title: 'An API gateway in front of three different services',
+    name: ['API', 'gateway'],
+    backends: [
+      { label: 'orders', y: 22 },
+      { label: 'users', y: 74 },
+      { label: 'payments', y: 126 },
+    ],
+    sees: 'sees: the request, and who is calling',
+    does: 'does: keys, limits, routes by path',
+    desc: 'A client sends a request with an API key to the gateway. The gateway rejects calls without a valid key or over the limit with 401 or 429, and routes accepted calls by path to one of three different services: orders, users or payments.',
+  },
+}[kind];
+const BW = 84;
+---
+
+<svg viewBox="0 0 400 246" width="100%" role="img" aria-labelledby={`${id}-t ${id}-d`}>
+  <title id={`${id}-t`}>{ROLE.title}</title>
+  <desc id={`${id}-d`}>{ROLE.desc}</desc>
+  <defs>
+    <marker id={`${id}-a`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id={`${id}-r`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  <g font-size="18" font-weight="600" text-anchor="middle">
+    <rect x="4" y="70" width="76" height="44" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="42" y="98" style="fill: var(--viz-ink)">client</text>
+
+    <rect x="138" y="58" width="112" height="68" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="194" y="87" style="fill: var(--viz-ink)">{ROLE.name[0]}</text>
+    <text x="194" y="110" style="fill: var(--viz-ink)">{ROLE.name[1]}</text>
+
+    {
+      ROLE.backends.map((b) => (
+        <g>
+          <rect x={400 - BW - 4} y={b.y} width={BW} height="36" rx="5" stroke-width="2"
+            stroke-dasharray={b.down ? '5 4' : undefined}
+            style={b.down ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'} />
+          <text x={400 - BW / 2 - 4} y={b.y + 24} font-size="16" style="fill: var(--viz-ink)">{b.label}</text>
+        </g>
+      ))
+    }
+  </g>
+
+  <g stroke-width="2" fill="none">
+    <line x1="81" y1="92" x2="134" y2="92" style="stroke: var(--viz-flow)" marker-end={`url(#${id}-a)`} />
+    {
+      ROLE.backends.map((b) =>
+        b.down ? (
+          <g>
+            <line x1="251" y1="92" x2="306" y2={b.y + 18} stroke-dasharray="4 4" style="stroke: var(--viz-bad)" />
+            <text x="278" y={b.y + 8} font-size="20" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">✕</text>
+          </g>
+        ) : (
+          <line x1="251" y1="92" x2="306" y2={b.y + 18} style="stroke: var(--viz-flow)" marker-end={`url(#${id}-a)`} />
+        ),
+      )
+    }
+  </g>
+
+  {
+    kind === 'gateway' && (
+      <g>
+        <line x1="194" y1="127" x2="194" y2="160" stroke-width="2" style="stroke: var(--viz-bad)" marker-end={`url(#${id}-r)`} />
+        <text x="204" y="156" font-size="16" font-weight="700" style="fill: var(--viz-bad)">401 / 429</text>
+      </g>
+    )
+  }
+  {
+    kind === 'lb' && (
+      <text x="400" y="182" font-size="15" text-anchor="end" font-style="italic" style="fill: var(--viz-bad); font-family: var(--note-font-display)">failed health check</text>
+    )
+  }
+
+  <g font-size="17" style="fill: var(--viz-muted)">
+    <text x="4" y="208">{ROLE.sees}</text>
+    <text x="4" y="236">{ROLE.does}</text>
+  </g>
+</svg>
