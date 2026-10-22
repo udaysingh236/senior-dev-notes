@@ -74,6 +74,12 @@ Always research, even topics you know well. Aim for 6–12 sources, in this prio
 For fast-moving topics (specs, cloud products, AI tooling), find the current version and record the
 version and date.
 
+**Sources must be from 2020 or later.** Do not use any blog post, paper, talk, incident report,
+benchmark or measurement published before 2020. If a well-known fact only has an older source, find
+a 2020+ source that confirms it still holds, or drop it. The only exception is a standard that is
+still the current version (an RFC or spec in force): cite it for what it specifies, nothing more.
+Record the publication year of every source in `research/<slug>.md`.
+
 Write `research/<slug>.md` with:
 
 - key facts, each with its source URL
@@ -147,6 +153,7 @@ Fix anything that fails. Don't publish with known failures.
 - [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption
 - [ ] Every code example ran; page snippets match the files in `examples/`
 - [ ] Changeable facts carry "as of <Month YYYY>" with a source
+- [ ] Every source is from 2020 or later (except standards still in force), with its year shown in Further reading
 - [ ] Nothing copied from sources; every source listed in Further reading
 - [ ] All internal links resolve (published pages or "coming soon")
 - [ ] `npm run build` passes with no errors

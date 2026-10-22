@@ -53,7 +53,9 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
    and sims that show mechanisms, not steps.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
 5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
-   Credit every source in the page's Further reading.
+   Credit every source in the page's Further reading. No information older than 2020: every
+   source, fact and number must be from 2020 or later, except standards still in force (style
+   guide, "Accuracy").
 6. Every code snippet on a page has a runnable twin in `examples/<slug>/` that was actually run.
 7. Visuals work in light and dark mode, at 360px and 1280px wide, and with reduced motion.
 8. Keep `CURRICULUM.md` in sync with what exists on disk.

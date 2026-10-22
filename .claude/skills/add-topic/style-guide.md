@@ -27,7 +27,9 @@ rejected them. Every new or rewritten page must meet these points:
    booking steps, a request passing boxes) is not worth building. Sims show mechanisms the reader
    cannot see in a diagram: contention, races, allocation, imbalance, queues, retries multiplying.
    The reader changes an input and sees the outcome change.
-8. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
+8. **No information older than 2020** (see "Accuracy"). Old blog posts, papers, incidents and
+   measurements describe systems that have changed; use sources from 2020 onwards.
+9. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
    how they behave differently under load, not feature lists.
 
 The two rewritten pages, `case-studies/irctc-tatkal-booking` and `traffic/proxy-lb-gateway`, are
@@ -150,6 +152,12 @@ About one aside per 500 words. More than that and they stop being noticed.
 
 ## Accuracy
 
+- **No information older than 2020.** Every source, fact, number, incident, benchmark and
+  default on a page must come from material published in 2020 or later. If the only source for a
+  claim is older, find a 2020+ source that confirms it is still true, or leave the claim out. The
+  one exception is a standard that is still the current normative version (for example RFC 768,
+  UDP, 1980): cite it, but only for what the standard says, never for numbers or behaviour in the
+  wild. Write the year next to every source in Further reading so the rule can be checked.
 - Anything that can change (spec versions, product limits, defaults, prices) carries
   "as of <Month YYYY>" and a source link.
 - Prefer primary sources: RFCs, specs, official docs, original papers.
