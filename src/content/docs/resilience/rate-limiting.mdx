@@ -815,8 +815,8 @@ behind a load balancer, every user shares the load balancer's address.
 Most of the damage in the opening story was done by the client side, so the last example is a
 client. It sends 30 requests to a small API limited to a burst of 5 and 5 per second, three ways:
 retrying at once; waiting the Retry-After plus a random **jitter** that grows with each attempt;
-and pacing itself with a client-side token bucket that waits for a token instead of failing. Here
-is the retry loop, polite or not:
+and pacing itself with a `Pacer`, a client-side token bucket that waits for a token instead of
+failing. Here are the retry loop, polite or not, and the pacer:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -834,6 +834,17 @@ def get_with_retry(url: str, polite: bool, attempts: int = 6) -> tuple[bool, int
             # so they don't all return in the same millisecond.
             time.sleep((retry_after or 0) + jitter.uniform(0, backoff))
     return False, attempts
+
+
+class Pacer:
+    """A client-side token bucket that waits for a token instead of failing."""
+
+    def __init__(self, rate: float, burst: int) -> None:
+        self.bucket = TokenBucket(capacity=burst, rate=rate)
+
+    def wait(self) -> None:
+        while not (decision := self.bucket.try_acquire()).allowed:
+            time.sleep(decision.retry_after)
 ```
   </TabItem>
   <TabItem label="JavaScript">
@@ -852,6 +863,19 @@ async function getWithRetry(url, polite, attempts = 6) {
     }
   }
   return { succeeded: false, attempts };
+}
+
+/** A client-side token bucket that waits for a token instead of failing. */
+class Pacer {
+  constructor(rate, burst) {
+    this.bucket = new TokenBucket(burst, rate);
+  }
+
+  async wait() {
+    for (let d = this.bucket.tryAcquire(); !d.allowed; d = this.bucket.tryAcquire()) {
+      await sleep(d.retryAfter * 1000);
+    }
+  }
 }
 ```
   </TabItem>
