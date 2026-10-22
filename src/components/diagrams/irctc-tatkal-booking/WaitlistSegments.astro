@@ -1,0 +1,58 @@
+---
+// A cancellation frees a few segments on one berth. Only waitlisted journeys that fit entirely
+// inside the freed segments can use them, so WL 2 and WL 4 confirm while WL 1 and WL 3 stay.
+const ST = ['NDLS', 'MTJ', 'AGC', 'GWL', 'VGLJ', 'BPL', 'ET', 'NGP'];
+const X0 = 44;
+const W = 50;
+const wl = [
+  { name: 'WL 1', from: 0, to: 7, ok: false, note: 'needs NDLS→NGP' },
+  { name: 'WL 2', from: 2, to: 3, ok: true, note: '' },
+  { name: 'WL 3', from: 1, to: 5, ok: false, note: 'starts at MTJ' },
+  { name: 'WL 4', from: 3, to: 5, ok: true, note: '' },
+];
+---
+
+<svg viewBox="0 0 400 340" width="100%" role="img" aria-labelledby="tk-ws-t tk-ws-d">
+  <title id="tk-ws-t">Why waitlist numbers do not confirm in order</title>
+  <desc id="tk-ws-d">
+    A passenger booked from Agra Cantt to Bhopal cancels, which frees segments 2 to 4 on one berth.
+    Four waitlisted journeys are checked in order. WL 1, New Delhi to Nagpur, needs the whole route
+    and does not fit. WL 2, Agra to Gwalior, fits and is confirmed. WL 3, Mathura to Bhopal, starts
+    one segment too early and does not fit. WL 4, Gwalior to Bhopal, fits in what is left and is
+    confirmed. WL 2 and WL 4 confirm before WL 1 and WL 3.
+  </desc>
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">8 stops, 7 segments, segment 0 first</text>
+  <g transform="translate(0 40)">
+
+  <g font-size="15" style="fill: var(--viz-muted)">
+    {ST.map((s, i) => (
+      <text x={X0 + i * W} y={i % 2 ? 14 : -2} text-anchor={i === 0 ? 'start' : i === ST.length - 1 ? 'end' : 'middle'}>{s}</text>
+    ))}
+  </g>
+  {ST.map((_, i) => <line x1={X0 + i * W} y1="26" x2={X0 + i * W} y2="246" stroke-width="1" style="stroke: var(--viz-stroke)" />)}
+
+  <text x="4" y="52" font-size="15" font-weight="700" style="fill: var(--viz-ink)">B23</text>
+  <rect x={X0 + 3} y="32" width={2 * W - 6} height="30" rx="4" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <rect x={X0 + 2 * W + 3} y="32" width={3 * W - 6} height="30" rx="4" stroke-width="2" stroke-dasharray="5 3" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x={X0 + 3.5 * W} y="53" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ok)">freed</text>
+  <rect x={X0 + 5 * W + 3} y="32" width={2 * W - 6} height="30" rx="4" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+
+  {
+    wl.map((w, i) => {
+      const y = 84 + i * 40;
+      return (
+        <g>
+          <text x="4" y={y + 20} font-size="15" font-weight="700" style="fill: var(--viz-ink)">{w.name}</text>
+          <rect x={X0 + w.from * W + 3} y={y} width={(w.to - w.from) * W - 6} height="28" rx="4" stroke-width="2"
+            stroke-dasharray={w.ok ? undefined : '5 3'}
+            style={w.ok ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: none; stroke: var(--viz-bad)'} />
+          <text x={X0 + ((w.from + w.to) / 2) * W} y={y + 20} font-size="15" font-weight="700" text-anchor="middle"
+            style={`fill: ${w.ok ? 'var(--viz-ok)' : 'var(--viz-bad)'}`}>{w.ok ? 'CNF' : w.note}</text>
+        </g>
+      );
+    })
+  }
+  <text x="4" y="272" font-size="16" style="fill: var(--viz-muted)">checked in order; each fit takes its bits</text>
+  <text x="4" y="294" font-size="16" font-weight="700" style="fill: var(--viz-ink)">WL 2 and WL 4 confirm; WL 1 still waits</text>
+  </g>
+</svg>

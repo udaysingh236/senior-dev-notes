@@ -1,0 +1,19 @@
+---
+// DNS round robin across four servers, through resolver caches. See rr-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="dns-rr"
+  title="Round robin through resolver caches"
+  description="Four bars show the load on four servers that share one name; the dashed line is a fair quarter of the traffic. Bars turn amber above 1.15 times and red above 1.5 times the fair share. Below, a line traces the busiest server's load divided by the fair share over two simulated hours."
+  watchFor="With 10 resolvers and every client taking the first address, some server is above 1.5 times its share the whole time and the worst moment reaches about 3.5 times, yet the busiest server's two-hour average is only 1.19 times: an average hides it. Two hundred resolvers help less than you would expect, because the biggest one still carries 17% of users. Drop the first-address share to 0% and the load is even. The TTL does not change how uneven it is, only how long one server stays hot."
+  viewBox="0 0 400 320"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRrModel } from './rr-model';
+
+  mountAll('dns-rr', createRrModel);
+</script>

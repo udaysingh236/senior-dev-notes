@@ -190,3 +190,78 @@ Explainers
 - Chrome 154 "Always Use Secure Connections" by default, October 2026: re-confirmed (Google security blog, Oct 2025).
 - Not re-checked (hosts blocked from the sandbox): root-servers.org instance count (2,047) and the
   cloudping.co Mumbai to N. Virginia RTT (about 187 ms). Both last checked 2026-10-18.
+
+## Rewrite, 2026-10-22 (owner's standard: hook question, mechanisms, no padding)
+
+New angle: where the time in a page load goes, counted in round trips; why bandwidth barely
+matters for the critical path; what silently resets connection reuse; what HTTP/3 does and does
+not fix; caches per layer; why a CDN speeds up uncacheable pages. DNS walk, URL anatomy, HTTP
+message format, status codes, rendering pipeline and the DNS incidents were cut (other pages own
+them or every engineer knows them).
+
+### New facts and sources
+
+- Belshe (Google), 2010: RTT fixed at 60 ms, 25 popular pages; 5 -> 10 Mbit/s improved page load
+  time ~5%; at 10 Mbit/s pages used ~16% of capacity; every RTT reduction kept helping.
+  https://www.belshe.com/2010/05/24/
+- Mostafa, Wittie, Goel (arXiv 2503.03641, 2025) push back: on mobile, bandwidth matters more for
+  Speed Index with large images. https://arxiv.org/html/2503.03641v1
+- Linux `net.ipv4.tcp_slow_start_after_idle` default 1 (RFC 2861 behaviour): after idle longer
+  than the RTO the cwnd is reduced (halved per RTO idle, not below the restart window). Linux
+  min RTO 200 ms. https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html
+- Linux `tcp_syn_retries` default 6 -> ~127 s connect timeout (1 s initial RTO; 63 s to the last
+  retransmission + 64 s). Before 3.7 the default 5 gave ~180 s. tcp(7) man page.
+- Windows: InitialRto 3 s, MaxSynRetransmissions 2 -> 3 + 6 + 12 = 21 s (ServerFault, Catchpoint
+  docs, Thales docs for netsh defaults). Matches the measured 21.1 s.
+- Chromium: 6 sockets per group for normal HTTP/1.1 pools, 255 for WebSockets
+  (net/socket/client_socket_pool_manager.cc, main branch, read 2026-10-22).
+- HTTP/2 connection coalescing: reuse a connection for another host if it resolves to the same IP
+  (implementation-specific) and the certificate covers the host (RFC 7540/9113 §9.1.1).
+  Browsers differ in heuristics (Stenberg, 2016 blog).
+- Fonts load in anonymous CORS mode; separate socket pool; preconnect needs `crossorigin`
+  (web.dev preconnect article; Grigorik 2015 "Eliminating roundtrips with preconnect").
+- HTTP cache partitioning: Chrome 86 (Oct 2020), keyed by top-level site and frame site; Firefox
+  85 (Jan 2021); Safari earlier. https://developer.chrome.com/blog/http-cache-partitioning
+- Chromium network state partitioning (Intent to Ship, 2022): connections (H1/H2/H3/WebSocket),
+  DNS cache, ALPN/H2 support info, TLS/H3 resumption keyed by network partition key; Chromium
+  may open up to 6 connections when it does not know H2/H3 support. Shipping milestone not
+  confirmed in search. https://groups.google.com/a/chromium.org/g/blink-dev/c/tJa6uzXu_IA
+- Cloudflare 2016: nginx fixed 16 KB TLS records (`ssl_buffer_size`); dynamic record sizing
+  patch starting at 1369 bytes. https://blog.cloudflare.com/optimizing-tls-over-tcp-to-reduce-latency/
+- CDN Planet Feb 2017 initcwnd survey: Akamai 32, CacheFly 46, Cloudflare and Fastly 10; 6 of 15
+  CDNs at 10. Dated. https://www.cdnplanet.com/blog/initcwnd-settings-major-cdn-providers/
+- Stenberg, HTTP/3 explained: at around 2% packet loss HTTP/1 users tend to do better than
+  HTTP/2 users (several connections, so a loss stalls only one). Illustrative, not a study.
+- RFC 9308 (QUIC applicability): measurement studies found 3–5% of networks block all UDP;
+  browsers race or fall back to TCP.
+- RFC 9460 HTTPS records can advertise h3 before the first connection; browser support varies
+  (sources disagree on Chrome defaults) — kept hedged on the page.
+- Google QUIC paper (SIGCOMM 2017): search latency -8.0% desktop, -3.6% mobile; YouTube
+  rebuffers -18.0% desktop, -15.3% mobile.
+  https://research.google/pubs/the-quic-transport-protocol-design-and-internet-scale-deployment/
+- Cloudflare Radar 2025: HTTP/3 ~21%, HTTP/2 ~50% of requests (via secondary summary of the
+  report; primary chart not reachable from the sandbox).
+- nginx `ssl_early_data` default off. https://nginx.org/en/docs/http/ngx_http_ssl_module.html
+- Let's Encrypt ended OCSP on 6 Aug 2025 (not used on the page; context for revocation costs).
+
+### Model numbers used on the page (seed 42, checked headlessly with esbuild bundles)
+
+- Slow-start sim defaults (100 KB, 150 ms, 100 Mbit/s, initcwnd 10, 0% loss): 3 rounds
+  (10, 20, 39 packets), 455 ms; 10x bandwidth 450 ms; half RTT 230 ms; naive 8 ms. 2% loss:
+  6 rounds, 900 ms. 1 MB: 7 rounds, 1.06 s (1.05 s at 1 Gbit/s). 1 MB at 1% loss: 6.45 s.
+- HOL sim defaults (12 files x 30 KB, 100 ms, 2% loss): HTTP/1.1 600 ms (avg 375 ms), HTTP/2
+  2.1 s (avg 1.13 s), HTTP/3 2.1 s (avg 1.13 s). At 0% loss: 393 / 550 / 550 ms. HTTP/2 vs HTTP/3
+  completion times stay close across loss rates in this model; the gap to HTTP/1.1 comes from six
+  congestion windows.
+- Waterfall sim defaults (150 ms, HTTP/2, no CDN, no preconnect, first visit): first byte 540 ms,
+  render 990 ms, font 1.15 s, API 1.76 s, all 1.78 s, 4 connections. HTTP/1.1: render 1.14 s,
+  all 2.06 s, 11 connections. HTTP/3: render 840 ms, all 1.48 s. Preconnect: API 1.42 s. CDN:
+  render 360 ms, all 760 ms. Repeat visit: render 650 ms, all 1.08 s (HTTP/3 repeat: 482 ms).
+- latency_budget.py: 30 KB uncacheable page, 150 ms: direct 692 ms, via 20 ms edge 322 ms.
+
+### Measurements
+
+- The sandbox on 2026-10-22 had no outside DNS and no direct sockets, so the by_hand, probe and
+  curl outputs on the page are the 2026-10-18 runs from a network in India. The files were
+  re-run here against local targets (a local TLS server for by_hand; IP literals and `.invalid`
+  for probe) to confirm they still run. Note: in the sandbox, 10.255.255.1 answers (a proxy).

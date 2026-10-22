@@ -1,0 +1,62 @@
+---
+// One berth on a route with 8 stations and 7 segments, stored as a 7-bit mask. Two journeys are
+// already on it; a third request ANDs its own mask with the berth's mask to see if it fits.
+const ST = ['NDLS', 'MTJ', 'AGC', 'GWL', 'VGLJ', 'BPL', 'ET', 'NGP'];
+const X0 = 44;
+const W = 50;
+const berth = [1, 1, 0, 0, 0, 1, 1]; // NDLS-AGC and BPL-NGP sold
+const want = [0, 0, 1, 1, 1, 0, 0]; // AGC-BPL
+const bad = [0, 1, 1, 0, 0, 0, 0]; // MTJ-GWL
+const row = (bits: number[], y: number, on: string, onSoft: string) =>
+  bits.map((b, i) => ({ x: X0 + i * W + 3, y, b, on, onSoft }));
+---
+
+<svg viewBox="0 0 400 370" width="100%" role="img" aria-labelledby="tk-sm-t tk-sm-d">
+  <title id="tk-sm-t">One berth as a bitmask of segments</title>
+  <desc id="tk-sm-d">
+    Eight stations from New Delhi to Nagpur, with seven segments between them. Berth 23 is sold New
+    Delhi to Agra Cantt and Bhopal to Nagpur, so its mask is 1100011, segment 0 first. A request
+    from Agra Cantt to Bhopal needs 0011100. The AND of the two masks is all zeros, so the berth is
+    free for that journey. A request from Mathura to Gwalior needs 0110000; the AND has a one in
+    the Mathura to Agra segment, so it does not fit.
+  </desc>
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">8 stops, 7 segments, segment 0 first</text>
+  <g transform="translate(0 40)">
+
+  <g font-size="15" style="fill: var(--viz-muted)">
+    {ST.map((s, i) => (
+      <text x={X0 + i * W} y={i % 2 ? 14 : -2} text-anchor={i === 0 ? 'start' : i === ST.length - 1 ? 'end' : 'middle'}>{s}</text>
+    ))}
+  </g>
+  {ST.map((_, i) => <line x1={X0 + i * W} y1="26" x2={X0 + i * W} y2="262" stroke-width="1" style="stroke: var(--viz-stroke)" />)}
+
+  {
+    [
+      { label: 'B23', bits: berth, y: 34, kind: 'ok' },
+      { label: 'need', bits: want, y: 96, kind: 'flow' },
+      { label: 'AND', bits: berth.map((b, i) => b & want[i]), y: 140, kind: 'ok' },
+      { label: 'need', bits: bad, y: 204, kind: 'flow' },
+      { label: 'AND', bits: berth.map((b, i) => b & bad[i]), y: 248, kind: 'bad' },
+    ].map((r) => (
+      <g>
+        <text x="4" y={r.y + 22} font-size="15" font-weight="700" style="fill: var(--viz-ink)">{r.label}</text>
+        {row(r.bits, r.y, `var(--viz-${r.kind})`, `var(--viz-${r.kind}-soft)`).map((c) => (
+          <g>
+            <rect x={c.x} y={c.y} width={W - 6} height="30" rx="4" stroke-width="1.5"
+              style={c.b ? `fill: ${c.onSoft}; stroke: ${c.on}` : 'fill: none; stroke: var(--viz-stroke)'} />
+            <text x={c.x + (W - 6) / 2} y={c.y + 21} font-size="17" font-weight="700" text-anchor="middle"
+              style={`fill: ${c.b ? c.on : 'var(--viz-muted)'}; font-family: var(--sl-font-mono)`}>{c.b}</text>
+          </g>
+        ))}
+      </g>
+    ))
+  }
+
+  <g font-size="16">
+    <text x="44" y="88" style="fill: var(--viz-muted)">AGC→BPL wants segments 2–4</text>
+    <text x="44" y="196" style="fill: var(--viz-muted)">MTJ→GWL wants segments 1–2</text>
+    <text x="4" y="304" font-weight="700" style="fill: var(--viz-ok)">AGC→BPL: AND = 0, it fits</text>
+    <text x="4" y="326" font-weight="700" style="fill: var(--viz-bad)">MTJ→GWL: AND ≠ 0, clash on MTJ→AGC</text>
+  </g>
+  </g>
+</svg>

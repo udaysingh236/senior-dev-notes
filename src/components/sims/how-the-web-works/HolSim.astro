@@ -1,0 +1,19 @@
+---
+// Many files over a lossy link with HTTP/1.1, HTTP/2 and HTTP/3. See hol-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="hol-blocking"
+  title="Twelve files, one lossy link, three protocols"
+  description="Three lanes, one per protocol, each with one cell per file. A cell fills from the bottom as its bytes become usable by the browser: blue while it loads, green when complete. Amber shows bytes that have arrived but cannot be used yet, because an earlier packet on the same TCP connection was lost and is being resent. Every connection is already open, so only the transfer is compared."
+  watchFor="Watch the HTTP/2 lane turn amber after a loss: bytes for later files have arrived but wait behind one missing packet. The HTTP/3 lane never shows amber, yet finishes at about the same time, because both run every file through one congestion window that each loss cuts. HTTP/1.1, with six connections and so six windows, finishes first. Set loss to 0: HTTP/1.1 still starts faster, which is what six handshakes buy."
+  viewBox="0 0 400 284"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createHolModel } from './hol-model';
+
+  mountAll('hol-blocking', createHolModel);
+</script>

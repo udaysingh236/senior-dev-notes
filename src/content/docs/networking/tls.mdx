@@ -1,12 +1,12 @@
 ---
 title: TLS and Encryption in Transit
-description: What TLS really promises and how it keeps those promises, built up from broken attempts, from AEAD records, Diffie-Hellman and certificates to the TLS 1.3 handshake, 0-RTT, mutual TLS, where encryption stops inside your own system, and keeping certificates renewed without outages.
-tagline: Private, untampered, and talking to the right machine. Lose any one of the three and the other two stop meaning much.
+description: What the TLS handshake actually proves and why a man in the middle fails, what an observer still learns from encrypted traffic, the keys that quietly undo forward secrecy, 0-RTT replay in a cluster, chain building and revocation failures, 47-day certificates, mutual TLS in a mesh, and where TLS ends inside your system.
+tagline: Anyone can send your certificate. Only one signature proves it is you, and it says nothing about sizes, replays or what happens after the load balancer.
 difficulty: intermediate
 track: networking
 prerequisites: [how-the-web-works, dns, tcp-vs-udp]
 next: [http-evolution, reverse-proxies, cdn-and-edge-caching, encryption-at-rest, secrets-management, jwt-and-key-rotation]
-lastReviewed: 2026-10-21
+lastReviewed: 2026-10-22
 sidebar:
   order: 3
 ---
@@ -15,170 +15,65 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
-import Overview from '../../../components/diagrams/tls/Overview.astro';
-import Threats from '../../../components/diagrams/tls/Threats.astro';
-import Record from '../../../components/diagrams/tls/Record.astro';
+import Transcript from '../../../components/diagrams/tls/Transcript.astro';
 import KeyExchange from '../../../components/diagrams/tls/KeyExchange.astro';
-import Certificate from '../../../components/diagrams/tls/Certificate.astro';
+import Visible from '../../../components/diagrams/tls/Visible.astro';
+import Record from '../../../components/diagrams/tls/Record.astro';
 import Chain from '../../../components/diagrams/tls/Chain.astro';
-import HandshakeRtts from '../../../components/diagrams/tls/HandshakeRtts.astro';
-import Termination from '../../../components/diagrams/tls/Termination.astro';
 import Lifetimes from '../../../components/diagrams/tls/Lifetimes.astro';
-import CertLifecycleSim from '../../../components/sims/tls/CertLifecycleSim.astro';
+import Termination from '../../../components/diagrams/tls/Termination.astro';
+import SizeLeakSim from '../../../components/sims/tls/SizeLeakSim.astro';
+import ReplaySim from '../../../components/sims/tls/ReplaySim.astro';
+import RenewalSim from '../../../components/sims/tls/RenewalSim.astro';
 
-## A quick fix on a Friday night
+## The question
 
-Imagine you work at a small lending startup in Bengaluru. Your loan service calls a partner bank's
-API to send money to borrowers. One Friday evening, every call starts failing with the same error:
+Your bank's certificate is public. Anyone on the café Wi-Fi can download it and send it to you,
+byte for byte, when you try to connect. So what exactly stops them from being the bank? And if
+they cannot be the bank, how can they still tell which page of a clinic's website you read, or copy
+your encrypted payment request and have the bank's servers run it twice, without breaking a single
+cipher?
 
-```text
-ssl.SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed:
-unable to get local issuer certificate
-```
+"TLS encrypts, certificates prove identity" is true and explains none of that. This page is about
+what the handshake really proves, what it leaves in the clear, which keys can undo it years later,
+why revocation barely works, and what breaks as certificate lifetimes fall to 47 days.
 
-The strange part is that the bank's developer portal opens perfectly in Chrome. Borrowers are
-waiting for their money, so a teammate searches the error, finds a popular answer, and adds
-`verify=False` to the HTTP call. The errors stop. Everyone goes home.
+## What TLS promises, word by word
 
-Two weeks later, before a funding round, a security engineer from the partner bank reviews your
-system. She comes back with three findings:
+**TLS** (Transport Layer Security) protects one byte stream between two endpoints. Stated
+precisely, after a successful handshake the client knows this:
 
-1. `verify=False` is still in production, in the code that moves money.
-2. The load balancer decrypts HTTPS and forwards plain HTTP to every service inside your cloud
-   network. The design document says "internal traffic, private network, no TLS needed".
-3. The certificate on your internal admin dashboard was bought by hand two years ago by someone who
-   has since left. It expires in nine days, and nobody is getting the reminder emails.
+> The bytes I receive were sent by someone holding the private key of a certificate that names the
+> host I asked for and chains to a root in my trust store, and nobody has changed, reordered,
+> dropped or replayed them *within this connection*.
 
-Then she asks one question: "If someone joined your office Wi-Fi tonight, or got a shell on any one
-machine in your cloud network, which of these connections could they read? Which could they
-change? And which could they pretend to be?" The honest answer was: all three, nearly everywhere.
+Every qualifier in that sentence is a place where real systems break, and each has a section below:
 
-None of this needed a clever attacker. Each finding is a team not knowing what TLS promises and
-what has to be true for those promises to hold. The foundations page,
-[What happens when you type a URL](/foundations/how-the-web-works/), walked through a TLS handshake
-as one step of a page load. This page answers the bigger question: **what does TLS actually
-promise, what has to be checked for those promises to hold, and where in a real system does it
-quietly stop?**
+- **"Someone holding the private key"**: the certificate is public; the key is the secret. A
+  stolen key makes the thief the bank until the certificate expires, because revocation does not
+  really work.
+- **"The host I asked for"**: only if the client checks the name. `verify=False` drops this, and
+  with it everything else.
+- **"A root in my trust store"**: about 120 roots, any of which may sign for any name, plus any
+  root your employer installed on your laptop.
+- **"Within this connection"**: a copy of the first flight, sent on a new connection, is outside
+  the promise. That is the 0-RTT replay.
+- **What is not in the sentence at all**: who you talk to, when and how much. Sizes and timing
+  are visible. So is the site name, unless Encrypted Client Hello is in use.
 
-## Why this problem exists
+The data itself travels in **records**, each sealed with an **AEAD** cipher (authenticated
+encryption: AES-GCM or ChaCha20-Poly1305), which encrypts and adds a 16-byte tag in one operation.
+The nonce for each record comes from a counter that both sides keep and never send, so a dropped,
+reordered or repeated record fails its tag check and the connection is torn down. The record layer
+is the part of TLS that rarely goes wrong. The handshake that creates its keys is where the
+interesting failures are.
 
-When your phone talks to a bank, the bytes cross the café's Wi-Fi router, your mobile operator, a
-few networks in between, the bank's cloud provider, a load balancer, and finally a server. Every
-one of those is a machine you do not control. And as the [TCP vs UDP](/networking/tcp-vs-udp/)
-page showed, TCP's checksum catches random noise, not deliberate changes. So anyone on that path
-can do three things to an unprotected connection:
+## The obvious fix, and why it breaks
 
-<Figure caption="Anyone on the path can read, change or impersonate. Each threat needs its own defence: encryption for reading, an integrity tag for changing, and a certificate for pretending.">
-  <Threats />
-</Figure>
-
-The three defences in the right-hand column are the three promises this whole page is about:
-
-- **Confidentiality**: nobody on the path can read the data.
-- **Integrity**: nobody can change, drop, reorder or replay the data without being detected.
-- **Authentication**: you know who is on the other end, not only that someone is.
-
-These are not theoretical. In 2010 a browser add-on called
-[Firesheep](https://lwn.net/Articles/412979/) let anyone on a café's open Wi-Fi take over other
-customers' Facebook and Twitter sessions with one click, because those sites sent the session
-cookie in plain text after login. In 2013, leaked documents showed that the US National Security Agency had tapped
-the private fibre links *between* Google's data centres
-([MUSCULAR](https://en.wikipedia.org/wiki/MUSCULAR)), with a slide pointing at where encryption was
-removed: "SSL added and removed here". Inside the building turned out to be on the path too.
-
-TLS failures come in two flavours, and both hurt. Missing or disabled TLS fails silently, for
-months, until someone exploits it. Broken TLS, usually an expired certificate, fails loudly and
-completely, often at 3 AM.
-
-A few terms we will use throughout:
-
-- **Plaintext** is readable data; **ciphertext** is the same data after encryption. A **key** is
-  the secret number that turns one into the other.
-- **Symmetric** cryptography uses one shared key: fast, but both sides must already have it.
-  **Asymmetric** (public-key) cryptography uses a pair: a **public key** anyone may have and a
-  **private key** only its owner has. It is slower, and it solves the problem of strangers.
-- A **MAC** (message authentication code) is a fingerprint of data that needs a key to compute, so
-  only key holders can make a valid one. A **digital signature** is the asymmetric version: made
-  with a private key, checked by anyone with the public key.
-- A **man in the middle** (MITM) is an attacker who sits between two parties and relays, reads or
-  alters what they send, while each side believes it is talking directly to the other.
-- **Encryption in transit** protects data while it moves between machines; **encryption at rest**
-  protects data stored on disk. This page is about the first.
-
-**TLS** (Transport Layer Security) is the standard protocol that provides all three promises for a
-stream of bytes, usually a TCP connection. Its predecessor was called SSL, which is why people
-still say "SSL certificate". HTTPS is HTTP sent inside TLS; so are secure connections to most
-databases, message brokers and email servers.
-
-## The obvious fixes, and why they break
-
-The fastest way to understand why TLS looks the way it does is to try building it yourself and
-watch each attempt fail.
-
-### Attempt 1: encrypt everything with a shared key
-
-The first idea is to put one secret key in both the app and the server, and encrypt every message
-with it. The first problem is **key distribution**: the key now lives inside every copy of your
-app, and anyone can pull an Android app apart with free tools. One extraction, and every user's
-traffic is readable, past and future.
-
-The second problem survives even a perfectly hidden key. **Encryption hides data; it does not
-protect it from being changed.** Many ciphers mix the plaintext with a stream of key-derived bytes
-using XOR, so flipping a bit in the ciphertext flips the same bit in the decrypted plaintext. An
-attacker who knows your message format can edit it without the key:
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="bit_flip.py (excerpt)"
-# runnable version: examples/tls/python/bit_flip.py
-def attacker_rewrite(ciphertext: bytes, offset: int, known: bytes, wanted: bytes) -> bytes:
-    """No key needed. ciphertext = plaintext XOR stream, so XOR in (known XOR wanted)."""
-    patch = xor(known, wanted)
-    edited = bytearray(ciphertext)
-    for i, p in enumerate(patch):
-        edited[offset + i] ^= p
-    return bytes(edited)
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="bit-flip.mjs (excerpt)"
-// runnable version: examples/tls/js/bit-flip.mjs
-/** No key needed. ciphertext = plaintext XOR stream, so XOR in (known XOR wanted). */
-function attackerRewrite(ciphertext, offset, known, wanted) {
-  const edited = Buffer.from(ciphertext);
-  for (let i = 0; i < known.length; i++) edited[offset + i] ^= known[i] ^ wanted[i];
-  return edited;
-}
-```
-  </TabItem>
-</Tabs>
-
-```text title="bit_flip.py output (node bit-flip.mjs prints the same)"
-1. Encryption only
-   on the wire:    baa4adda51e85dcc77eb991462e29b11c2d9c52eb9e08c69...
-   bank decrypts:  {"to": "ravi@okbank", "amount_inr": 900}
-   The attacker never had the key, and nothing looked wrong.
-
-2. Encryption plus an integrity tag (encrypt-then-MAC)
-   original: {"to": "ravi@okbank", "amount_inr": 100}
-   tampered: REJECTED: tag does not match
-```
-
-A payment of ₹100 became ₹900, and the bank had no way to notice. The demo's cipher is a toy built
-from SHA-256, but the same attack works on AES in counter mode (CTR) and, with more effort, in CBC
-mode, whenever they are used without an integrity check. The second half of the output is the
-repair: a MAC over the ciphertext with a second key catches the edit at once. So encryption needs
-a partner: **integrity**.
-
-### Attempt 2: agree on a fresh key for every connection
-
-To avoid baking a key into the app, we can use an idea from 1976 called **Diffie-Hellman key
-exchange**: two parties who have never met each send one public number and each end up with the
-same secret, while anyone who only *listens* learns nothing useful. We will see how in the next
-section.
-
-But "anyone who only listens" is doing a lot of work in that sentence. The person running the fake
-café hotspot does not only listen; she sits in the middle and can answer for either side:
+Two strangers can agree on a secret key in public with **Diffie-Hellman** key exchange: each sends a
+public **key share** derived from a private random number, and both compute the same secret, which
+an eavesdropper cannot. That defeats anyone who only listens. It does nothing against someone who
+answers. Here is the attack the hotspot owner, Mallory, runs:
 
 <StepThrough
   title="A key exchange with a man in the middle"
@@ -188,23 +83,23 @@ café hotspot does not only listen; she sits in the middle and can answer for ei
     { id: 'bank', label: 'Bank', kind: 'server' },
   ]}
   steps={[
-    { from: 'you', to: 'mallory', label: 'your share', text: 'You send your public key share towards the bank. Mallory runs the Wi-Fi hotspot you joined, so every packet passes through her. She keeps your share.' },
+    { from: 'you', to: 'mallory', label: 'your share', text: 'You send your key share towards the bank. Every packet passes through the hotspot Mallory runs, so she keeps it.' },
     { from: 'mallory', to: 'bank', label: 'her share 1', text: 'She sends the bank a share she generated herself. A share is a large random-looking number; nothing in it says who made it.' },
     { from: 'bank', to: 'mallory', label: "bank's share", text: 'The bank replies with its share, believing it is talking to you.', dashed: true },
-    { from: 'mallory', to: 'you', label: 'her share 2', text: 'Mallory keeps the bank\'s share and sends you a second share of her own. You cannot tell it from the real one either.', dashed: true },
-    { from: 'mallory', to: 'mallory', label: 'two keys', text: 'You now share a key with Mallory, and the bank shares a different key with Mallory. Neither of you shares a key with the other.', tone: 'warn' },
-    { from: 'you', to: 'mallory', label: 'pay ₹100', text: 'You send an encrypted payment with a valid integrity tag. Mallory decrypts it with the key she shares with you.' },
-    { from: 'mallory', to: 'bank', label: 'pay ₹900', text: 'She changes the recipient and the amount, encrypts again with the key she shares with the bank, and computes a fresh, valid tag. The bank accepts it.', tone: 'bad' },
+    { from: 'mallory', to: 'you', label: 'her share 2', text: "Mallory keeps the bank's share and sends you a second share of her own.", dashed: true },
+    { from: 'mallory', to: 'mallory', label: 'two keys', text: 'You share a key with Mallory; the bank shares a different key with Mallory. Neither of you shares a key with the other.', tone: 'warn' },
+    { from: 'mallory', to: 'bank', label: 'pay ₹900', text: 'Your encrypted "pay ₹100" arrives at Mallory. She decrypts it, rewrites it, encrypts it again with the bank-side key and computes a fresh, valid integrity tag.', tone: 'bad' },
   ]}
-  summary="Every message was encrypted and every tag was valid. Diffie-Hellman kept the keys secret from listeners, but nothing told either side who was on the other end of the exchange. Confidentiality and integrity are worthless without authentication."
+  summary="Every message was encrypted and every tag was valid. Diffie-Hellman kept the key secret from listeners, but nothing told either side who sent the key shares."
 />
 
-Here is that attack run with real 2048-bit Diffie-Hellman numbers:
+The `mitm_dh` example runs this with real 2048-bit Diffie-Hellman numbers and an encrypt-then-MAC
+channel:
 
-```text title="mitm_dh.py output (node mitm-dh.mjs prints the same, with different random keys)"
+```text title="python mitm_dh.py (node mitm-dh.mjs prints the same, with other random keys)"
 Key fingerprints (first 8 bytes of each key):
-  Alice:   60ce287f9f44ac32    Mallory's copy: 60ce287f9f44ac32
-  Bank:    2b5d48e234a01a56    Mallory's copy: 2b5d48e234a01a56
+  Alice:   5c0e3a752bcbe3c0    Mallory's copy: 5c0e3a752bcbe3c0
+  Bank:    6619d571a8c95184    Mallory's copy: 6619d571a8c95184
   Alice and the bank hold different keys, and Mallory holds both.
 
 Alice sends an encrypted, integrity-protected payment.
@@ -212,212 +107,36 @@ Alice sends an encrypted, integrity-protected payment.
   Bank receives:   {"to": "mallory@ok", "amount_inr": 900} (tag valid)
 ```
 
-Alice's key and the bank's key are different. If they could compare fingerprints over a channel
-Mallory cannot touch, they would catch her at once. That is what SSH asks you to do the first time
-you connect to a server, and what messaging apps call a safety number. It needs a human and a second
-channel, which is hopeless for a billion browsers and a million websites.
-
-### What we actually need
-
-So the bank must *prove* that the key share came from the bank, by signing it (really, the whole
-conversation so far) with a private key only the bank has. Then you need to know that the matching
-public key belongs to the bank and not to Mallory, which needs someone you already trust to vouch
-for it. That vouching document is a **certificate**. Encryption plus integrity, a fresh key
-exchange, and a signature tied to a vouched-for name: put them together and you have reinvented
-TLS.
-
-Here are the neighbours TLS is most often confused with.
-
-| These are often confused | The difference |
-|---|---|
-| **TLS** vs **HTTPS** | TLS protects a byte stream; HTTPS is HTTP carried inside it. Databases, gRPC and MQTT can all use TLS without any HTTP. |
-| **Encryption** vs **integrity** vs **authentication** | Three separate promises. As the demos showed, any one without the others can be defeated. |
-| **Certificate** vs **private key** | The certificate is public; anyone can download and present it. Proving you hold its private key is what counts. |
-| **The padlock** vs **a safe site** | The padlock means the connection is private and the name is verified. Phishing sites get valid certificates too. |
-| **TLS** vs **a VPN** | TLS protects one application's connection end to end. A VPN (WireGuard, IPsec) protects everything between two networks or devices, only up to where the tunnel ends. |
+Alice and the bank hold different keys. Comparing fingerprints over a channel Mallory cannot touch
+would expose her, which is what SSH asks you to do on first connection. TLS needs the same check to
+happen automatically, for a billion clients and servers that have never met.
 
 ## The core idea
 
-Think of crossing a border. The officer at the passport desk checks three things: that the
-passport was issued by a government their country recognises, that it has not expired, and that
-the face in front of them matches the photo. Only then are you let in, and from then on everything
-you do is under that name.
+The server signs the conversation. After sending its certificate, the server takes a hash of every
+handshake message so far, both random values and **both key shares** included, and signs that hash
+with the private key that matches the certificate. This signature is the **CertificateVerify**
+message. Both sides then send **Finished**, a MAC over the same transcript using keys derived from
+the shared secret.
 
-TLS works the same way. The **certificate** is the passport: it ties a name, such as `example.com`,
-to a public key. A **certificate authority** (CA) is the issuing government. Your device carries a
-built-in list of CAs it recognises, the **trust store**. The face is the **private key**: the
-server proves it owns the passport by signing something with it, live, during the connection. Once
-the check passes, a fresh secret key is agreed that protects everything else.
-
-The analogy breaks in places worth knowing:
-
-- **Anyone can copy a certificate.** A certificate is public, and any server can send yours. What
-  cannot be copied is the signature only your private key can make. The private key *is* the face.
-- **Any recognised CA can issue for any name.** Your browser trusts over a hundred CAs, and any of
-  them can technically issue a certificate for your bank's name. Certificate Transparency, below,
-  exists because of that.
-- **The check is mathematical, not human.** A TLS client either verifies every signature or refuses
-  to continue, unless someone turns the check off with `verify=False`: the officer leaving the desk.
-
-Put precisely: **TLS runs a handshake once per connection. The two sides use an ephemeral
-Diffie-Hellman exchange to agree on fresh secret keys that never cross the network. The server sends
-a certificate chain binding its name to a public key, and proves it holds the matching private key
-by signing the whole handshake. After that, every message travels as a record encrypted and
-authenticated with those keys, so it cannot be read, changed, reordered or replayed unnoticed.**
-
-Look at what happens once, and what happens on every message.
-
-<Figure caption="A TLS connection has two phases. The handshake agrees on keys and proves the server's identity, once. Then every message travels as an encrypted record with an integrity tag. Each of the three promises comes from a different part.">
-  <Overview />
+<Figure caption="The server's signature covers a hash of the whole handshake so far, including the client's key share. Swap any byte and the hash changes; only the holder of the private key can produce a new signature.">
+  <Transcript />
 </Figure>
 
-The expensive, clever part is the handshake, and it happens once. The records, where your data
-lives, use fast symmetric cryptography. Slow asymmetric cryptography to set up a fast symmetric key
-is the shape of nearly every secure protocol you will meet.
+Now replay Mallory's attack. If she forwards your key share to the bank unchanged, the bank's
+signature is valid, but the key is shared between you and the bank, and she cannot read anything.
+If she swaps in her own share, the bank signs a transcript containing *her* share; you check the
+signature against a transcript containing *yours*, and the hashes differ. To fix that, she would
+have to sign your transcript herself, with the bank's private key. Sending the bank's certificate
+costs her nothing. Producing that signature is the one thing she cannot do.
+
+That is the whole of server authentication in TLS 1.3: **a certificate that the client's trust store
+vouches for, plus a fresh signature from its key over this particular handshake.** Everything else
+on this page is about what that sentence does not cover.
 
 ## How it works, piece by piece
 
-We build TLS from the inside out: records, key exchange, certificates and the handshake, then the
-production parts. Everything here was measured in October 2026, from a network in India, with
-Python 3.14 and Node 24 (both on OpenSSL 3.5).
-
-### Records: encryption and integrity in one step
-
-Once keys are agreed, your data is cut into **records** of at most 16 KB. Each is protected by an
-**AEAD** cipher (authenticated encryption with associated data): one algorithm that encrypts *and*
-produces an integrity tag, so you cannot get one without the other. It is attempt 1's two halves
-fused into one operation. TLS 1.3 allows only AEAD ciphers: in practice **AES-GCM**, which modern
-processors accelerate in hardware, or **ChaCha20-Poly1305**, fast in software on phones without it.
-
-<Figure caption="A TLS 1.3 record is a short readable header, the encrypted payload and a 16-byte tag. The tag makes any change, reordering, replay or deletion detectable; what still leaks is the size and timing of the records.">
-  <Record />
-</Figure>
-
-Two details on that diagram matter.
-
-- **Every record has an invisible sequence number.** The nonce, a number that must never repeat with
-  the same key, comes from a counter both sides keep and never send. If an attacker drops, reorders
-  or replays a record, the counters no longer match, the tag check fails, and the connection is torn
-  down. TLS does not try to repair; it refuses.
-- **Size and timing still leak.** "Encrypted" is not "invisible": an observer still sees you
-  downloaded 3.2 MB at 9 PM.
-
-The record layer is cheap: when Gmail moved everyone to HTTPS in 2010, it cost under 1% of
-front-end CPU and no extra machines ([Langley, Modadugu and Chang, 2010](https://www.imperialviolet.org/2010/06/25/overclocking-ssl.html)).
-
-### Key exchange: agreeing on a secret in public
-
-**Diffie-Hellman** relies on a one-way operation: quick to compute and practically impossible to
-undo. Here it is with numbers small enough to check on a calculator.
-
-<Figure caption="Each side keeps a secret, sends a public number derived from it, and combines the other's number with its own secret. Both reach 2. Someone watching the wire saw 23, 5, 8 and 19, and cannot get 2 without one of the secrets.">
-  <KeyExchange />
-</Figure>
-
-**The worked example.** Everyone agrees on a public prime p = 23 and base g = 5. You pick a secret
-a = 6 and send A = 5⁶ mod 23. Since 5⁶ = 15,625 = 23 × 679 + 8, A = 8. The bank picks b = 15 and
-sends B = 5¹⁵ mod 23 = 19. You compute 19⁶ mod 23 = 2; the bank computes 8¹⁵ mod 23 = 2. Both
-calculated 5^(6×15) mod 23, in a different order. An eavesdropper has 23, 5, 8 and 19, and must find
-6 from "5 to the what is 8, mod 23". Here you can try all 22 possibilities by hand; at real sizes
-there is no known shortcut.
-
-Real TLS uses the same idea on an elliptic curve called **X25519**, with 32-byte public shares. The
-shared result is fed through a key derivation function (HKDF) with a hash of every handshake
-message, producing separate keys for each direction and phase.
-
-The word that matters most is **ephemeral**: both sides throw their secrets away after the
-handshake. That gives TLS 1.3 **forward secrecy**: if someone records your traffic today and steals
-the server's private key next year, they still cannot decrypt the recording. Older versions also
-allowed "RSA key exchange", where the client encrypted the secret with the server's long-term key;
-steal that key and every recorded session opens up. TLS 1.3 removed that option.
-
-**The post-quantum change.** A large enough quantum computer, which does not exist yet, could undo
-X25519, and anyone recording traffic now could decrypt it later. So browsers and servers have
-started using a **hybrid** key exchange, **X25519MLKEM768**, which combines X25519 with ML-KEM, an
-algorithm designed to resist quantum computers. If either part holds, the key is safe. It was
-standardised in [RFC 10024](https://datatracker.ietf.org/doc/rfc10024/) in August 2026, and its
-client key share is 1,216 bytes instead of 32. Over 60% of clients reaching Cloudflare supported it
-by February 2026, but only about 10% of origin servers
-([Cloudflare](https://blog.cloudflare.com/radar-origin-pq-key-transparency-aspa/)); our TLS 1.3
-connections from Node 24 used it with no configuration.
-
-### Certificates: binding a key to a name
-
-Diffie-Hellman gives you a secret shared with *someone*. The certificate tells you who. Here is the
-one `example.com` served on the day this page was written:
-
-<Figure caption="A certificate binds names to a public key for a limited time, and an issuer signs it. The fields that clients check on every connection are in bold: the names, the dates, and the signature.">
-  <Certificate />
-</Figure>
-
-- **Names.** Clients check the **Subject Alternative Name** (SAN) list. `*.example.com` covers
-  `api.example.com` but not `v2.api.example.com` and not `example.com` itself, which is why both are
-  listed.
-- **Validity dates**, checked against the client's own clock. This one lives 90 days, typical in 2026.
-- **The public key.** ECDSA P-256 here; RSA 2048 is also common. The private key never appears.
-- **Usage restrictions.** "May be used as a server, not as a CA" stops a website's owner from
-  issuing certificates for other names.
-- **The issuer's signature** over all of the above.
-
-During the handshake the server sends its certificate and then signs the transcript so far,
-including both key shares, with its private key. Mallory can send `example.com`'s certificate like
-anyone else, but she cannot produce that signature, and because it covers the key shares, she
-cannot swap them either. That is the point where the man-in-the-middle attack dies.
-
-### The chain of trust
-
-Root CAs do not usually sign website certificates directly. They sign **intermediate** CA
-certificates, kept online for daily issuing, while the root's private key stays offline. So a client
-receives a chain:
-
-<Figure caption="The server sends its own certificate and the intermediate. The root is already in your device's trust store. The client checks each signature upwards and trusts the leaf only if the chain ends at a root it already holds.">
-  <Chain />
-</Figure>
-
-As of September 2026, Mozilla's trust store, which Firefox, curl and most Linux distributions use,
-held **121 root certificates** trusted for websites
-([curl's extract of Mozilla's list](https://curl.se/docs/caextract.html)). Apple, Microsoft, Google
-and Java keep their own, broadly similar lists. For every certificate in the chain, the client checks:
-
-1. The signature verifies against the issuer's public key.
-2. Today's date is inside the validity period.
-3. Each certificate is allowed to do what it is doing: intermediates must be marked as CAs; the leaf
-   must be allowed for server authentication.
-4. The chain ends at a certificate in the trust store.
-5. The leaf's names include the host name you asked for.
-
-The server must send the intermediates. If it sends only its own certificate, the client cannot
-build the chain and fails with exactly the error in our story. Browsers often hide this mistake,
-because they cache intermediates and can download missing ones; Python, Node, curl and Java do not.
-A chain that "works in Chrome but fails in Python" is almost always a missing intermediate.
-
-### When a CA gets it wrong: transparency and revocation
-
-The weakest point is the one the analogy flagged: any of those 121 roots, or any intermediate under
-them, can issue for any name. In 2011 attackers broke into DigiNotar, a Dutch CA, and issued more
-than 500 rogue certificates, including one for `*.google.com` that was used to intercept Gmail
-users, almost all in Iran: around 300,000 distinct IP addresses
-([Fox-IT interim report](https://www.sec.gov/Archives/edgar/data/1044777/000119312511241796/dex992.htm)).
-Browsers removed DigiNotar from their trust stores, and it went bankrupt within weeks.
-
-**Certificate Transparency** (CT, [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962)) makes
-mis-issuance *visible*. CAs must submit every certificate to public, append-only logs, which return
-signed timestamps (SCTs) embedded in the certificate; Chrome requires SCTs from at least two log
-operators ([Chrome CT policy](https://googlechrome.github.io/CertificateTransparency/ct_policy.html)).
-Anyone can search the logs for certificates issued for their own domains. Try yours at
-[crt.sh](https://crt.sh/).
-
-**Revocation**, cancelling a certificate before it expires, has never worked well. OCSP, where the
-client asks the CA about each certificate, leaks every site you visit, adds a network call, and
-browsers mostly ignored its failures. Let's Encrypt, the largest CA, stopped running OCSP in August
-2025 ([Let's Encrypt](https://letsencrypt.org/2024/12/05/ending-ocsp/)). The industry's real answer
-is **short lifetimes**: a stolen key for a 47-day certificate is useful for at most 47 days.
-
-### The TLS 1.3 handshake, message by message
-
-The foundations page showed the handshake in brief; here are the real messages and what each
-is for. The current specification is [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html)
-(July 2026), a revision of TLS 1.3 that keeps the version number.
+### What the handshake proves, message by message
 
 <StepThrough
   title="A full TLS 1.3 handshake"
@@ -426,292 +145,496 @@ is for. The current specification is [RFC 9846](https://www.rfc-editor.org/rfc/r
     { id: 'server', label: 'Server', kind: 'server' },
   ]}
   steps={[
-    { from: 'client', to: 'server', label: 'ClientHello', text: 'A random number, the cipher suites and versions it supports, the site name (SNI), the application protocols it speaks (ALPN), the signature algorithms it accepts, and a guess at the key exchange with key shares already included, for example X25519MLKEM768 and X25519.' },
-    { from: 'server', to: 'client', label: 'ServerHello', text: 'The server picks one cipher suite and one key exchange group and sends its own key share. Both sides now compute handshake keys. Everything after this message is encrypted.', dashed: true },
-    { from: 'server', to: 'client', label: 'EncryptedExt', text: 'Encrypted extensions: the rest of the server\'s choices, such as which application protocol (h2 or http/1.1) was picked. In TLS 1.2 these travelled in the clear.', dashed: true },
-    { from: 'server', to: 'client', label: 'Certificate', text: 'The certificate chain: the server\'s own certificate and its intermediates, but not the root.', dashed: true },
-    { from: 'server', to: 'client', label: 'CertVerify', text: 'A signature with the certificate\'s private key over a hash of every handshake message so far, including both key shares. This is the proof that defeats a man in the middle.', dashed: true, tone: 'ok' },
-    { from: 'server', to: 'client', label: 'Finished', text: 'A MAC over the whole transcript using the handshake keys. If anyone altered any earlier message, for example to downgrade the cipher, the client\'s calculation will not match.', dashed: true },
-    { from: 'client', to: 'client', label: 'verify all', text: 'The client checks the chain to a trusted root, the names, the dates, the CertificateVerify signature and the Finished MAC. Any failure stops the connection here.', tone: 'warn' },
-    { from: 'client', to: 'server', label: 'Finished + GET', text: 'The client sends its own Finished, and in the same flight its first encrypted request. One round trip after the ClientHello, application data is flowing.', tone: 'ok' },
-    { from: 'server', to: 'client', label: 'SessionTicket', text: 'After the handshake the server sends one or more tickets the client can use to resume later without a full handshake, valid for at most 7 days.', dashed: true },
+    { from: 'client', to: 'server', label: 'ClientHello', text: 'A fresh 32-byte random value, supported versions and ciphers, the site name (SNI), the application protocols (ALPN), and key shares already computed for the groups it guesses the server supports, such as X25519MLKEM768 and X25519.' },
+    { from: 'server', to: 'client', label: 'ServerHello', text: 'Its own random value and key share for one chosen group. Both sides now compute handshake keys; everything after this message is encrypted.', dashed: true },
+    { from: 'server', to: 'client', label: 'EncryptedExt', text: 'The rest of the server\'s choices, such as h2 or http/1.1. TLS 1.2 sent these in the clear.', dashed: true },
+    { from: 'server', to: 'client', label: 'Certificate', text: 'The chain: the server\'s certificate and its intermediates, without the root. Encrypted in TLS 1.3, readable by anyone in TLS 1.2.', dashed: true },
+    { from: 'server', to: 'client', label: 'CertVerify', text: 'A signature over the transcript hash with the certificate\'s private key. This is the step a man in the middle cannot fake.', dashed: true, tone: 'ok' },
+    { from: 'server', to: 'client', label: 'Finished', text: 'A MAC over the transcript with keys only the two real endpoints can derive.', dashed: true },
+    { from: 'client', to: 'client', label: 'verify all', text: 'The client builds the chain to a trusted root, checks the name, the dates, the signature and the Finished MAC. Any failure ends the connection here.', tone: 'warn' },
+    { from: 'client', to: 'server', label: 'Finished + GET', text: 'Its own Finished and, in the same flight, the first encrypted request. One round trip after the ClientHello.', tone: 'ok' },
   ]}
-  summary="One round trip agrees on keys, proves the server's identity and protects the whole transcript against tampering. The certificate proves who; the CertificateVerify signature proves it is them right now; the Finished messages prove nobody changed the conversation."
+  summary="The key shares give a fresh secret; the certificate says which key belongs to the name; CertificateVerify proves that key's holder took part in this exact handshake; Finished proves nobody altered any message."
 />
 
-Two things in that sequence matter in production.
+Each way of attacking the handshake meets one specific defence:
 
-- **The guess.** The client sends key shares before it knows what the server supports. If it
-  guessed wrong, the server replies with a **HelloRetryRequest** and the handshake costs an extra
-  round trip. That is why clients send a classic X25519 share alongside the post-quantum one.
-- **Downgrade protection.** An attacker who edits the ClientHello to force an older version is
-  caught twice: the Finished MAC covers every message, and a TLS 1.3 server pushed into TLS 1.2
-  plants a marker in its random value that a TLS 1.3 client checks. (A TLS 1.3 ClientHello also
-  claims to be TLS 1.2 on the wire, to get past middleboxes; the [TCP vs UDP](/networking/tcp-vs-udp/)
-  page explains that kind of ossification.)
+| Attack | What stops it |
+|---|---|
+| Swap a key share | CertificateVerify covers both shares; the signature fails |
+| Replay a recorded handshake from yesterday | The client's random value is new, so yesterday's signature covers a different transcript |
+| Edit the ClientHello to remove strong ciphers or force TLS 1.2 | Finished covers the ClientHello; a TLS 1.3 server pushed to 1.2 also writes a fixed marker into the last 8 bytes of its random value, which TLS 1.3 clients check |
+| Present a certificate for the name from a CA you made | Chain building fails: your root is not in the client's store |
+| Present a certificate from a CA the client *does* trust | Nothing in TLS. Certificate Transparency makes it visible afterwards |
 
-### Resumption and 0-RTT
+The last row is the honest limit. The client authenticates "a key some trusted CA vouched for", not
+"the bank". In 2011 attackers who broke into the Dutch CA DigiNotar issued a `*.google.com`
+certificate that intercepted Gmail for around 300,000 IP addresses, almost all in Iran
+([Fox-IT interim report](https://www.sec.gov/Archives/edgar/data/1044777/000119312511241796/dex992.htm)).
+Since then, **Certificate Transparency** ([RFC 6962](https://www.rfc-editor.org/rfc/rfc6962)) requires
+CAs to put every certificate into public append-only logs, and Chrome refuses certificates without
+proof of logging from at least two log operators
+([Chrome CT policy](https://googlechrome.github.io/CertificateTransparency/ct_policy.html)).
+Mis-issuance still works for a while, but it can no longer stay secret: search
+[crt.sh](https://crt.sh/) for your own domains. A **CAA** record in your DNS zone narrows the field
+before issuance: it names the CAs allowed to issue for your domain, and every public CA must check
+it ([RFC 8659](https://www.rfc-editor.org/rfc/rfc8659)). It stops an honest CA from being tricked
+into issuing for you; it cannot stop a compromised one that ignores it.
 
-A returning client can skip much of the work. **Resumption** sends the ticket from the last
-handshake in the next ClientHello; both sides derive keys from the secret they already share,
-usually mixed with a fresh Diffie-Hellman exchange to keep forward secrecy. No certificate is sent
-or checked. It still takes one round trip, with less data and work.
+A corporate inspection proxy uses the same limit on purpose. It issues certificates on the fly from
+a company root installed on managed laptops, and from the browser's point of view every check
+passes. TLS worked perfectly; the endpoint you authenticated was the proxy.
 
-**0-RTT** ("zero round trip") goes further: using keys from the ticket, the client sends its first
-request *inside* the first flight, as **early data**. For a user 200 ms away, the request arrives
-200 ms sooner.
+Notice also what the server learned about the client: nothing. In ordinary TLS the client is
+anonymous until the application asks for a password or token, and that token can be replayed from
+anywhere. Mutual TLS, later on this page, fixes that between services.
 
-<Figure caption="How many round trips TLS adds after TCP's own. TLS 1.3 halves TLS 1.2's cost; resumption keeps one round trip but skips the certificate; 0-RTT removes the wait entirely, at the price of replay.">
-  <HandshakeRtts />
+### Forward secrecy, and the keys that quietly undo it
+
+**Forward secrecy** means that stealing a server's long-term private key next year does not decrypt
+traffic recorded today. It comes from the word **ephemeral**: both sides pick fresh Diffie-Hellman
+secrets per handshake and delete them afterwards, so the secret that protected a recording no
+longer exists anywhere. Here is the exchange with numbers small enough to check:
+
+<Figure caption="Each side keeps a secret, sends a public number derived from it, and combines the other's number with its own secret. Both reach 2. An observer saw 23, 5, 8 and 19 and must solve for a secret exponent, which at real sizes has no known shortcut.">
+  <KeyExchange />
 </Figure>
 
-We measured this against `www.cloudflare.com`, one 14.5 ms round trip away, with `handshake.py` and
-`handshake.mjs` from the examples folder (median of 7 rounds). A full TLS 1.2 handshake took
-31.2 ms (2.1 round trips), a full TLS 1.3 handshake 21.7 ms (1.5) and a resumed one 13.0 ms (0.9).
-The extra half round trip in the full TLS 1.3 case is most likely computation: the certificate chain
-and the larger post-quantum key exchange, both of which resumption skips.
+Real TLS does this on the X25519 curve with 32-byte shares. The certificate's key only *signs*; it
+never encrypts the session secret. TLS 1.2's older **RSA key exchange** did the opposite: the
+client encrypted the session secret to the server's certificate key, so one stolen key decrypts
+every recording ever made. TLS 1.3 removed it.
 
-0-RTT has a real price, and it is why it is off by default almost everywhere: **early data can be
-replayed**. Its keys come from the old ticket, not a fresh exchange, so nothing stops an attacker
-copying the first flight and sending it again.
+The part teams miss is **session resumption**. A returning client presents a **session ticket**:
+state the server encrypted with a **session ticket encryption key** (STEK) and handed to the client
+to bring back later. The server needs no memory, and any server in the cluster that holds the STEK
+can resume.
+
+- **In TLS 1.2**, the ticket contains the connection's master secret. Anyone who records traffic and
+  later steals the STEK can decrypt the ticket and then the whole connection, including the original
+  full handshake. Many servers created one STEK at startup and kept it for months, so in practice
+  forward secrecy lasted as long as the process
+  ([Langley, 2013](https://imperialviolet.org/2013/06/27/botchingpfs.html)).
+- **In TLS 1.3**, the ticket holds a resumption secret derived one way from the old session, and
+  resumption normally mixes in a fresh Diffie-Hellman exchange (the `psk_dhe_ke` mode browsers
+  use). A stolen STEK then decrypts neither the old connection nor the resumed one. It does decrypt
+  any **0-RTT early data**, which is encrypted with the ticket's key alone.
+
+So the STEK is a long-term key in disguise. Rotate it every few hours to a day, distribute it to the
+cluster as a secret, and keep old ones only as long as tickets live (at most 7 days in TLS 1.3).
+
+**Harvest now, decrypt later** is the same problem at a larger scale. A future quantum computer
+could solve X25519, so traffic recorded today could be opened then. The fix is a hybrid key
+exchange, **X25519MLKEM768**, which combines X25519 with the post-quantum ML-KEM; the session is safe
+if either holds ([RFC 10024](https://datatracker.ietf.org/doc/rfc10024/), August 2026). The cost is
+size: the client's share grows from 32 to 1,216 bytes, so the ClientHello no longer fits in one
+packet, and middleboxes that assumed it would broke when browsers turned it on
+([tldr.fail](https://tldr.fail/)). As of February 2026, over 60% of clients reaching Cloudflare
+offered it, but only about 10% of origin servers supported it
+([Cloudflare](https://blog.cloudflare.com/radar-origin-pq-key-transparency-aspa/)).
+
+### What an observer still sees
+
+Encryption hides content, not shape. Here is what someone on the path learns from one visit, with
+no keys at all:
+
+<Figure caption="An on-path observer learns the addresses, usually the DNS lookup and the site name, the handshake offers, and the size and timing of every record. TLS 1.3 hides the certificate, the path, headers and body.">
+  <Visible />
+</Figure>
+
+The **SNI** (server name indication) is in the ClientHello because the server needs it to pick a
+certificate before any keys exist. **Encrypted Client Hello** (ECH,
+[RFC 9849](https://www.rfc-editor.org/rfc/rfc9849.html), March 2026) encrypts the real ClientHello
+to a key the server publishes in DNS and sends an outer ClientHello naming only the provider. It
+hides the site only when many sites share that provider's addresses. A site on its own IP address
+gains nothing: the address already names it.
+
+Sizes leak more than names. Look at the one field TLS cannot hide:
+
+<Figure caption="Every record starts with a 5-byte header in the clear, including its length. In TLS 1.3 with AES-GCM the length is the plaintext plus 17 bytes: one for the hidden content type and 16 for the tag.">
+  <Record />
+</Figure>
+
+The `observer` example puts a relay with no keys between a client and a server, the position of
+every Wi-Fi router, and reads only the plaintext parts:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="observer.py (excerpt)"
+# runnable version: examples/tls/python/observer.py
+def records(stream: bytes) -> list[tuple[int, int]]:
+    """Split raw TLS bytes into (content type, length) using only the 5-byte plain headers."""
+    out, i = [], 0
+    while i + 5 <= len(stream):
+        length = int.from_bytes(stream[i + 3 : i + 5], "big")
+        out.append((stream[i], length))
+        i += 5 + length
+    return out
+
+
+def server_name(client_hello: bytes) -> str:
+    """Walk the plaintext ClientHello to the server_name extension (type 0)."""
+    i = 5 + 4 + 2 + 32  # record header, handshake header, version, random
+    i += 1 + client_hello[i]  # session id
+    i += 2 + int.from_bytes(client_hello[i : i + 2], "big")  # cipher suites
+    i += 1 + client_hello[i]  # compression methods
+    end = i + 2 + int.from_bytes(client_hello[i : i + 2], "big")
+    i += 2
+    while i < end:
+        kind, size = int.from_bytes(client_hello[i : i + 2], "big"), int.from_bytes(client_hello[i + 2 : i + 4], "big")
+        if kind == 0:  # list length (2), name type (1), name length (2), name
+            return client_hello[i + 9 : i + 9 + int.from_bytes(client_hello[i + 7 : i + 9], "big")].decode()
+        i += 4 + size
+    return "(none)"
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="observer.mjs (excerpt)"
+// runnable version: examples/tls/js/observer.mjs
+/** Split raw TLS bytes into [content type, length] using only the 5-byte plain headers. */
+function records(stream) {
+  const out = [];
+  for (let i = 0; i + 5 <= stream.length; i += 5 + stream.readUInt16BE(i + 3)) {
+    out.push([stream[i], stream.readUInt16BE(i + 3)]);
+  }
+  return out;
+}
+
+/** Walk the plaintext ClientHello to the server_name extension (type 0). */
+function serverName(hello) {
+  let i = 5 + 4 + 2 + 32; // record header, handshake header, version, random
+  i += 1 + hello[i]; // session id
+  i += 2 + hello.readUInt16BE(i); // cipher suites
+  i += 1 + hello[i]; // compression methods
+  const end = i + 2 + hello.readUInt16BE(i);
+  for (i += 2; i < end; i += 4 + hello.readUInt16BE(i + 2)) {
+    if (hello.readUInt16BE(i) === 0) { // list length (2), name type (1), name length (2), name
+      return hello.subarray(i + 9, i + 9 + hello.readUInt16BE(i + 7)).toString();
+    }
+  }
+  return '(none)';
+}
+```
+  </TabItem>
+</Tabs>
+
+```text title="python observer.py (node observer.mjs prints the same, with lower-case true/false)"
+TLS 1.3  GET /dental
+  server name (SNI), in the clear:  clinic.example.in
+  CA name readable on the wire:     False
+  request record:                   41 bytes
+  response record:                  1,217 bytes, for a 1,200-byte page
+TLS 1.3  GET /hiv-test
+  server name (SNI), in the clear:  clinic.example.in
+  CA name readable on the wire:     False
+  request record:                   43 bytes
+  response record:                  5,417 bytes, for a 5,400-byte page
+TLS 1.2  GET /dental
+  server name (SNI), in the clear:  clinic.example.in
+  CA name readable on the wire:     True
+  request record:                   48 bytes
+  response record:                  1,224 bytes, for a 1,200-byte page
+TLS 1.2  GET /hiv-test
+  server name (SNI), in the clear:  clinic.example.in
+  CA name readable on the wire:     True
+  request record:                   50 bytes
+  response record:                  5,424 bytes, for a 5,400-byte page
+```
+
+Read the numbers. The response is exactly the page plus 17 bytes in TLS 1.3 and plus 24 in TLS 1.2
+(an 8-byte explicit nonce and the tag). Even the request gives away its path length: `/hiv-test`
+is two characters longer than `/dental`, and its record is two bytes longer. TLS 1.2 also showed the
+observer the whole certificate chain; TLS 1.3 encrypts it.
+
+Real pages are many requests with sizes that vary a little per visit, and that turns out not to
+help much. In 2014, researchers identified individual pages within ten large HTTPS sites,
+including health and finance sites, with about 89% accuracy from traffic shape alone; their best
+defence cut it to 27% for 9% more traffic
+([Miller et al., PETS 2014](https://arxiv.org/abs/1403.0297)). Here is the mechanism on a toy site
+with twelve pages. The observer measured each page's typical size in advance and, for every visit,
+names the page whose size is closest to what it saw:
+
+<SizeLeakSim />
+
+With the defaults the observer names the page in about 82% of visits, against 8% for a blind guess.
+Padding every response up to a multiple of 16 KB drops it to 27%, at the cost of 23% more bytes;
+32 KB buckets get to 21% for 52% more. Padding works by making pages share a size, so it only helps
+when the buckets are wider than the gaps between real page sizes, and you pay for it in bandwidth
+on every response. TLS 1.3 records can carry padding, but no common server adds it for you: it is
+an application decision.
+
+:::caution[Compression turns sizes into secrets]
+Size leaks get worse when a response compresses a secret together with text the attacker controls.
+If the attacker's guess matches part of a CSRF token on the page, the response compresses better
+and comes out a few bytes shorter, so the token can be recovered one character at a time by
+watching lengths. That is the BREACH attack (2013) on HTTP compression; TLS 1.3 removed TLS-level
+compression for the same reason (CRIME, 2012). The usual defence is to mask such tokens with a fresh
+random value on every response, so there is no stable string for guesses to match
+([breachattack.com](https://breachattack.com/)).
+:::
+
+### 0-RTT: a request that can run twice
+
+On a resumed connection, TLS 1.3 lets the client send its first request inside the very first
+flight, as **early data**, encrypted with a key derived from the session ticket. A user 200 ms away
+gets the answer 200 ms sooner. The price follows from the table above: a normal handshake is
+protected against replay because the *server's* fresh random value enters the keys. Early data is
+sent before the server has said anything, so its keys depend only on the client's flight. Anyone
+can copy that flight and send it again on a new connection, and it decrypts correctly every time.
+
+The specification says plainly that TLS gives early data no protection against replay *between
+connections*, and lists what servers can do ([RFC 8446, section 8](https://datatracker.ietf.org/doc/html/rfc8446#section-8)):
+use each ticket once, or remember every ClientHello seen recently, plus a **freshness check** that
+rejects a ClientHello whose ticket age is too far from what the server expects, on the order of ten
+seconds. Both memories have to live *somewhere*, and in a cluster that is the whole problem. Watch
+an attacker copy every `POST /transfer` four times and send the copies through the same load
+balancer:
+
+<ReplaySim />
+
+With a replay cache inside each server, a copy is caught only if it reaches the server that saw the
+original. With 8 servers and 4 copies per request, 570 of 800 copies ran in a five-minute run with
+the default seed: about 71%, close to the 72% you get from counting how many distinct servers five
+random picks reach. Per-server memory protects one server, and a cluster of one. A shared cache
+catches every copy, but now every 0-RTT handshake waits on a lookup in a shared store, and when that
+store is unreachable the only safe choice is to refuse early data. The cheapest complete answer is
+the third one: do not accept anything in early data that is unsafe to run twice.
+
+That is what production systems do. As of October 2026, Cloudflare's 0-RTT is off by default,
+accepts only `GET`, `HEAD` and `OPTIONS` in early data, and adds an `Early-Data: 1` header so the
+origin knows
+([Cloudflare docs](https://developers.cloudflare.com/speed/optimization/protocol/0-rtt-connection-resumption/)).
+An origin that sees that header on a request it cannot replay answers `425 Too Early`, and the
+client resends after the full handshake ([RFC 8470](https://www.rfc-editor.org/rfc/rfc8470)).
+Remember also that early data has no forward secrecy against a stolen STEK, from the previous
+section.
+
+:::danger[A GET is safe to replay only if it changes nothing]
+"Accept only GET in early data" protects you exactly as well as your GET handlers are free of side
+effects. `GET /unsubscribe?id=…`, `GET /api/redeem?code=…` and tracking pixels that count are all
+replayable writes. Before turning 0-RTT on, list the endpoints that do something on GET, or give
+every write an idempotency key so a second copy does nothing.
+:::
+
+### Chain building, and why "works in my browser" proves nothing
+
+A server sends its own certificate (the **leaf**) and the **intermediate** CA certificates that
+signed it. The client must build a path from the leaf to a **root** already in its trust store, and
+then check every link.
+
+<Figure caption="The server sends the leaf and the intermediate. The root is already on the device. The client checks each signature upwards and trusts the leaf only if the path ends at a root it holds.">
+  <Chain />
+</Figure>
+
+For every certificate on the path the client checks the signature against the issuer's public key,
+the validity dates against its own clock, that issuers are marked as CAs and the leaf is allowed
+for server authentication, and finally that the leaf's Subject Alternative Names include the host
+it asked for. As of September 2026 Mozilla's store, which curl and most Linux distributions use,
+held 121 roots trusted for TLS ([curl's extract](https://curl.se/docs/caextract.html)).
+
+The classic failure is a server that sends only its leaf. Clients then disagree, because each fills
+the gap differently:
+
+| Client | Missing intermediate |
+|---|---|
+| Chrome | Downloads it from the URL in the leaf's Authority Information Access field |
+| Firefox | Already has it: it preloads every intermediate disclosed to the CA database ([Mozilla, 2020](https://blog.mozilla.org/security/2020/11/13/preloading-intermediate-ca-certificates-into-firefox/)) |
+| Any browser that visited another site with the same intermediate | Often has it cached |
+| Python, Node, Go, Java, curl | Fail: "unable to get local issuer certificate" |
+
+So the site opens in the browser, the developer's API call fails, and the bug is reported against
+the wrong side. The `tls_checks` example in [Build it yourself](#build-it-yourself) reproduces it,
+and shows that the error for a missing intermediate is *identical* to the error for an impostor
+whose CA nobody trusts. That is why turning verification off to "fix" it is so dangerous: it fixes
+the impostor case too.
+
+Paths can also have more than one answer. CAs **cross-sign**: an intermediate may be signed by both
+a new root and an old one, so old devices that lack the new root still find a path. When the old
+root expires, a client that picks the expired path fails even though a valid one exists. That is
+what happened to older OpenSSL versions when Let's Encrypt's old root expired in September 2021
+([Let's Encrypt](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/)). Check
+chains with the clients you actually ship, not with a browser.
+
+### Revocation, which mostly does not work
+
+If a private key leaks, the CA can **revoke** the certificate before it expires. The client then
+has to find out, and both ways of asking have failed in practice:
+
+- A **CRL** (certificate revocation list) is a signed list of revoked serial numbers. Lists get large,
+  and clients download them rarely.
+- **OCSP** asks the CA about one certificate at connection time. It adds a network round trip,
+  tells the CA every site you visit, and fails often enough that browsers proceed when there is no
+  answer. That **soft-fail** behaviour is the fatal part:
 
 <StepThrough
-  title="A replayed 0-RTT request"
+  title="OCSP soft-fail against the attacker it was meant to stop"
   actors={[
-    { id: 'client', label: 'Client', kind: 'client' },
+    { id: 'browser', label: 'Browser', kind: 'client' },
     { id: 'attacker', label: 'Attacker', kind: 'server' },
-    { id: 'server', label: 'Server', kind: 'server' },
+    { id: 'ocsp', label: 'CA (OCSP)', kind: 'server' },
   ]}
   steps={[
-    { from: 'client', to: 'server', label: 'hello + POST', text: 'A returning client sends its ticket and, in the same flight, an early request: POST /transfer. It is encrypted, and the attacker on the path cannot read it.' },
-    { from: 'attacker', to: 'attacker', label: 'copy bytes', text: 'The attacker records the flight. No key is needed to copy bytes.', tone: 'warn' },
-    { from: 'server', to: 'client', label: '200 done', text: 'The server decrypts the early data with the ticket\'s keys and performs the transfer.', dashed: true, tone: 'ok' },
-    { from: 'attacker', to: 'server', label: 'same bytes', text: 'The attacker sends the identical flight again on a new connection, perhaps to a different server in the same cluster. The ticket and the encryption are still valid.' },
-    { from: 'server', to: 'server', label: 'transfer again', text: 'Without anti-replay protection, the server decrypts the same request and performs the transfer a second time. The attacker never learned what it said.', tone: 'bad' },
+    { from: 'attacker', to: 'browser', label: 'stolen cert', text: 'The attacker intercepts your connection and presents the bank\'s real certificate, signing with the stolen private key. The CA revoked that certificate yesterday. Every signature checks out.' },
+    { from: 'browser', to: 'ocsp', label: 'revoked?', text: 'The browser asks the CA. The request crosses the same network the attacker controls.' },
+    { from: 'attacker', to: 'attacker', label: 'drop it', text: 'The attacker drops the OCSP request.', tone: 'bad' },
+    { from: 'browser', to: 'browser', label: 'soft-fail', text: 'No answer could mean the CA is down, which happens, so the browser carries on as if the certificate were fine.', tone: 'bad' },
   ]}
-  summary="0-RTT data is protected against reading and editing, but not against repetition. Accept it only for requests that are safe to run twice, such as GET, or make the server remember which tickets it has seen, or answer 425 Too Early so the client resends after the full handshake."
+  summary="Soft-fail revocation stops only attackers who cannot block traffic, and an attacker using a stolen key on your path can always block traffic. Hard-fail would turn every CA outage into an outage for every site it serves."
 />
 
-The practical defences:
+**OCSP stapling** lets the server fetch a signed OCSP answer and send it in the handshake, fixing
+privacy and latency, and **Must-Staple** marks a certificate as unusable without a stapled answer.
+Few sites used either. Let's Encrypt, the largest CA, stopped accepting Must-Staple requests in May
+2025 and shut its OCSP service down on 6 August 2025, keeping only CRLs
+([Let's Encrypt](https://letsencrypt.org/2024/12/05/ending-ocsp/)).
 
-- **Only accept safe requests early.** As of October 2026, Cloudflare's 0-RTT accepts only `GET`,
-  `HEAD` and `OPTIONS` in early data and adds an `Early-Data: 1` header for your origin
-  ([Cloudflare docs](https://developers.cloudflare.com/speed/optimization/protocol/0-rtt-connection-resumption/)).
-- **Let the application refuse.** [RFC 8470](https://www.rfc-editor.org/rfc/rfc8470) defines
-  `425 Too Early`: the client sends the request again once the handshake is complete.
-- **Make the operation idempotent anyway**, with an idempotency key, so a replay from 0-RTT, a retry
-  or a double-click is harmless.
+Browsers moved the work to themselves. Chrome ships **CRLSets**, a curated list of revocations
+pushed with browser updates, aimed at emergencies rather than every revoked certificate. Firefox
+ships **CRLite**, a compressed encoding of every revocation of every certificate in the
+Transparency logs, updated twice a day and checked locally; it is on for desktop users since
+Firefox 137, and Firefox 142 stopped making OCSP queries for ordinary domain-validated certificates
+([Mozilla, August 2025](https://hacks.mozilla.org/2025/08/crlite-fast-private-and-comprehensive-certificate-revocation-checking-in-firefox/)).
+Your back-end code is in a worse position: Python's `ssl`, Node's `tls` and most HTTP clients check
+no revocation at all by default.
 
-### Versions and the attacks that shaped them
+So for most clients, the only revocation that always works is **expiry**. A stolen key is usable for
+the rest of the certificate's life. With 398-day certificates that was up to 13 months; with 47-day
+certificates it is under 7 weeks. That is the main reason lifetimes are being cut.
 
-Every change in TLS has a broken thing behind it: BEAST (2011) broke old CBC encryption, CRIME
-(2012) leaked secrets through compression, POODLE (2014) and Logjam (2015) forced downgrades to weak
-options, and ROBOT (2017) revived a 1998 attack on RSA key exchange
-([RFC 7457](https://www.rfc-editor.org/rfc/rfc7457), [weakdh.org](https://weakdh.org/),
-[robotattack.org](https://robotattack.org/)). Heartbleed (2014), an OpenSSL bug that leaked server
-memory and private keys, showed that implementations fail too ([heartbleed.com](https://heartbleed.com/)).
+### Lifetimes falling to 47 days, and what breaks
 
-TLS 1.3's designers drew one lesson: **remove options, not add them**. It has no RSA key exchange,
-no CBC, no compression and no renegotiation, and three cipher suites in practical use, all AEAD. As of
-October 2026, SSL 2.0 and 3.0 are dead, TLS 1.0 and 1.1 were deprecated by
-[RFC 8996](https://www.rfc-editor.org/rfc/rfc8996) in 2021, TLS 1.2 is still acceptable with only
-ECDHE key exchange and AEAD ciphers, and TLS 1.3 is the default everywhere modern.
+In April 2025 the CA/Browser Forum, where CAs and browsers set the rules for public certificates,
+passed a schedule that cuts the maximum lifetime in steps
+([ballot SC-081v3](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/)):
 
-### Mutual TLS: when the server asks who you are
+<Figure caption="The maximum lifetime of a public certificate falls from 398 days to 47 by March 2029. Let's Encrypt issues 90 days by default and plans 45 by 2028.">
+  <Lifetimes />
+</Figure>
 
-So far only the server is authenticated; the client proves who it is later, with a password, cookie
-or token. Between your own services that is often not enough: a token can be stolen and replayed
-from anywhere, and a network location is not an identity. In **mutual TLS** (mTLS) the server asks
-for a certificate too.
+The same ballot shortens how long a CA may reuse a past **domain validation** (proof that you control
+the name) to 10 days by 2029. In practice, nearly every renewal must pass a fresh challenge: the HTTP
+file, DNS record or TLS response that the ACME protocol ([RFC 8555](https://www.rfc-editor.org/rfc/rfc8555))
+uses must work *every* time, not once a year. As of October 2026, Let's Encrypt issues 90-day
+certificates by default, moves to 64 days on 10 February 2027 and 45 days in February 2028, and
+recommends renewing at about two-thirds of the lifetime, ideally when the CA's **ARI** (ACME Renewal
+Information) endpoint says so ([Let's Encrypt](https://letsencrypt.org/2026/10/07/64-day-certs)).
+It also stopped sending expiry reminder emails in June 2025.
 
-<StepThrough
-  title="Mutual TLS between two services"
-  actors={[
-    { id: 'orders', label: 'orders', kind: 'client' },
-    { id: 'payments', label: 'payments', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'orders', to: 'payments', label: 'ClientHello', text: 'The orders service starts an ordinary TLS 1.3 handshake.' },
-    { from: 'payments', to: 'orders', label: 'cert + CertReq', text: 'The payments service sends its certificate chain and signature as usual, plus a CertificateRequest: "now show me yours".', dashed: true },
-    { from: 'orders', to: 'orders', label: 'check server', text: 'orders verifies the payments certificate against its trust store, exactly as a browser would.', tone: 'warn' },
-    { from: 'orders', to: 'payments', label: 'cert + verify', text: 'orders sends its own certificate, naming it spiffe://shop.internal/orders, and signs the handshake transcript with its private key. Then its Finished and its request.' },
-    { from: 'payments', to: 'payments', label: 'authorize', text: 'payments verifies the chain against its own internal CA and the signature, reads the identity from the certificate, and looks it up: orders may call POST /charge.', tone: 'ok' },
-    { from: 'payments', to: 'orders', label: '200 OK', text: 'Both sides now know exactly who they are talking to, and nothing on the network could have read or changed the request.', dashed: true, tone: 'ok' },
-  ]}
-  summary="mTLS gives both ends a cryptographic identity. Authentication happens in the handshake; authorization is still your code reading the identity and deciding what that caller may do."
-/>
+Renewing at two-thirds means a third of the lifetime is left when renewal starts. That third is not
+spare time for the automation. It is **the time humans have to notice and fix broken automation**.
+Automation breaks for dull reasons: a firewall change blocks the challenge, a DNS API token
+expires, a server is rebuilt without the renewal job, the proxy is never reloaded. Here are six
+certificates over two years, with those breakages:
 
-The identity is usually a URI in the SAN field following a convention called **SPIFFE**, such as
-`spiffe://shop.internal/orders`. The most common mistake with mTLS: **a valid client certificate
-proves who is calling, not what they may do**. "Any service with a certificate from our CA can call
-any endpoint" is a policy, and usually the wrong one.
+<RenewalSim />
 
-At scale, a **service mesh** such as Istio or Linkerd puts a small proxy next to each service, gives
-each workload a certificate automatically and rotates it constantly. As of October 2026, Istio's
-default workload certificate lives 24 hours, its private key generated inside the pod; a `PERMISSIVE`
-mode accepts plain text and mTLS during migration, and `STRICT` only mTLS
-([Istio security concepts](https://istio.io/latest/docs/concepts/security/)).
+With the defaults, 47-day certificates, about one breakage per certificate per year, an alert at 14
+days left and three days to fix, the run issues 139 certificates, the automation breaks 9 times,
+and no certificate expires. Each break is a short amber band: renewal overdue, alert, fix, renewed
+with days to spare. Set the alert to 0 and the same 9 breaks cause 27 days with an expired
+certificate, because nothing tells a human until users do. Drag the lifetime to 6 days: the window
+is 2 days, a 3-day fix arrives after expiry, and the run has 12 days of outage with the alert on;
+it takes a 1-day fix to get back to zero. Short lifetimes shrink the damage of a stolen key, and
+the price is that humans have to answer faster.
+
+What breaks first when lifetimes fall is not ACME. It is every place a certificate was **copied by
+hand**: uploaded to a CDN or an appliance, pasted into a partner's allow-list, pinned in a mobile
+app, imported into a Java keystore. At 398 days that was one chore a year per place; at 47 days it is
+at least eight. Find those places now, and make each one either automated or fetch its certificate
+from somewhere that is.
+
+:::caution[Monitor what is served, not what is stored]
+On 22 February 2013, Windows Azure Storage served expired HTTPS certificates in every region for
+about 11 and a half hours. The renewed certificates were already in the secret store, so expiry
+alerts on the store had gone quiet; the release that would deploy them had been delayed
+([InfoQ summary of Microsoft's post-mortem](https://www.infoq.com/news/2013/03/feb22_azure_outage)).
+Check certificates by connecting to every endpoint as a client would, from outside your network,
+and alert when one is past two-thirds of its lifetime.
+:::
+
+### Mutual TLS in a service mesh
+
+In **mutual TLS** (mTLS) the server adds a CertificateRequest to its flight, and the client answers
+with its own certificate and its own CertificateVerify signature over the transcript. Same
+mechanism, both directions: now the server knows which workload is calling, not only that someone
+holds a token. Inside a **service mesh** such as Istio or Linkerd, a proxy next to each workload does
+this for you, with an identity written as a URI in the certificate, by the **SPIFFE** convention:
+`spiffe://cluster.local/ns/shop/sa/orders`. As of October 2026, Istio issues workload certificates
+for 24 hours by default, from a key generated inside the pod
+([Istio security](https://istio.io/latest/docs/concepts/security/)).
+
+Four ways a mesh's mTLS is weaker than it looks:
+
+1. **Authenticated is not authorized.** A valid certificate says who is calling. "Any workload with
+   a certificate from our CA may call anything" is a policy, and usually the wrong one. The `mtls`
+   example in Build it yourself refuses a perfectly authenticated caller.
+2. **Permissive mode accepts plaintext.** Istio's `PERMISSIVE` mode, the default, accepts both mTLS
+   and plain text so services can migrate one at a time. Until a namespace is `STRICT`, an attacker
+   inside the network can skip mTLS entirely by speaking plain HTTP.
+3. **The application trusts a header.** The sidecar ends mTLS and talks plain HTTP to the app on
+   localhost, passing the caller's identity in a header such as `X-Forwarded-Client-Cert`. If the
+   app's port is reachable around the sidecar, anyone can send that header. Envoy strips a
+   client-supplied one by default
+   ([Envoy docs](https://envoyproxy.io/docs/envoy/latest/configuration/http/http_conn_man/headers));
+   make sure the app listens only on localhost.
+4. **The mesh CA becomes a hard dependency.** With 24-hour certificates, a CA outage longer than the
+   remaining lifetime is an outage of every service that cannot renew, at once. Monitor the CA like
+   the database, not like a tool.
 
 ### Where TLS ends inside your system
 
-The security engineer's second finding was about a question most TLS diagrams skip: *where does the
-encryption stop?* A request may cross a CDN, a load balancer, an API gateway and a sidecar before
-it reaches your code, and each may decrypt it. Decrypting at a proxy is called **TLS termination**.
+A request may cross a CDN, a load balancer, an API gateway and a sidecar before reaching your code,
+and each can decrypt it. Decrypting at a proxy is **TLS termination**, and where it happens decides
+who can read your traffic.
 
 <Figure caption="TLS can end at the edge, be re-encrypted to the service, pass through untouched, or be replaced by mutual TLS between services. Only the first leaves plain text inside your network.">
   <Termination />
 </Figure>
 
-- **Terminate at the edge.** Plain HTTP travels to your services. Simple, and exactly the "SSL added
-  and removed here" design: anyone on any machine inside can read and change everything, including
-  passwords and tokens in headers.
-- **Re-encrypt.** The proxy decrypts, does its job (path routing, a web application firewall,
-  headers), then opens a new, *verified* TLS connection to the service.
-- **Passthrough.** The load balancer forwards encrypted bytes, routing on the TCP connection or the
-  SNI name. It cannot route on paths, but the private key lives only on your service.
-- **A mesh with mutual TLS.** Decrypted at the edge, then every hop between services is mTLS:
-  encrypted everywhere, every caller identified.
-
-Cloud providers encrypt some traffic for you: AWS encrypts links between its zones and regions, and
-some instance types encrypt instance-to-instance traffic in hardware. Its documentation still makes
-TLS your responsibility
-([AWS EC2 data protection](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/data-protection.html)),
-because encryption on a cable does not stop a compromised machine on the same network, and it
-authenticates nobody.
-
-:::note[From the trenches]
-"It's an internal network" is the most common reason teams give for plain HTTP between services,
-and it does not survive how breaches unfold. Attackers rarely break in at the service they want;
-they land on a forgotten build server or a developer laptop and move sideways, reading internal
-traffic as they go. In practice I would start a new system with TLS on every hop and make plain text
-the exception that needs a written reason.
-:::
-
-### Getting and renewing certificates
-
-The last piece is operational, and it causes more outages than every attack on this page combined:
-when a certificate expires, every client refuses to connect at once.
-
-For a public certificate the CA must check that you control the domain. The standard protocol is
-**ACME** ([RFC 8555](https://www.rfc-editor.org/rfc/rfc8555)), created for Let's Encrypt and now
-supported by most CAs:
-
-<StepThrough
-  title="Getting a certificate with ACME (HTTP challenge)"
-  actors={[
-    { id: 'server', label: 'Your server', kind: 'client' },
-    { id: 'ca', label: 'ACME CA', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'server', to: 'ca', label: 'order', text: 'Your ACME client, such as certbot, Caddy or cert-manager, asks for a certificate for shop.example.in.' },
-    { from: 'ca', to: 'server', label: 'challenge', text: 'The CA replies with a random token: "prove you control shop.example.in by serving this token at /.well-known/acme-challenge/ on port 80."', dashed: true },
-    { from: 'server', to: 'server', label: 'publish', text: 'The client puts the token where the CA asked.' },
-    { from: 'ca', to: 'server', label: 'GET token', text: 'The CA fetches the token over the internet, from several network locations, so that one hijacked path is not enough to fool it.' },
-    { from: 'server', to: 'ca', label: 'CSR', text: 'The client sends a certificate signing request containing the new public key. The private key never leaves your server.' },
-    { from: 'ca', to: 'server', label: 'certificate', text: 'The CA logs the certificate in Certificate Transparency logs and returns it with its intermediates.', dashed: true, tone: 'ok' },
-    { from: 'server', to: 'server', label: 'install', text: 'The client saves the files and reloads the web server. Forgetting the reload is a classic failure: a new certificate on disk, the old one still being served.', tone: 'warn' },
-  ]}
-  summary="ACME turns 'prove you own this domain and give me a certificate' into an API call that a program can repeat for ever. That is what makes short lifetimes possible."
-/>
-
-The **DNS-01** challenge instead publishes the token as a DNS TXT record; it works for servers not
-reachable from the internet and is the only way to get a wildcard certificate. The
-[DNS](/networking/dns/) page's CAA records say which CAs may issue for your domain at all.
-
-**Lifetimes are falling fast.** The CA/Browser Forum's April 2025 ballot, covered on the
-[foundations page](/foundations/how-the-web-works/), shrinks the maximum lifetime step by step
-([SC-081v3](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/)):
-
-<Figure caption="The maximum lifetime of a public certificate falls from 398 days to 47 by 2029. Let's Encrypt already issues 90 days by default and plans 45 by 2028. Renewing by hand stops being realistic.">
-  <Lifetimes />
-</Figure>
-
-As of October 2026, Let's Encrypt issues 90-day certificates by default, offers 6-day ones, and
-moves its default to 64 days on 10 February 2027 and 45 days in February 2028
-([Let's Encrypt](https://letsencrypt.org/2026/10/07/64-day-certs)). It recommends renewing at about
-two-thirds of the lifetime, ideally via **ARI** (ACME Renewal Information), which lets the CA tell
-your client when to renew. It also stopped sending expiry reminder emails in June 2025
-([Let's Encrypt](https://letsencrypt.org/2025/06/26/expiration-notification-service-has-ended/)):
-if your plan was "we'll get an email", you no longer have a plan.
-
-Why renew at two-thirds rather than at the last moment? Watch six certificates over two years,
-renewed by hand when a reminder arrives a month before expiry; now and then a reminder goes to
-someone who has left.
-
-<CertLifecycleSim mode="manual" />
-
-Most renewals happen quietly inside the amber band. A missed reminder gives no warning at all: the
-certificate stays green until the day it turns red, with every client failing. In our run, five of 22 renewals were
-missed, for 10 days of outage. Drag the lifetime down to 47 days and the same team does 109 renewals
-by hand, with 28 days of outage.
-
-Now the same certificates with automation that renews at two-thirds of the lifetime and retries
-daily. Automation breaks too, for boring reasons: a firewall change blocks the challenge, a DNS API
-token expires, a server is rebuilt without the renewal job. Each red cross is one of those.
-
-<CertLifecycleSim mode="automated" />
-
-With 90-day certificates, an alert at 14 days left and three days for a human to fix things, eight
-breakages happened in two years and none caused an outage. Each shows as a short amber band: renewal
-overdue, alert, fix, renewed with days to spare. **The renewal window is the time you give humans to
-notice and fix broken automation.** Set the alert to 0 and those eight breakages become 24 days of
-outage. Drag the lifetime to 6 days and the window shrinks to 2 days, so a 3-day fix arrives after
-expiry, alert or no alert. Short lifetimes limit the damage of a stolen key, and they demand fast,
-reliable automation and fast humans.
-
-## Choosing between them
-
-Most TLS decisions come down to three questions: where should encryption end, how strict should the
-configuration be, and how should certificates be renewed?
-
 | | Edge only | Re-encrypt | Passthrough | Mesh mTLS |
 |---|---|---|---|---|
 | Plain text inside the network | yes | only inside the proxy | no | no |
-| Proxy can route on paths and headers | yes | yes | no, only on SNI | yes |
-| Where private keys live | edge | edge and services | services only | edge, plus a short-lived key per service |
-| Callers identified cryptographically | no | no | no | yes |
-| Operational cost | lowest | moderate | moderate | highest, unless a mesh or platform does it |
-| Typical use | legacy systems | most web apps behind a managed load balancer | databases, end-to-end requirements | microservices at scale, zero-trust networks |
+| Proxy can route on path and headers | yes | yes | no, only on SNI | yes |
+| Private keys live on | the edge | edge and services | services only | edge, plus a short-lived key per workload |
+| Callers identified by certificate | no | no | no | yes |
+| Typical use | legacy | most web apps behind a managed balancer | databases, end-to-end rules | many services, zero-trust networks |
 
-For configuration, Mozilla publishes profiles most tools follow
-([Mozilla server-side TLS, guidelines version 6.0](https://ssl-config.mozilla.org/)): **Modern** is
-TLS 1.3 only, for when you control the clients; **Intermediate** adds TLS 1.2 with ECDHE and AEAD
-only, and is the right default for public websites and APIs.
+"Re-encrypt" only helps if the proxy *verifies* the service's certificate; otherwise it is
+`verify=False` on the back half. CDNs make this choice explicit. Cloudflare's *Flexible* mode is
+HTTPS to the visitor and plain HTTP to your origin; *Full* encrypts to the origin without checking
+its certificate; only *Full (strict)* verifies it
+([Cloudflare SSL modes](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/)). A
+Flexible-mode site whose origin redirects HTTP to HTTPS loops until the browser gives up, and teams
+"fix" that by removing the redirect.
 
-For renewal, here are three strategies on exactly the same two years of bad luck:
+Cloud providers encrypt some links for you; AWS encrypts traffic between its zones and regions and,
+on some instance types, between instances. Its documentation still leaves TLS to you
+([AWS EC2 data protection](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/data-protection.html)),
+because a cable that is encrypted does not stop a compromised machine on the same network, and it
+identifies nobody.
 
-<CertLifecycleSim mode="compare" />
-
-In our run, the manual panel lost 9 days while someone renewed 23 certificates by hand. The 90-day
-automated panel absorbed every breakage, because a third of 90 days is a month of slack. The 6-day
-panel lost 18 days, because a three-day fix cannot fit into a two-day window. Press Reset with
-different sliders; the numbers change, the shape does not.
-
-**How to choose.** In practice:
-
-1. **Encrypt every hop by default.** Re-encrypt behind a managed load balancer for a typical web app;
-   move to a mesh with mTLS once you have many services.
-2. **Use the intermediate profile for anything public**, modern where you control every client.
-3. **Automate every certificate**, renew at two-thirds of its lifetime, and alert on "renewal
-   overdue", not only "expires soon". 90-day certificates with good alerting are a comfortable
-   default in 2026.
-4. **Never turn off verification** to fix an error. Find which of the five checks failed and fix that.
+:::note[From the trenches]
+"It's an internal network" is the most common reason for plain HTTP between services, and it does
+not survive how breaches unfold. Attackers rarely land on the service they want; they land on a
+forgotten build server and move sideways, reading internal traffic as they go. The 2013 leak about
+the private links between Google's data centres
+([MUSCULAR](https://en.wikipedia.org/wiki/MUSCULAR)) showed a slide pointing at where encryption was
+removed. I would start any new system with TLS on every hop and make plain text the exception that
+needs a written reason.
+:::
 
 ## Build it yourself
 
-We have already broken encryption without integrity and key exchange without authentication. Now
-the real thing, with the standard libraries. Every file is in
-[examples/tls](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/tls), and every
-output came from running them in October 2026. First, `make-certs.sh` uses `openssl` to build a
-private CA: a root, an intermediate, a good server certificate for `localhost`, an expired one, one
-for the wrong name, two client certificates for mTLS, and an impostor's certificate signed by a CA
-nobody trusts. Real setups use a mesh's CA, HashiCorp Vault or a cloud private CA, but the steps are
-the same.
+Two programs that run against a private CA built by `make-certs.sh`: a root, an intermediate, a good
+server certificate, an expired one, one for the wrong name, an impostor's from a CA nobody trusts,
+and two client certificates. All files are in
+[`examples/tls/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/tls).
 
-### Step 1: what a client checks, and what `verify=False` does
+### Step 1: what a client checks, and what `verify=False` removes
 
-A local TLS server presents each of those certificates in turn. A client that trusts only our root
-connects and sends a password, first with the default checks, then with the "fix" from our story:
+A local server presents each certificate in turn. The client trusts only our root and sends a
+password, first with the default checks, then with the "fix" people paste when they see
+`CERTIFICATE_VERIFY_FAILED`:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -757,7 +680,7 @@ for (const [label, chain, key] of CASES) {
   </TabItem>
 </Tabs>
 
-```text title="tls_checks.py output"
+```text title="python tls_checks.py"
 Client with verification on (the default):
   good: leaf + intermediate   OK  TLSv1.3 TLS_AES_256_GCM_SHA384 -> 'server got: password=hunter2'
   missing intermediate        REFUSED  unable to get local issuer certificate
@@ -773,17 +696,14 @@ Client with verify=False (CERT_NONE, no hostname check):
   impostor's own CA           OK  TLSv1.3 TLS_AES_256_GCM_SHA384 -> 'server got: password=hunter2'
 ```
 
-The `connect()` helper in the full file passes `server_hostname`, which turns on both SNI and the
-name check. Read the last line slowly. With verification off, the impostor received the password over TLS 1.3
-with AES-256: modern protocol, strong cipher, encrypted all the way to the attacker. That is attempt
-2's man in the middle, rebuilt with real TLS. In Node, the "fix" is `rejectUnauthorized: false`, and
-the five results are the same.
+Read the last line. With verification off, the impostor received the password over TLS 1.3 with
+AES-256: a modern protocol and a strong cipher, encrypting all the way to the attacker. That is
+Mallory's attack again, with real TLS. Node prints the same outcomes with its own error codes
+(`UNABLE_TO_VERIFY_LEAF_SIGNATURE` for both the missing intermediate and the impostor). When you see
+that error, run `openssl s_client -connect host:443 -servername host -showcerts` and count the
+certificates the server sends.
 
-Note that "missing intermediate" and "impostor" produce the same error. From the client's side they
-look identical: a certificate it cannot trace to a trusted root. That is why the right response is
-to find out which it is, not to make it go away.
-
-### Step 2: mutual TLS with identity-based authorization
+### Step 2: mutual TLS with authorization by identity
 
 A payments service that requires a client certificate, reads the caller's SPIFFE ID from it, and
 checks what that caller may do:
@@ -839,320 +759,194 @@ const server = tls.createServer({
   </TabItem>
 </Tabs>
 
-```text title="mtls.py output (node mtls.mjs: the first line reads ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED)"
+```text title="python mtls.py (node mtls.mjs: the first line reads ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED)"
   no cert  POST /charge  -> refused: TLSV13_ALERT_CERTIFICATE_REQUIRED
   orders   POST /charge  -> 200 OK for spiffe://shop.internal/orders
   reports  GET /summary  -> 200 OK for spiffe://shop.internal/reports
   reports  POST /charge  -> 403 Forbidden for spiffe://shop.internal/reports
 ```
 
-Four lines, four lessons. Without a certificate, the handshake fails; the client only learns this
-when it reads, because in TLS 1.3 the client finishes its side before the server has checked its
-certificate. `orders` may charge. `reports` may read the summary. And `reports`, with a perfectly
-valid certificate, is refused a charge: authenticated, not authorized.
-
-### Step 3: a certificate monitor that alerts in time
-
-The most valuable TLS code most teams will write is a scheduled check that connects to every
-endpoint as a client would. What makes this one production-shaped is the alert rule: it warns once a
-certificate is past two-thirds of its lifetime, when automation should already have replaced it.
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="cert_expiry.py (excerpt)"
-# runnable version: examples/tls/python/cert_expiry.py
-    start = ssl.cert_time_to_seconds(cert["notBefore"])
-    end = ssl.cert_time_to_seconds(cert["notAfter"])
-    lifetime = (end - start) / 86400
-    left = (end - time.time()) / 86400
-    issuer = dict(item[0] for item in cert["issuer"]).get("organizationName", "?")
-    detail = f"{left:5.0f} of {lifetime:3.0f} days left, issuer {issuer}"
-
-    if left < CRITICAL_DAYS:
-        return "CRIT", detail
-    if left < lifetime / 3:  # renewal should have happened by now
-        return "WARN", detail + " (renewal overdue)"
-    return "OK", detail
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="cert-expiry.mjs (excerpt)"
-// runnable version: examples/tls/js/cert-expiry.mjs
-      const [start, end] = [Date.parse(cert.valid_from), Date.parse(cert.valid_to)];
-      const lifetime = (end - start) / DAY;
-      const left = (end - Date.now()) / DAY;
-      const detail = `${left.toFixed(0).padStart(5)} of ${lifetime.toFixed(0).padStart(3)} days left, issuer ${cert.issuer.O ?? '?'}`;
-      if (left < CRITICAL_DAYS) resolve(['CRIT', detail]);
-      else if (left < lifetime / 3) resolve(['WARN', `${detail} (renewal overdue)`]); // should have renewed by now
-      else resolve(['OK', detail]);
-```
-  </TabItem>
-</Tabs>
-
-```text title="cert_expiry.py output (18 October 2026; exit code 2)"
-OK   example.com                   68 of  90 days left, issuer SSL Corporation
-OK   github.com                    42 of  90 days left, issuer Sectigo Limited
-OK   letsencrypt.org               46 of  90 days left, issuer Let's Encrypt
-CRIT expired.badssl.com         verification failed: certificate has expired
-CRIT wrong.host.badssl.com      verification failed: Hostname mismatch, certificate is not valid for 'wrong.host.badssl.com'.
-CRIT untrusted-root.badssl.com  verification failed: self-signed certificate in certificate chain
-```
-
-All three real sites were on 90-day certificates from three different CAs; the
-[badssl.com](https://badssl.com/) hosts are deliberately broken. Run a monitor like this from
-outside your network, so it sees the chain your load balancer really sends, and point it at internal
-endpoints too, because those are the certificates nobody remembers.
-
-:::tip[See it on your own machine]
-`openssl s_client -connect example.com:443 -servername example.com -showcerts` prints the chain a
-server really sends, the version and the cipher. `openssl x509 -in cert.pem -noout -text` reads a
-certificate file. When a client fails with a certificate error, check in this order: does the chain
-include the intermediate, does the name match, and is the client's clock right.
-:::
-
-## How real systems do it
-
-**Let's Encrypt made automation normal.** It launched in 2015 with free 90-day certificates issued
-only through ACME, and by late 2025 it was often issuing ten million a day. Its move to 64 and then
-45 days, and its end of OCSP and expiry emails, are pushing every CA and hosting platform towards
-automatic renewal, as of October 2026
-([Let's Encrypt lifetimes](https://letsencrypt.org/docs/cert-lifetimes/)).
-
-**CDNs make the termination choice explicit.** Cloudflare's SSL modes map onto this page's patterns:
-*Flexible* is HTTPS to the visitor but plain HTTP to your origin; *Full* is HTTPS to the origin
-without checking its certificate; *Full (strict)* verifies it
-([Cloudflare SSL modes](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/)). Only
-strict keeps the promises end to end. Flexible gives the visitor a padlock while the second half
-travels in plain text, and Full is our `verify=False` on the back half.
-
-**Cloud load balancers pick your TLS policy, and the default depends on how you create them.** As of
-October 2026, an AWS Application Load Balancer created in the console defaults to a TLS 1.2 and 1.3
-policy with post-quantum key exchange (`ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09`), while one
-created through the CLI or CloudFormation without a policy still gets the legacy
-`ELBSecurityPolicy-2016-08`, which allows TLS 1.0
-([AWS docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html)).
-Infrastructure code should always name the policy.
+Without a certificate the handshake fails, and the client only learns it on its first read: in TLS
+1.3 the client finishes its side before the server has checked the client's certificate, so a
+connection that "succeeded" can still be refused one step later. The last line is the one that
+matters: `reports` holds a valid certificate and is still refused a charge.
 
 ## Gotchas and war stories
 
-:::danger[A real breach: the certificate nobody renewed on the security tool]
-In 2017, attackers stole personal data on 145.5 million Americans from Equifax. The US Government
-Accountability Office found that a device inspecting encrypted traffic for attacks had an expired
-certificate, about 10 months out of date, so encrypted traffic was not being inspected at all. The
-attackers took data out over encrypted connections for about 76 days. When the certificate was
-replaced on 29 July 2017, the suspicious traffic was seen almost immediately
+:::danger[The certificate nobody renewed on the security tool]
+In the 2017 Equifax breach, a device that inspected encrypted traffic for attacks had a certificate
+that had expired about 10 months earlier, so it was not inspecting that traffic at all. Attackers
+moved data out over encrypted connections for about 76 days; once the certificate was replaced on
+29 July 2017, the suspicious traffic was noticed almost at once
 ([GAO-18-559](https://www.gao.gov/products/gao-18-559)).
 :::
 
 An expired certificate on a monitoring or security tool pages nobody, because nothing user-facing
-breaks. It fails silent and open. Monitor your internal tooling's certificates as carefully as your
-public site's.
+breaks. It fails silently and open. Put internal tooling on the same served-certificate monitor as
+the public site.
 
-:::danger[A real outage: one expiry date, every region]
-On 22 February 2013, Windows Azure Storage stopped serving HTTPS in every region for about 11 and a
-half hours because its certificates expired. The renewed certificates were already in the secret
-store, so the expiry alerts went quiet, but the release that would deploy them had been delayed
-behind other work
-([InfoQ summary of Microsoft's post-mortem](https://www.infoq.com/news/2013/03/feb22_azure_outage)).
-:::
-
-Monitor the certificate *being served*, not the one in your secret store. And identical
-certificates with identical expiry dates in every region are a single point of failure that no
-redundancy protects against.
-
-:::caution[The Friday fix, explained]
-Back to our story. The bank had renewed its certificate that Friday and configured its server to
-send only the new leaf, without the intermediate. Chrome filled the gap from its cache; Python did
-not. The right fix was a one-line change on the bank's server or, while waiting, adding the bank's
-intermediate to your client's trust bundle for that one host. `verify=False` "fixed" it by making
-your service willing to send money instructions to anyone who could intercept the connection. If you
-find it in a codebase, treat it as a security incident, not a code smell.
-:::
-
-**Renewed on disk, old one served.** ACME clients renew files, but web servers, proxies and Java
-applications often read certificates only at startup. The file is fresh, the certificate in memory
-expires. Reload after renewal, and monitor what is served, as in Step 3.
-
-**Corporate inspection proxies break clients.** Many companies decrypt employees' traffic with a
-proxy that issues certificates from a company root installed on managed laptops. Browsers trust it;
-Python, Node, Java and Docker images carry their own trust stores and do not. "Certificate verify
-failed" at work and not at home is usually this. Add the company root to the tool's trust bundle;
-do not disable verification.
-
-:::caution[Flexible TLS and redirect loops]
-A CDN in Cloudflare's Flexible mode talks plain HTTP to your origin. If your origin redirects HTTP to
-HTTPS, as it should, every request bounces until the browser gives up with "too many redirects".
-Teams often "fix" it by removing the redirect. The real fix is a certificate on the origin and Full
-(strict) at the CDN.
-:::
+- **Renewed on disk, old one in memory.** ACME clients write files; nginx, HAProxy, Java services
+  and many SDKs read certificates only at startup. Reload after renewal, and check what is served.
+- **`verify=False` in a codebase is an incident, not a code smell.** It almost always arrived as a
+  fix for a missing intermediate or a corporate proxy root. Fix the chain, or add that one root to
+  that one client's trust bundle.
+- **Containers carry their own trust stores.** A slim image without CA certificates, or with a stale
+  bundle, fails every outbound call after a CA changes its chain. Treat the CA bundle as a
+  dependency you update.
+- **Infrastructure code picks old policies.** As of October 2026, an AWS Application Load Balancer
+  created in the console defaults to a TLS 1.2 and 1.3 policy with post-quantum key exchange, while
+  one created through the CLI or CloudFormation without a policy still gets
+  `ELBSecurityPolicy-2016-08`, which allows TLS 1.0
+  ([AWS docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html)).
+  Always name the policy.
+- **Identical expiry everywhere is one point of failure.** The Azure outage above hit every region
+  at once because every region held the same certificate. Stagger renewals.
 
 ## Trade-offs and when not to use it
 
-**What TLS costs.** One round trip for a new connection in TLS 1.3, a few milliseconds of
-computation, and CPU small enough to be invisible. The real cost is operations: certificates to
-issue, renew, deploy, reload and monitor; private keys to protect; trust stores to keep updated; and
-a whole class of outages, expired certificates, that plain text never has.
+**What TLS costs.** One round trip for a new connection in TLS 1.3 and little CPU: when Gmail moved
+everyone to HTTPS in 2010 it cost under 1% of front-end CPU
+([Langley, Modadugu and Chang](https://www.imperialviolet.org/2010/06/25/overclocking-ssl.html)).
+The real cost is operations: keys to protect, certificates to renew, deploy and monitor, ticket keys
+to rotate, and a class of outage, expiry, that plain text never has.
 
-**What TLS does not solve.**
+**What it does not solve.** The endpoints: after decryption, a compromised machine reads everything.
+Data at rest. Authorization. Trustworthiness: phishing sites have valid certificates. Metadata:
+addresses, timing and sizes, and the site name unless ECH applies.
 
-- **The endpoints.** If either machine is compromised, the attacker reads everything after
-  decryption.
-- **Data at rest.** Once data arrives, it is plaintext again, in memory, logs and the database.
-- **Authorization.** Even mutual TLS only tells you who is calling.
-- **Trustworthiness.** A valid certificate proves control of a domain name. Phishing sites have them.
-- **Metadata.** Who talks to whom, when and how much is still visible, and so is the site name in
-  the ClientHello unless both sides support Encrypted Client Hello.
-
-**When not to use it, or not alone.** Communication inside one machine over a Unix domain socket
-gains little from it. When a whole network link must be protected, including protocols that cannot
-speak TLS, a VPN or WireGuard tunnel may be the better layer, as a complement. And never build your
-own replacement: every attempt on this page was a real design someone once trusted. Use the standard
-library's TLS, a well-known proxy, or your platform's mesh.
-
-:::note[From the trenches]
-Teams usually discover their TLS posture in one of two ways: a certificate expires on a Saturday, or
-an auditor asks where encryption stops. Both are cheaper to answer on a quiet Tuesday. Keep an
-inventory of every endpoint, who owns its certificate, how it renews and where its TLS terminates,
-and point the Step 3 monitor at it. That is an afternoon of work, and the most outage-preventing
-afternoon in this whole topic.
-:::
+**When not to reach for it alone.** Inside one machine over a Unix socket it adds little. To protect
+a whole network link, including protocols that cannot speak TLS, a WireGuard or IPsec tunnel may be
+the better layer, alongside TLS rather than instead of it. Never build your own replacement: every
+broken scheme on this page was once someone's careful design.
 
 ## Interview corner
 
-TLS comes up as a fundamentals question and inside system design, when the interviewer asks where
-to terminate HTTPS. A strong answer says which promise each part provides and what goes wrong
-without it.
-
-1. **"Walk me through a TLS handshake."** ClientHello with key shares, SNI and ALPN; ServerHello with
-   the server's share; then everything is encrypted: certificate chain, CertificateVerify signature
-   over the transcript, Finished; the client verifies chain, name, dates and signature; client
-   Finished plus the first request. One round trip in TLS 1.3, two in 1.2. Bonus: forward secrecy
-   and session tickets.
-2. **"How does the client know it's talking to the real server?"** The chain ends at a trusted root,
-   the name matches, and the CertificateVerify signature over this handshake's key shares proves
-   the server holds the private key now. Mention Certificate Transparency.
-3. **"Where would you terminate TLS in this design?"** Edge versus re-encryption versus passthrough
-   versus mesh mTLS, routing ability versus plain text inside, and who owns certificate renewal.
-4. **"What is 0-RTT and why is it dangerous?"** Early data sent with the ClientHello using keys from
-   a previous session; it saves a round trip but can be replayed, so accept only requests safe to
-   run twice, or answer `425 Too Early`.
-
-In system design rounds, one sentence earns credit: "TLS terminates at the load balancer, which
-re-encrypts to services, and services talk over mTLS issued by the mesh, rotated automatically."
+1. **"How does the client know it is talking to the real server?"** Chain to a trusted root, name
+   match, dates, and above all the CertificateVerify signature over this handshake's transcript,
+   which includes both key shares. Follow-up: *"So can a man in the middle never win?"* Yes, with a
+   certificate from a CA the client trusts: a compromised CA or an installed corporate root.
+   Certificate Transparency makes the first visible.
+2. **"What does forward secrecy protect, and what breaks it?"** Recorded traffic, against later
+   theft of the certificate key, thanks to ephemeral key exchange. Broken by RSA key exchange, by
+   long-lived session ticket keys in TLS 1.2, and for 0-RTT data by ticket keys in TLS 1.3.
+3. **"Would you turn on 0-RTT for this API?"** Only for requests safe to run twice, because early
+   data can be replayed on new connections, and per-server anti-replay does not protect a cluster.
+   Mention `425 Too Early` and idempotency keys.
+4. **"Where would you terminate TLS?"** Edge versus re-encrypt versus passthrough versus mesh mTLS,
+   trading the ability to route on paths against plain text inside, and who renews which
+   certificates.
 
 ## Check yourself
 
 <details>
-<summary>1. A service encrypts messages with AES in counter mode using a key nobody else has, but adds no MAC. What can an attacker on the network do, and what is the fix?</summary>
+<summary>1. Mallory relays your ClientHello to the bank unchanged and relays the bank's whole reply back to you unchanged. What can she read?</summary>
 
-They cannot read the messages, but they can change them: flipping a bit in the ciphertext flips the
-same bit in the plaintext, so with a known format they can change an amount or a recipient. The fix
-is authenticated encryption, such as AES-GCM or ChaCha20-Poly1305; in practice, use TLS rather than
-designing message protection yourself.
-
-</details>
-
-<details>
-<summary>2. An attacker records all traffic to your server today. Next year they steal the server's private key. Which sessions can they decrypt: TLS 1.3, TLS 1.2 with ECDHE, TLS 1.2 with RSA key exchange?</summary>
-
-Only the TLS 1.2 sessions with RSA key exchange, where the session secret was encrypted with the
-server's long-term key. The others used ephemeral Diffie-Hellman keys discarded after each
-handshake: forward secrecy. The stolen key does let them impersonate the server from now on.
+Nothing. The key was agreed between your share and the bank's share, and she knows neither private
+value. To read anything she must substitute a share, and then the bank's CertificateVerify covers a
+transcript that does not match yours.
 
 </details>
 
 <details>
-<summary>3. Your Python service fails with "unable to get local issuer certificate" when calling a partner's API, which opens fine in Chrome. What is the most likely cause, and what should you not do?</summary>
+<summary>2. An attacker records traffic to a TLS 1.2 server that uses ECDHE and session tickets, and a year later steals the ticket key the server has used since it booted. What can they decrypt?</summary>
 
-The partner's server most likely sends its certificate without the intermediate; Chrome fills the
-gap, Python does not. Check with `openssl s_client -showcerts`, ask the partner to send the full
-chain, and meanwhile add their intermediate to your trust bundle for that host. Do not set
-`verify=False`: the same message appears for a genuine impostor, as Step 1 showed.
-
-</details>
-
-<details>
-<summary>4. Your automation renews 90-day certificates with 30 days left and retries daily; an alert fires at 14 days left, and fixing broken automation takes 3 days. What changes with 6-day certificates and the same renew-at-two-thirds rule?</summary>
-
-The renewal window shrinks from 30 days to 2. With 90-day certificates a breakage leaves 14 days
-between alert and expiry, plenty for a 3-day fix. With 6-day certificates the fix arrives a day after
-expiry, so every breakage becomes an outage unless you can respond within hours.
+Every recorded connection whose session ticket they captured, including the full handshake that
+issued the ticket, because a TLS 1.2 ticket contains the master secret encrypted under that key.
+Ephemeral key exchange protected against theft of the certificate key, not the ticket key. Rotate
+ticket keys often.
 
 </details>
 
 <details>
-<summary>5. A load balancer terminates TLS and forwards plain HTTP to services. A colleague says that is fine because the services are in a private subnet. Give two concrete risks.</summary>
+<summary>3. Your Python service fails with "unable to get local issuer certificate" calling a partner API that opens fine in Chrome. What is the likely cause, and why is verify=False the wrong fix?</summary>
 
-Anyone who compromises any machine in that network can read passwords, tokens and personal data in
-every request, and change requests in flight. And nothing authenticates callers: any process that
-can reach a service can call it while pretending to be the load balancer. Re-encrypt from the load
-balancer, or use mTLS between services.
+The partner's server sends only its leaf; Chrome fetches the intermediate through AIA or has it
+cached, Python does not. Ask them to send the full chain, or add their intermediate to your trust
+bundle for that host meanwhile. The same error appears for an impostor's certificate, so turning
+verification off accepts the impostor too.
+
+</details>
+
+<details>
+<summary>4. You run 12 servers with a ClientHello replay cache in each, and accept POST in 0-RTT. An attacker sends 3 copies of a captured transfer. Roughly how many run?</summary>
+
+The original plus three copies land on random servers. A copy is rejected only if it lands on a
+server that already saw that ClientHello. With 12 servers, most copies land somewhere new: four
+random picks reach about 3.5 distinct servers, so about 2.5 of the 3 copies run. The fix is a shared cache or, better, no POST in early data.
+
+</details>
+
+<details>
+<summary>5. Your renewal automation breaks and is fixed within 5 days of an alert. With 47-day certificates renewed at two-thirds of their lifetime, what is the latest an alert can fire and still avoid an outage? What changes at 6 days?</summary>
+
+Renewal starts with about 16 days left, so the alert must fire with more than 5 days left; 14 days
+leaves plenty of slack. With 6-day certificates renewal starts with 2 days left, so a 5-day fix
+cannot avoid expiry: the team must fix renewals within hours, or the lifetime is too short for them.
 
 </details>
 
 ## Recap
 
-- **TLS makes three promises**: confidentiality (encryption), integrity (a tag on every record) and
-  authentication (a certificate plus a live signature). Any one without the others can be defeated.
-- **The handshake** uses ephemeral Diffie-Hellman (now often hybrid post-quantum X25519MLKEM768) for
-  fresh keys with forward secrecy, and a CertificateVerify signature over the transcript to prove the
-  server's identity. One round trip in TLS 1.3, two in 1.2.
-- **A certificate is public; the private key is the secret.** Clients check the chain to a trusted
-  root, the names, the dates and the signature. Servers must send the intermediates.
-- **Certificate Transparency** makes mis-issuance visible; revocation barely works; **short
-  lifetimes** are the real answer, falling to 47 days by 2029.
-- **0-RTT saves a round trip but can be replayed**; **mTLS gives services identities**, and
-  authorization is still your job.
-- **Know where TLS ends** and encrypt every hop. Automate every certificate, renew at two-thirds of
-  its lifetime, monitor what is served, and never ship `verify=False`.
+- The server proves itself with **CertificateVerify**, a signature over the handshake transcript
+  including both key shares. The certificate alone proves nothing; anyone can send it.
+- TLS authenticates **whatever key a trusted CA vouched for**: compromised CAs and installed roots
+  defeat it, and Certificate Transparency makes the first visible.
+- **Forward secrecy** comes from ephemeral key exchange and is undone by RSA key exchange and by
+  long-lived session ticket keys. Rotate them.
+- Encrypted traffic still shows **addresses, the site name (without ECH), sizes and timing**; sizes
+  alone can name pages unless responses are padded.
+- **0-RTT early data can be replayed** on new connections; per-server caches do not protect a
+  cluster. Accept only requests safe to repeat.
+- **Revocation mostly does not work**; short lifetimes are the real fix, falling to 47 days by 2029.
+  The renewal window is your human response time. Automate everything, alert on overdue renewals,
+  monitor what is served.
+- **Know where TLS ends.** Re-encrypt with verification, or use mTLS, and remember that mTLS
+  authenticates; your code still authorizes.
 
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'http-evolution', why: 'TLS 1.3 and ALPN are how HTTP/2 and HTTP/3 get negotiated. How each HTTP version uses the connection TLS sets up, and why HTTP/3 builds TLS into QUIC.' },
-  { slug: 'reverse-proxies', why: 'Where TLS termination actually happens: what a proxy in front of your services does with the decrypted traffic, and how to configure re-encryption.' },
-  { slug: 'proxy-lb-gateway', why: 'The boxes that terminate TLS in front of your services: reverse proxies, layer 4 and layer 7 load balancers, and API gateways, and which one can read what.' },
-  { slug: 'cdn-and-edge-caching', why: 'CDNs terminate TLS close to users to cut handshake round trips. How they do it, and how the edge-to-origin leg should be protected.' },
-  { slug: 'encryption-at-rest', why: 'The other half of encryption: protecting data once it arrives, in databases, disks and backups, and the key management behind it.' },
-  { slug: 'secrets-management', why: 'Private keys are secrets. Where to keep them, how services get them, and how to rotate them without outages.' },
-  { slug: 'jwt-and-key-rotation', why: 'The same signatures and key rotation problems, applied to tokens instead of certificates.' },
+  { slug: 'http-evolution', why: 'How HTTP/2 and HTTP/3 use the connection TLS sets up, and why QUIC builds TLS 1.3 into the transport.' },
+  { slug: 'reverse-proxies', why: 'Where termination happens in practice, and how to configure re-encryption with verification.' },
+  { slug: 'proxy-lb-gateway', why: 'Which boxes in front of your services decrypt traffic, and what each can read and decide.' },
+  { slug: 'cdn-and-edge-caching', why: 'CDNs terminate TLS near users; how the edge-to-origin leg should be protected.' },
+  { slug: 'encryption-at-rest', why: 'The other half: protecting data once it arrives, and the key management behind it.' },
+  { slug: 'secrets-management', why: 'Private keys and ticket keys are secrets: where to keep them and how to rotate them.' },
+  { slug: 'jwt-and-key-rotation', why: 'The same signature and rotation problems, applied to tokens.' },
 ]} />
 
 ## Further reading
 
 **Specs & official docs**
 
-- [RFC 9846, TLS 1.3](https://www.rfc-editor.org/rfc/rfc9846.html) (July 2026) — the current TLS 1.3 text, including 0-RTT and downgrade protection.
-- [RFC 10024, hybrid post-quantum key agreement for TLS 1.3](https://datatracker.ietf.org/doc/rfc10024/) (August 2026) — X25519MLKEM768 and its key share sizes.
-- [RFC 8996, deprecating TLS 1.0 and 1.1](https://www.rfc-editor.org/rfc/rfc8996) (2021) — why the old versions went.
-- [RFC 7457, summarising known attacks on TLS](https://www.rfc-editor.org/rfc/rfc7457) (2015) — BEAST, CRIME, POODLE, Heartbleed and others in one place.
-- [RFC 8470, using early data in HTTP](https://www.rfc-editor.org/rfc/rfc8470) — the `Early-Data` header and `425 Too Early`.
-- [RFC 6962, Certificate Transparency](https://www.rfc-editor.org/rfc/rfc6962) and [Chrome's CT policy](https://googlechrome.github.io/CertificateTransparency/ct_policy.html) — public logs, SCTs and how many browsers require.
+- [RFC 8446, TLS 1.3](https://datatracker.ietf.org/doc/html/rfc8446), and its July 2026 revision [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html) — the handshake, the key schedule, and section 8 on 0-RTT anti-replay.
+- [RFC 10024, hybrid post-quantum key agreement](https://datatracker.ietf.org/doc/rfc10024/) — X25519MLKEM768 and its share sizes.
+- [RFC 9849, Encrypted Client Hello](https://www.rfc-editor.org/rfc/rfc9849.html) — hiding the server name, and when it does not help.
+- [RFC 8470, using early data in HTTP](https://www.rfc-editor.org/rfc/rfc8470) — `Early-Data` and `425 Too Early`.
+- [RFC 6962, Certificate Transparency](https://www.rfc-editor.org/rfc/rfc6962) and [Chrome's CT policy](https://googlechrome.github.io/CertificateTransparency/ct_policy.html) — public logs of every certificate.
 - [RFC 8555, ACME](https://www.rfc-editor.org/rfc/rfc8555) — the protocol behind automated certificates.
-- [RFC 9849, TLS Encrypted Client Hello](https://www.rfc-editor.org/info/rfc9849) — hiding the site name.
-- [CA/Browser Forum ballot SC-081v3](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/) — the schedule from 398 to 47 days.
-- [Let's Encrypt: certificate lifetimes](https://letsencrypt.org/docs/cert-lifetimes/), [from 90 to 45 days](https://letsencrypt.org/2025/12/02/from-90-to-45), [64-day certificates](https://letsencrypt.org/2026/10/07/64-day-certs), [ending OCSP](https://letsencrypt.org/2024/12/05/ending-ocsp/) and [ending expiry emails](https://letsencrypt.org/2025/06/26/expiration-notification-service-has-ended/) — the largest CA's current policies.
-- [Mozilla server-side TLS configuration](https://ssl-config.mozilla.org/) — the modern and intermediate profiles, and a config generator for common servers.
+- [CA/Browser Forum ballot SC-081v3](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/) — the schedule from 398 to 47 days and 10-day validation reuse.
+- [Let's Encrypt: 64-day certificates](https://letsencrypt.org/2026/10/07/64-day-certs), [ending OCSP](https://letsencrypt.org/2024/12/05/ending-ocsp/) and [certificate lifetimes](https://letsencrypt.org/docs/cert-lifetimes/) — the largest CA's current plans.
+- [Istio security concepts](https://istio.io/latest/docs/concepts/security/) and [Envoy header handling](https://envoyproxy.io/docs/envoy/latest/configuration/http/http_conn_man/headers) — workload identity, mTLS modes, and the client certificate header.
+- [Cloudflare SSL modes](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/) and [0-RTT](https://developers.cloudflare.com/speed/optimization/protocol/0-rtt-connection-resumption/) — termination choices and early data at a CDN.
+- [AWS EC2 data protection](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/data-protection.html) and [ALB security policies](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html) — what the cloud encrypts for you, and default policies.
 - [curl: CA certificates extracted from Mozilla](https://curl.se/docs/caextract.html) — the trust store we counted.
-- [Istio security concepts](https://istio.io/latest/docs/concepts/security/) — workload identities, certificate issuance and mTLS modes in a mesh.
-- [Cloudflare SSL/TLS encryption modes](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/) and [0-RTT](https://developers.cloudflare.com/speed/optimization/protocol/0-rtt-connection-resumption/) — termination choices and early data at a CDN.
-- [AWS: EC2 data protection](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/data-protection.html) and [ALB security policies](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html) — what the cloud encrypts for you, and what it does not.
 
-**Engineering blogs, reports & incidents**
+**Engineering blogs, papers & incidents**
 
-- [Langley, Modadugu and Chang: Overclocking SSL](https://www.imperialviolet.org/2010/06/25/overclocking-ssl.html) (2010) — the measured cost of turning on HTTPS for all of Gmail.
-- [Cloudflare: Why TLS 1.3 isn't in browsers yet](https://blog.cloudflare.com/why-tls-1-3-isnt-in-browsers-yet/) (2017) — middleboxes, and why TLS 1.3 disguises itself as TLS 1.2.
-- [Cloudflare: post-quantum encryption on Radar](https://blog.cloudflare.com/radar-origin-pq-key-transparency-aspa/) (2026) — client and origin adoption of X25519MLKEM768.
-- [netmeister: hybrid key exchange in TLS](https://netmeister.org/blog/tls-hybrid-kex.html) — what the larger post-quantum key shares look like on the wire.
-- [GAO-18-559, Equifax data breach](https://www.gao.gov/products/gao-18-559) (2018) — the expired inspection certificate.
-- [InfoQ: the February 2013 Azure storage outage](https://www.infoq.com/news/2013/03/feb22_azure_outage) — certificates expiring in every region at once.
-- [Fox-IT: DigiNotar interim report](https://www.sec.gov/Archives/edgar/data/1044777/000119312511241796/dex992.htm) (2011) — the CA compromise that led to Certificate Transparency.
-- [heartbleed.com](https://heartbleed.com/), [weakdh.org](https://weakdh.org/) and [robotattack.org](https://robotattack.org/) — Heartbleed, Logjam and ROBOT from their discoverers.
-- [Firesheep coverage on LWN](https://lwn.net/Articles/412979/) (2010) and [MUSCULAR](https://en.wikipedia.org/wiki/MUSCULAR) (2013) — reading and tapping traffic, in real life.
+- [Adam Langley: How to botch TLS forward secrecy (2013)](https://imperialviolet.org/2013/06/27/botchingpfs.html) and [Filippo Valsorda: We need to talk about session tickets](https://words.filippo.io/we-need-to-talk-about-session-tickets/) — ticket keys as long-term keys.
+- [Miller et al.: I Know Why You Went to the Clinic (PETS 2014)](https://arxiv.org/abs/1403.0297) — naming HTTPS pages from traffic shape, and the cost of defending.
+- [breachattack.com](https://breachattack.com/) — BREACH, compression as a size side channel.
+- [Mozilla: CRLite in Firefox (2025)](https://hacks.mozilla.org/2025/08/crlite-fast-private-and-comprehensive-certificate-revocation-checking-in-firefox/) and [intermediate preloading (2020)](https://blog.mozilla.org/security/2020/11/13/preloading-intermediate-ca-certificates-into-firefox/) — revocation and chain building done in the browser.
+- [Adam Langley: Revocation still doesn't work (2014)](https://www.imperialviolet.org/2014/04/29/revocationagain.html) — soft-fail and CRLSets from Chrome's side.
+- [Cloudflare: post-quantum adoption on Radar (2026)](https://blog.cloudflare.com/radar-origin-pq-key-transparency-aspa/) and [tldr.fail](https://tldr.fail/) — hybrid key exchange in the wild, and the middleboxes it broke.
+- [Langley, Modadugu and Chang: Overclocking SSL (2010)](https://www.imperialviolet.org/2010/06/25/overclocking-ssl.html) — the measured cost of HTTPS for Gmail.
+- [Fox-IT: DigiNotar interim report (2011)](https://www.sec.gov/Archives/edgar/data/1044777/000119312511241796/dex992.htm) — the CA compromise behind Certificate Transparency.
+- [GAO-18-559, Equifax](https://www.gao.gov/products/gao-18-559) and [InfoQ on the 2013 Azure outage](https://www.infoq.com/news/2013/03/feb22_azure_outage) — two expired certificates, two very different failures.
+- [MUSCULAR](https://en.wikipedia.org/wiki/MUSCULAR) — tapping private links inside a company network.
 
 **Explainers**
 
 - [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) — every byte of a real handshake, annotated.
-- [Ilya Grigorik: High Performance Browser Networking, Transport Layer Security](https://hpbn.co/transport-layer-security-tls/) — the performance view of TLS; from 2013, so read it for ideas, not numbers.
-- [crt.sh](https://crt.sh/) and [badssl.com](https://badssl.com/) — search Certificate Transparency logs, and test clients against deliberately broken certificates.
-- [What happens when you type a URL](/foundations/how-the-web-works/) and [TCP vs UDP](/networking/tcp-vs-udp/) — this site's pages on the handshake in a page load, and on the connection TLS runs over.
+- [crt.sh](https://crt.sh/) and [badssl.com](https://badssl.com/) — search Transparency logs, and test clients against broken certificates.
+- [Let's Encrypt: DST Root CA X3 expiration (September 2021)](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/) — the root expiry and which clients broke.

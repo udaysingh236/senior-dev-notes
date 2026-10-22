@@ -1,11 +1,11 @@
 ---
 title: How IRCTC Tatkal Booking Works
-description: One Tatkal booking traced end to end. The 10 AM spike, waiting rooms, bots, seat holds that never sell a berth twice, payments that leave without a ticket, and the waitlist.
-tagline: Lakhs of people, a few hundred berths, and one minute to decide who gets them.
+description: How a train booking system stores berths that are sold station to station, what the database locks when thousands of Tatkal requests want the same coach, how a berth is chosen, how RAC and waitlist promotion really work, and where payments break.
+tagline: One berth, many journeys, thousands of requests in the same second. What does the database actually lock?
 difficulty: intermediate
 track: case-studies
-prerequisites: [rate-limiting, idempotency-keys, optimistic-vs-pessimistic-locking]
-next: [payment-system, load-shedding, saga-pattern, hot-keys]
+prerequisites: [acid-and-isolation-levels, optimistic-vs-pessimistic-locking, idempotency-keys]
+next: [race-conditions, deadlocks, partitioning-and-sharding, payment-system, hot-keys]
 lastReviewed: 2026-10-22
 sidebar:
   order: 9
@@ -14,910 +14,679 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
-import StepThrough from '../../../components/StepThrough.astro';
 import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Architecture.astro';
-import WaitingRoom from '../../../components/diagrams/irctc-tatkal-booking/WaitingRoom.astro';
-import BotLayers from '../../../components/diagrams/irctc-tatkal-booking/BotLayers.astro';
-import SeatStates from '../../../components/diagrams/irctc-tatkal-booking/SeatStates.astro';
+import SegmentMask from '../../../components/diagrams/irctc-tatkal-booking/SegmentMask.astro';
+import WaitlistSegments from '../../../components/diagrams/irctc-tatkal-booking/WaitlistSegments.astro';
 import PaymentGap from '../../../components/diagrams/irctc-tatkal-booking/PaymentGap.astro';
-import Waitlist from '../../../components/diagrams/irctc-tatkal-booking/Waitlist.astro';
+import InventorySim from '../../../components/sims/irctc-tatkal-booking/InventorySim.astro';
+import LockRaceSim from '../../../components/sims/irctc-tatkal-booking/LockRaceSim.astro';
 import TatkalRushSim from '../../../components/sims/irctc-tatkal-booking/TatkalRushSim.astro';
 
-## 9:59:58 AM
+## The question
 
-Imagine Priya, a software engineer in Pune. Her father has a hospital appointment in Chennai the
-day after tomorrow, and every regular ticket on the overnight train has been gone for weeks. Her
-one chance is Tatkal: a block of seats that the railway holds back and sells only one day before
-the journey, starting at exactly 10:00 for AC classes.
+Berth 23 in coach B2 is already sold from New Delhi to Agra, and again from Bhopal to Nagpur. At
+10:00:00.3 three requests arrive in the same millisecond: Agra to Bhopal, Mathura to Gwalior, and
+New Delhi to Nagpur. Which of them can have berth 23? How does the database answer that for 1,300
+berths in microseconds? And when two of those requests both decide berth 23 is free, what exactly
+is locked so that only one of them gets it?
 
-She has done this before, so she is ready. She logged in at 9:50, entered the OTP, and saved her
-father's and her own details in the passenger list. The UPI app is open on her phone. The laptop
-clock says 9:59:58. She watches it the way people watch a cricket score in the last over.
-
-At 10:00:00 she clicks Search. The page spins. At 10:00:09 it shows an error. She refreshes. More
-spinning. At 10:00:40 the train finally appears: *AVAILABLE-0063* in 3AC. She picks it, the
-passengers fill in, she types the CAPTCHA, she clicks Pay, scans the UPI QR code, enters her PIN.
-Her bank sends an SMS: ₹2,840 debited. The IRCTC page says the transaction could not be completed.
-No ticket. No PNR. The availability now reads *WL 18*.
-
-Somewhere in India, at that same second, a few lakh other people are living their own version of
-this minute. Some got tickets. Many saw errors. A few, like Priya, lost money for nothing (for now:
-she will get it back, and we will see how).
-
-This page answers one question: **how do you sell a few hundred berths to a few lakh people in about
-a minute, fairly, without ever selling one berth twice, and without keeping anyone's money when
-there is no ticket to give them?** The same question sits behind every concert ticket sale,
-festival flash sale and vaccine slot booking. Tatkal is the version millions of Indians know by
-heart.
-
-## What is public, and what is our design
-
-Indian Railways and IRCTC publish rules, a few scale numbers and very little about internals. Here
-is what we can source, as of October 2026:
-
-- **The window.** Tatkal opens one day before the journey, at 10:00 for AC classes and 11:00 for
-  non-AC classes. The split into two times dates from June 2015, and the stated reason was to
-  spread server load
-  ([Business Today, 2015](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html)).
-- **Identity.** From 1 July 2025, only Aadhaar-authenticated users can book Tatkal online, and from
-  15 July 2025 an Aadhaar OTP is required as well. Authorised agents may not book in the first 30
-  minutes of each window
-  ([All India Radio, June 2025](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1)).
-  The OTP rollout was phased: by December 2025 it was live on 322 trains
-  ([IANS, December 2025](https://morungexpress.com/aadhaar-otp-verification-now-in-322-trains-for-online-tatkal-booking-3-crore-fake-user-ids-busted)).
-- **Limits.** A Tatkal booking carries at most four passengers
-  ([Business Today, April 2025](https://www.businesstoday.in/india/story/new-tatkal-ticket-rules-from-april-15-heres-what-irctc-has-to-say-471774-2025-04-11)).
-  Each train's Tatkal quota is set
-  by the zonal railway; a 2015 parliamentary answer gave caps such as 16 berths per coach in 3AC
-  ([Lok Sabha](https://eparlib.nic.in/bitstream/123456789/658143/1/12864.pdf)).
-- **Scale.** IRCTC's own page records 30,155 tickets booked in one minute, at 10:01 on 12 March
-  2025 ([IRCTC](https://irctc.com/internet-ticketing.html)). News agency IANS later reported a peak of
-  37,410 in a minute on 16 August 2025, and an average of 14.53 lakh tickets a day in 2025-26
-  ([IANS, June 2026](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101)).
-  About 89% of reserved tickets are now booked online
-  ([Rajya Sabha reply, July 2025](https://www.theweek.in/wire-updates/national/2025/07/25/del90-rsq-rail-online-ticket.html)).
-- **Bots.** In June 2025 the Railway Ministry said bots made up as much as half of login attempts
-  in the first five minutes of Tatkal, that an anti-bot system from "a leading CDN provider" had
-  been deployed, and that 2.5 crore suspicious user IDs had been deactivated
-  ([IANS, June 2025](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204)).
-- **The core.** Online and counter bookings both draw from the Passenger Reservation System (PRS)
-  built by CRIS, the railways' IT organisation. It dates back to the 1980s and runs on OpenVMS
-  ([Voice&Data](https://www.voicendata.com/transformational-it-projects-from-yore-indian-railways-passenger-reservation-system)).
-  A cloud-based next-generation PRS began a phased migration in August 2026
-  ([PIB](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf)).
-
-Notice what is missing. No public talk or paper explains how IRCTC locks seats, queues users or
-handles payment callbacks. So from here on, **the rest of this page is a reasoned design for a
-system like this one**, built from the public rules above and from how other high-demand systems
-are built. Where we say "IRCTC does", there is a source. Where we say "one way to build this is",
-it is our design, not a claim about theirs.
-
-:::caution[Most "IRCTC system design" posts skip this step]
-Many explainers online draw a diagram full of microservices, Redis and Kafka and present it as
-IRCTC's architecture. None of that is public. Treat a confident diagram of someone else's internals
-with suspicion, including in interviews: say what is known, then design.
-:::
+A "seats left" counter cannot answer any of these questions. This page builds the system that
+can. IRCTC and CRIS do not publish the internals of the reservation system, so what follows is how
+we would build it, using the railways' published rules (quotas, Tatkal timings, RAC, charting)
+wherever they shape the design.
 
 ## What the system has to do, in numbers
 
-Start with what users need, then with what makes it hard.
+| Quantity | Value |
+|---|---|
+| Peak tickets booked in one minute | 37,410, on 16 August 2025 ([IANS, June 2026](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101)) |
+| That peak per second, across all trains | about 620 |
+| Tatkal opens | 10:00 for AC classes, 11:00 for non-AC, one day before the journey ([Business Today](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html)) |
+| Passengers per Tatkal PNR | at most 4 |
+| Berths on one long-distance train | about 1,300 (illustrative: 22 coaches of 64–72) |
+| Stops on one route | 10 to 60, so 9 to 59 segments |
+| Requests per ticket at the peak | 10 to 20 (illustrative: search, availability, passengers, payment, retries) |
 
-**Functional requirements:**
+620 bookings a second sounds small, and it is: the write rate is not the problem. Two other
+things are:
 
-1. Search trains between two stations on a date, with availability per class and quota.
-2. Book up to four passengers into one class of one train, and return a PNR (Passenger Name
-   Record, the booking's ID).
-3. Take payment through UPI, cards and net banking, and refund it when no ticket is issued.
-4. Put people on a waitlist when the quota is full, and move them up when others cancel.
-5. Sell from the same seats as the station counters.
+1. **The writes are not spread out.** In the first seconds after 10:00 almost every write goes to
+   a handful of popular trains, and within each train to one class and one quota. The contention
+   is on a few hundred rows, not on the database.
+2. **A berth is not one unit of stock.** It is sold per **segment**, the stretch between two
+   consecutive stops. A berth can carry three passengers on one trip, one after another. Every
+   question about availability, locking, allocation and the waitlist has to be asked per segment.
 
-**Non-functional requirements, the ones that shape the design:**
-
-- **Never sell one berth twice.** Overselling is not a bug report; it is two families on one berth
-  at midnight.
-- **No money without a ticket, for long.** Payment failures will happen. What matters is that every
-  one ends in either a ticket or a refund, automatically.
-- **Survive the spike.** The system must keep selling at its best rate during the worst minute of
-  the day, not fall over and sell nothing.
-- **Fairness people can believe.** Roughly first come, first served, with bots and agents kept
-  out of the first minutes.
-
-Now the back-of-the-envelope numbers. Real ones are sourced; illustrative ones say so.
-
-| Quantity | Value | Where it comes from |
-|---|---|---|
-| Record tickets in one minute | 30,155 to 37,410 | IRCTC page and IANS, above |
-| That record, per second | about 500 to 620 tickets/s | arithmetic |
-| Tatkal berths in one 3AC coach | up to 16 | 2015 Lok Sabha cap |
-| Tatkal berths in 3AC on one train with 6 coaches | about 96 | illustrative |
-| Requests per successful booking | 10 to 20 | illustrative: login, search, availability, passengers, payment, callback |
-| Useful requests per second at the record | 5,000 to 12,000 req/s | arithmetic on the two lines above |
-| Bot share of logins in the first 5 minutes (2025) | up to 50% | Railway Ministry |
-
-The useful load is the manageable part. The hard part is everything that is not useful. A user who sees
-an error presses refresh, and refreshes are requests too. As far back as 2012, MediaNama reported
-Tatkal-hour hits of more than 20 lakh against a normal 6 to 7 lakh
-([MediaNama, 2012](https://www.medianama.com/2012/07/223-irctc-takes-several-steps-to-improve-tatkal-ticket-bookings/)).
-The shape of the traffic matters even more than its size: most of it arrives in the first few
-seconds after 10:00:00, because everyone's clock says the same thing.
-
-Per train, the numbers are brutal. If 20,000 people want 96 berths on one popular train, at most 1
-in 200 can win. No architecture changes that. **The job of the system is not to give everyone a
-ticket. It is to decide quickly, correctly and fairly who gets one, and to tell everyone else
-quickly too.**
+The hard requirements, in priority order: no segment of a berth sold twice; every payment ends in
+a ticket or a refund; and the booking rate stays at its maximum during the worst minute, rather
+than collapsing.
 
 ## The big picture
 
-Here is the whole system on one page. Follow a request from the top: it passes the edge, waits its
-turn, reaches the booking servers, takes seats from the shared inventory, and goes out to the bank.
-
-<Figure caption="A Tatkal booking passes an edge that filters bots, a waiting room that meters users in, and booking servers that hold seats in an inventory shared with station counters before handing off to the payment gateway. Dashed means our design, not a published part of IRCTC.">
+<Figure caption="Reads and writes take different paths. Availability is served from snapshots a few seconds old; every booking for one train and date goes to the one shard that owns it, which counters write to as well.">
   <Architecture />
 </Figure>
 
-Each box exists because something hurt without it:
+Three decisions shape everything below:
 
-- **Users.** Phones and browsers, most of them already logged in before 10:00. Login and OTP are
-  expensive, so a good design pushes them out of the critical minute.
-- **Edge.** A content delivery network (CDN) and bot checks, running in many locations close to
-  users. It absorbs the raw flood: static pages, scripts and images, plus the first cut of bot
-  traffic. The Ministry's mention of a CDN-based anti-bot system tells us IRCTC has such a layer.
-- **Waiting room.** A queue at the edge that lets users through to the booking servers at a rate
-  they can handle. This is our design; we come back to why it is the most important box on the page.
-- **Booking servers.** Stateless application servers: search, show availability, collect
-  passenger details, hold seats, start payment, confirm. Stateless means any server can handle any
-  request, so you can add more of them.
-- **Seat inventory.** The one place that knows how many berths are left in each train, date, class
-  and quota. It is shared with the station counters, so it must be the single source of truth.
-- **Payment gateway.** The bridge to UPI, card networks and banks. It lives outside our control
-  and fails in ways we cannot prevent.
-- **SMS and email.** The ticket's delivery. Slow is fine here; lost is not.
+- **The unit of ownership is train + date.** All berths, quotas and waitlists for train 12627 on
+  24 October live together, and nothing in a booking ever touches two trains. That is the natural
+  partition key: a booking never needs a lock across shards.
+- **Reads are separated from writes.** "Available 43" on the search page is a cached count. If it
+  is two seconds stale, a booking fails and the user sees the new count; nothing is oversold,
+  because only the shard decides.
+- **Counters and the website share one inventory.** A station counter clerk and a phone at
+  10:00:00 compete for the same rows. There is no separate web quota to hide behind.
 
-The two boxes that decide everything are the waiting room and the seat inventory. One controls how
-many people are inside at once. The other makes sure that whatever happens inside, each berth is
-sold once.
-
-## One booking, step by step
-
-Let us follow Priya's booking through the boxes, this time when it works. Step through it and
-watch where each step can go wrong.
-
-<StepThrough
-  title="One Tatkal booking, end to end"
-  description="A browser, the booking servers, the seat inventory and the bank exchange messages from login before 10:00 to a confirmed PNR."
-  actors={[
-    { id: 'user', label: 'Browser', kind: 'client' },
-    { id: 'app', label: 'Booking app', kind: 'server' },
-    { id: 'seats', label: 'Seats', kind: 'store' },
-    { id: 'bank', label: 'Bank', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'user', to: 'app', label: 'login + OTP', text: 'At 9:50, before the rush, Priya logs in and passes the OTP. The session she gets is what lets her skip this work at 10:00, when every millisecond of server time is contested.' },
-    { from: 'user', to: 'app', label: 'search', text: 'At 10:00:00 she searches. In our design she first waits in the waiting room for a few seconds, then is let through. Without a room, this is the request that times out.', tone: 'warn' },
-    { from: 'app', to: 'seats', label: 'availability', text: 'The booking server asks the inventory how many 3AC Tatkal berths are left. This is a read: it can come from a copy that is a second or two old.' },
-    { from: 'seats', to: 'app', label: 'AVL 63', text: 'The answer is a hint, not a promise. By the time she clicks Book, it may already be lower.', dashed: true },
-    { from: 'user', to: 'app', label: 'book 2', text: 'She submits two passengers. This is the moment that has to be exact: two berths must leave the quota for her, or none.' },
-    { from: 'app', to: 'seats', label: 'hold 2', text: 'One atomic update: take 2 if at least 2 are left, and mark them held for 15 minutes (an illustrative hold time). No other request can see the count in between.' },
-    { from: 'seats', to: 'app', label: 'held', text: 'The berths are hers while the hold lasts. If two thousand people asked at the same moment, the inventory answered them one at a time, and only those who fit got "held".', tone: 'ok', dashed: true },
-    { from: 'app', to: 'user', label: 'pay ₹2,840', text: 'The app records a payment attempt with its own ID, then sends her to the gateway. The ID is what will later make a repeated bank message harmless.', dashed: true },
-    { from: 'user', to: 'bank', label: 'UPI PIN', text: 'She approves the payment on her phone. Money leaves her account here, outside our system, and nothing we do can roll that back.' },
-    { from: 'bank', to: 'app', label: 'paid', text: 'The gateway tells the booking servers the payment succeeded. This message can arrive twice, late, or never, and the design must handle all three.', tone: 'ok' },
-    { from: 'app', to: 'seats', label: 'confirm', text: 'Held becomes booked, and a PNR is created, in one transaction. If the hold had already expired, this is where a late payment turns into a refund instead.', tone: 'ok' },
-    { from: 'app', to: 'user', label: 'PNR + SMS', text: 'The page shows the PNR and an SMS follows. The SMS goes through a queue, so a slow SMS provider never holds up the next booking.', tone: 'ok', dashed: true },
-  ]}
-  summary="Only two steps touch the seat count: hold and confirm, each one atomic. Everything before them can be cached, delayed or retried, and everything after them is driven by an ID that makes repeats harmless."
-/>
-
-Three things in that walk are worth pulling out.
-
-First, **reads and writes are treated differently.** Availability is shown to everyone and changes
-constantly, so it is fine for it to be a little stale. The hold is the one write that matters, and
-it is exact. Most of the system's load can be served from copies; the hold cannot.
-
-Second, **the seat is held before the money moves.** If you charged first and then looked for a
-seat, every sold-out search would end in a refund. Holding first means the payment page only
-appears for people who already have seats set aside.
-
-Third, **the bank is a separate system with its own clock.** Everything from "pay" to "paid"
-happens where we cannot see, and there is no single transaction that covers both the seat and the
-money. That gap is where "money deducted, no ticket" comes from, and it gets its own section below.
+The rest of the page is the inside of that inventory shard.
 
 ## The hard parts
 
-### Surviving the 10 AM spike
+### One berth, many journeys: the inventory model
 
-Picture the traffic graph. At 9:59 it is a calm line. At 10:00:00 it becomes a cliff, then a tall
-spike over the next few seconds, then a long, high plateau as people retry. Capacity planning
-usually starts from averages; this traffic has no useful average.
+Number the stops on the route 0 to N−1. Segment *i* is the stretch from stop *i* to stop *i*+1. A
+journey from stop *a* to stop *b* occupies segments *a* to *b*−1. Store each berth's occupancy as
+a **bitmask**: an integer with bit *i* set when segment *i* is sold.
 
-The first thing people try is more servers. It helps, and IRCTC has done it: the 2014 Next
-Generation e-Ticketing system raised capacity from 2,000 to 7,200 tickets a minute
-([Newslaundry, 2016](https://www.newslaundry.com/2016/01/20/from-29-tickets-booked-in-a-day-to-13-lakh-tickets-a-day-irctc-has-come-a-long-way)),
-and IRCTC's page now claims more than 30,000
-([IRCTC](https://irctc.com/internet-ticketing.html)).
-But the spike grows with the number of users, not with the number of seats, and the part of the
-system that cannot be copied, the seat inventory, does not grow with servers at all.
+```sql
+CREATE TABLE berth (
+  train_date  TEXT,     -- partition key: '12627/2026-10-24'
+  coach       TEXT,     -- 'B2'
+  berth_no    INT,      -- 23
+  kind        TEXT,     -- LB, MB, UB, SL, SU
+  quota       TEXT,     -- GN, TQ, PQ, LD, ...
+  mask        BIGINT NOT NULL DEFAULT 0,   -- bit i = segment i sold
+  PRIMARY KEY (train_date, coach, berth_no)
+);
+```
 
-The second thing people learn is that an overloaded system does not slow down gracefully. It falls
-off a cliff. The simulation below runs the first minute of a window with every user talking
-straight to the booking servers. Each booking needs three requests. When the servers' short queue
-is full, a new request gets an instant error page, and the user refreshes. Turning someone away is
-cheap, but not free: the connection, the encryption and the session lookup still cost the servers a
-little work.
+A journey needs the mask `need = ((1 << (b − a)) − 1) << a`. The berth can take it exactly when
+`mask & need = 0`; booking it is `mask = mask | need`; cancelling is `mask = mask & ~need`.
 
-<TatkalRushSim mode="no-queue" />
-
-What you watched is a **retry storm**. Errors cause refreshes, refreshes cause more load, more load
-causes more errors. At 10,000 users the seats still sell, slowly, to whoever happens to refresh at
-the right moment. Push the slider past about 14,000 users and the work of turning people away eats
-the servers. Requests then wait so long that users give up on them, and the servers finish them
-anyway, for nobody. That is **congestion collapse**: the servers are at 100% and sell nothing.
-Adding capacity moves the cliff further out; it does not remove it.
-
-The fix is to stop letting everyone in at once. A **waiting room** (also called a virtual queue)
-is a queue that lives at the edge, in front of the booking servers. Every arriving user gets a
-numbered place in line, written into a signed token so it cannot be forged or skipped, and a page
-that shows their position. The room lets users through at a fixed rate that keeps the booking
-servers busy but healthy, oldest first. When the quota is gone, the room tells everyone still
-waiting, from the edge, without the booking servers doing any work at all.
-
-<Figure caption="A waiting room turns a spike into a steady stream. Everyone gets a numbered place at the edge, the booking servers see a fixed rate, oldest first, and the edge tells everyone left when the quota is full.">
-  <WaitingRoom />
+<Figure caption="Berth 23 is sold New Delhi–Agra and Bhopal–Nagpur. Agra–Bhopal ANDs to zero and fits; Mathura–Gwalior collides on one segment. One AND instruction answers 'is this berth free for this journey'.">
+  <SegmentMask />
 </Figure>
 
-Think of the token counter at a busy bank branch. You take a number at the door, sit down, and
-watch the display. The tellers never see the crowd, only the next number. Where the analogy breaks:
-a bank has no bots taking a hundred numbers each, and nobody at a bank is told "sold out" while
-still sitting down. Both of those matter here.
+Why not counters? Because availability depends on the journey. With 40 stops there are 780 station
+pairs, and one booking from stop 3 to stop 9 changes the count for every pair that overlaps it,
+which is hundreds of counters updated in one transaction, all of them hot. With bitmasks, nothing
+is stored but the masks. Availability for a journey is computed:
 
-Now run the same minute twice on the same arrivals, once without a room and once with one.
+```sql
+SELECT count(*) FROM berth
+WHERE train_date = $1 AND coach LIKE 'B%' AND quota = 'TQ'
+  AND mask & $need = 0;
+```
+
+That is a scan of a few hundred integers, a few microseconds of CPU, and it is what the read model
+caches per popular journey. A 64-bit integer covers routes with up to 65 stops; longer routes use
+two words or a bit string type (PostgreSQL's `bit varying` supports `&` and `|`). Only stops where
+the train actually halts get an index.
+
+**Quotas are a property of the berth, with a segment range.** The railways earmark berths per
+quota and per station: general quota for journeys from the origin, Tatkal, ladies, and
+**pooled** and **remote location** quotas that are kept for passengers boarding at particular
+intermediate stations, with the distribution decided by the zonal railway for each train
+([Lok Sabha answer, 2010](https://eparlib.nic.in/bitstream/123456789/581602/1/86072.pdf)). In this
+model, a pooled-quota berth is a berth whose quota tag is `PQ` and whose sellable range is limited
+to certain stations. It is still one mask; the rule only filters which journeys may look at it.
+
+Now watch the model work. Eight berths, seven segments, short journeys first and end-to-end ones
+after:
+
+<InventorySim mode="pack" />
+
+The grid shows the property that makes rail inventory harder than airline inventory: **free
+capacity is not the same as sellable capacity**. Ten free cells scattered across eight berths sell
+nothing to a passenger who needs one berth for all seven segments. A passenger cannot change
+berths at Gwalior, so the question is never "is every segment available somewhere" but "is one
+berth free across the whole range". How the system chooses berths therefore decides how much of
+the train it can actually sell. We come back to that after the locks, because the two problems
+pull in opposite directions.
+
+### What exactly gets locked
+
+Every correct booking does three things: find a berth whose mask fits, set the bits, insert the
+passenger rows. The question is how to stop two transactions from both finding the same berth
+free.
+
+**Wrong: read, work, write.** Read a fitting berth, compute the fare and build passenger rows, then
+write `mask = mask | need`. Under the default isolation level of PostgreSQL and MySQL (read
+committed and repeatable read), two transactions can read the same old mask, both decide berth 23
+fits, and both write. The second `OR` does not fail: it ORs the same bits again. The database has
+no idea anything went wrong; the only symptom is two passenger rows on one segment. This is a
+**lost update**, and it is invisible in testing because it needs two requests in the same few
+milliseconds, which is every Tatkal morning.
+
+There are four correct ways to write the transaction. Here they are racing on the same burst:
+
+<LockRaceSim />
+
+**1. Lock the coach (or the class).** `SELECT ... FROM berth WHERE coach = 'B2' FOR UPDATE` locks
+every row the query reads; the next transaction blocks until the first commits. Never oversells,
+and is the first thing most people write. Its cost is that the coach becomes a single-file queue:
+with 15 ms of work inside the transaction, the 12th request waits about 165 ms before it even
+starts, and at Tatkal volume the queue grows faster than it drains. The lock scope is the whole coach for a decision
+that touches one row.
+
+**2. Conditional update.** Do the slow work first, then make the check and the take one statement:
+
+```sql
+UPDATE berth SET mask = mask | $need
+WHERE train_date = $1 AND coach = $2 AND berth_no = $3
+  AND mask & $need = 0;          -- 1 row: it is yours. 0 rows: someone beat you; pick again.
+```
+
+This is the conditional-update form of **optimistic concurrency**. It is safe under read committed
+for a reason worth knowing: in PostgreSQL, when an `UPDATE` finds that the row was changed by a
+transaction that committed after its snapshot, it re-evaluates the `WHERE` clause against the new
+version of the row before updating it; in MySQL InnoDB, `UPDATE` always reads the latest committed
+row version and locks it. Either way, the second transaction sees the new mask, the condition is
+false, and it updates zero rows. Under PostgreSQL's repeatable read the same race raises a
+serialization failure (SQLSTATE `40001`) instead, which your code must catch and retry. The row lock
+is held only from the `UPDATE` to `COMMIT`, which is microseconds if nothing slow happens in
+between. The cost shows in the sim: everyone's first choice is the same "best" berth, so the losers
+retry, and retries grow with the number of concurrent requests for the same journey.
+
+**3. `FOR UPDATE SKIP LOCKED`.** Ask for a free berth and lock it, skipping rows other transactions
+have locked:
+
+```sql
+SELECT coach, berth_no FROM berth
+WHERE train_date = $1 AND quota = 'TQ' AND mask & $need = 0
+ORDER BY coach, berth_no
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+```
+
+Twelve concurrent transactions get twelve different berths with no waiting and no retries; this
+is the pattern job queues use to hand out work. Two catches. When every fitting row is locked by
+someone else, the query returns nothing, so a request can be told "sold out" while a berth it could
+have had is held by a transaction that is about to roll back. And the berth you get is "the first
+unlocked one", not the best one, which matters a lot in the next section.
+
+**4. A single writer per train-date.** Route every write for one train and date to one thread that
+owns that shard's masks in memory, and append each decision to a durable log before replying. No
+row locks exist, because nothing else can write. The arithmetic: an allocation is a scan of a few
+hundred integers, around a microsecond or two; one thread could do hundreds of thousands per second,
+and the whole train has 1,300 berths. The bottleneck becomes the durable write, which you batch:
+fsync every 2 ms with all decisions made in that window (**group commit**), so 500 bookings cost
+one disk flush. Failover needs a standby that replays the log. This is the design we would choose
+for the shard in the architecture diagram, because the contention is naturally per train and this
+removes it rather than managing it.
+
+**What about `SERIALIZABLE`?** At the serializable level, PostgreSQL's serializable snapshot
+isolation would catch the read-work-write race itself and abort one of the two transactions with a
+serialization failure. It is correct, and it lets you write the naive code. The cost appears under
+exactly this workload: every transaction that read the same coach is a conflict candidate, so at
+10:00 most of them abort and retry, and each retry repeats the slow work. Serializable is a good
+default for low-contention business logic; for a known hot spot, an explicit conditional update
+says what you mean and fails cheaply.
+
+**Make the booking request itself idempotent.** A user on a slow network taps "Book" twice, or the
+app retries after a timeout. Without protection, that is two holds on two berths for one person,
+and at Tatkal time the second hold steals a berth from someone else. The client sends a request ID
+generated once per booking attempt; the bookings table has a unique constraint on it; a second
+insert with the same ID returns the first booking instead of allocating again.
+
+:::caution[Group bookings and deadlocks]
+A Tatkal PNR can carry four passengers, which is four berths in one transaction. If request A locks
+berth 21 then wants 22, while request B locked 22 and wants 21, the database detects a **deadlock**
+and kills one of them (PostgreSQL checks after `deadlock_timeout`, 1 s by default). Always lock rows
+in one global order (coach, then berth number), or take all four with one statement and check that
+the number of rows updated is four, rolling back otherwise.
+:::
+
+**Never hold a lock across a payment.** The user takes one to five minutes to pay. The booking
+transaction should commit a **hold**: the bits are set, a booking row has status `HELD` and an
+`expires_at`, and the lock is released at commit. If payment does not arrive in time, an expiry job
+clears the bits in a new short transaction. Locks are for milliseconds; holds are for minutes.
+
+### Choosing which berth
+
+The lock strategies above decide *whether* two requests collide. Allocation decides *which* berth
+each one gets, and it has three goals that conflict.
+
+**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it,
+like a best-fit memory allocator. A Mathura–Agra passenger should go on a berth that is already sold
+New Delhi–Mathura and Agra onwards, not on an empty berth, which it would split into two shorter
+pieces nobody may want. Here is the cost of ignoring it, on the same journeys:
+
+<InventorySim mode="compare" />
+
+With ten short journeys first, packing turns away 4 of 8 end-to-end passengers; spreading the
+same journeys over any fitting berth turns away 6 and leaves almost twice as many cells empty (28
+against 15). In a separate test of 500 random runs, with ten short journeys followed by eight
+full-route requests, packing kept room for about 3.9 full-route passengers and random spreading for
+about 1.4. Spreading is exactly what `SKIP LOCKED` and "pick a random free berth to
+avoid contention" do. **The trick that removes lock contention is the one that wastes the most
+inventory.** This is the strongest argument for the single-writer shard: one thread can run
+best-fit over the whole train with no contention at all.
+
+**Goal 2: respect the passenger.** Preferences (lower, side, window) are soft constraints. Some are
+rules: the reservation system automatically considers senior citizens and women aged 45 and over
+for lower berths even if they did not ask, subject to availability, and each coach keeps a small
+number of lower berths for them, about 6–7 in Sleeper, 4–5 in 3A and 3–4 in 2A
+([Lok Sabha answer, 2025](https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf)).
+A group of four wants the same bay of one coach, not four coaches.
+
+**Goal 3: be fast and deterministic.** The allocation runs inside the critical section, so it must
+be a short scan with a score, not a search. A workable score for each candidate berth, lowest wins:
+
+1. the free run left around the journey (tightest fit first);
+2. a penalty if the passenger needs a lower berth and this is not one;
+3. a penalty if this berth is not in the same bay as the rest of the group;
+4. the berth number, to break ties the same way every time.
+
+For a group, allocate the passengers together: try each bay, score the bay as a whole, and take
+the best bay that fits all four; only if no bay fits, fall back to the best individual berths.
+
+Seat choice changes the contention picture. The next-generation PRS that the railways began
+migrating to in August 2026 is reported to let passengers choose their seat as airlines do, and to
+target over 1.5 lakh bookings a minute
+([Tribune](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train),
+[PIB, August 2026](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf)).
+How that system allocates is not public. In our model, letting thousands of people click the same
+lower berths at 10:00 turns those rows into hot spots: conditional updates fail far more often, and
+the interface needs a fast fallback ("that berth is gone; we gave you B2-31, also lower").
+
+### RAC, waitlist and charting
+
+When no berth fits, the booking still succeeds, as **RAC** (reservation against cancellation) or
+**waitlist** (WL). Both are queues with segment ranges, and both have races that a naive design
+gets wrong.
+
+**RAC is half a berth.** An RAC passenger shares a side lower berth with another RAC passenger,
+sitting by day ([Deccan Herald, November 2025](https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790)).
+Model each side lower set aside for RAC as two **slots**, each with its own mask. An RAC booking is
+the same allocation problem on slots instead of berths. Promotion has an order: a freed berth goes
+to an RAC passenger first, and their freed slot goes to the first waitlisted passenger who fits.
+
+**The waitlist is not first in, first out.** A cancellation frees some segments of one berth. Only
+waitlisted journeys that fit entirely inside those segments can use them:
+
+<Figure caption="The Agra–Bhopal passenger cancels. WL 1 needs the whole route and WL 3 starts one stop early, so neither fits. WL 2 and WL 4 do, and confirm ahead of them. Waitlist numbers are an order of consideration, not a promise of order of confirmation.">
+  <WaitlistSegments />
+</Figure>
+
+So the promotion step is: walk the waitlist in order, and give each entry the best-fitting freed
+range it fits in; stop when the freed bits are used up. This is why a WL 12 ticket can confirm
+while WL 3 does not, which passengers often take as a bug.
+
+**The race: a fresh booking against the waitlist.** When a passenger cancels at 10:00:05, both the
+promotion job and a brand-new Tatkal request want the freed bits. If the cancellation clears the
+bits in one transaction and the promotion runs in a later one, the new booking can slip in between,
+and the people who have been waiting lose a berth they were owed. Two fixes: do the cancellation
+and the promotions **in the same transaction**, so the bits are never visibly free; or, with the
+single-writer shard, process the cancellation and its promotions as one event before taking the
+next request.
+
+**Caps and freezing.** The railways cap how long a waitlist may grow, at 60% of capacity in AC
+classes and 30% in non-AC, and officials have said only about 20–25% of waitlisted tickets usually
+confirm ([PTI via The Week, June 2025](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html)).
+The cap is a check on the length of the queue per train, class and quota, enforced in the same
+transaction that adds to it, or it is not a cap.
+
+**Charting is a batch job that turns live state into a fixed list.** The first chart is prepared at
+least 8 hours before departure
+([All India Radio, 2025](https://www.newsonair.gov.in/railway-board-to-prepare-reservation-charts-8-hours-prior-to-train-departure));
+a second chart has been prepared up to 30 minutes before departure
+([Deccan Herald, 2020](https://www.deccanherald.com/india/railways-to-restore-system-of-issuing-second-reservation-charts-30-minutes-before-departure-of-trains-898230.html)).
+At charting, online tickets still fully waitlisted are cancelled and refunded
+([Lok Sabha](https://eparlib.nic.in/bitstream/123456789/951605/1/AU1903.pdf)), and the vacant berths,
+including ones vacant only between intermediate stations, are published for anyone to see
+([The Quint, 2019](https://thequint.com/news/india/irctc-check-train-reservation-chart-vacant-seats-online-website-app)).
+In our model, charting is: stop accepting waitlist entries, run the final promotions, snapshot the
+masks, generate the chart from the snapshot, and switch the shard into a "current booking" mode that
+sells only from the leftover bits. Taking the snapshot inside one transaction, or as one event on
+the single writer, is what makes the chart consistent with the last booking before it.
+
+### Routing every write to one owner
+
+The single-writer design and the read model both depend on knowing which shard owns a train and
+date, and on keeping the read side close to the truth.
+
+**How many owners?** Bookings open 60 days ahead
+([All India Radio, 2024](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days)).
+With a few thousand reserved train services a day (illustrative), that is a few hundred thousand
+live train-dates at any time, each a few hundred kilobytes of masks and waitlists. That fits in the
+memory of a modest cluster. Map train-dates to shards with consistent hashing, so adding a shard
+moves only a small share of them, and keep a routing table that the booking servers cache.
+
+**Hot shards are expected, not a bug.** At 10:00 the train-dates for tomorrow's popular trains are
+hot, and everything else is quiet. Because each train-date is one owner, a hot one cannot be split
+across machines. It does not need to be: one train has at most a few thousand berth-segments to
+decide, and the single writer handles that in memory. What must not happen is two hot train-dates
+landing on one weak shard; assign tomorrow's known popular trains to separate shards the evening
+before, which the railway can do because it knows its own timetable.
+
+**Keeping the read model fresh.** The shard publishes every committed change (berth, bits, quota)
+to a change stream. The read model applies them and recomputes availability only for the journeys
+people actually search: computing all 780 station pairs per class per train on every change is
+wasted work, while computing "AGC→BPL, 3A, TQ" when someone searches it, then caching it for a
+second or two, costs one scan. Under the Tatkal spike, the cache absorbs thousands of identical
+searches per popular journey.
+
+### Surviving 10:00:00
+
+At 10:00:00 a popular train's shard gets most of its day's write demand in a few seconds, and the
+site gets many times its normal reads. The railways' own controls work on the demand: AC and non-AC
+Tatkal open an hour apart, agents are barred for the first 30 minutes, and since July 2025 Tatkal
+users must be Aadhaar-authenticated with an OTP
+([All India Radio, June 2025](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1)).
+The Ministry has said bots made up to half the login attempts in the first five minutes of Tatkal
+before its anti-bot work ([IANS, June 2025](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204)).
+
+On the system side, four mechanisms matter, in order:
+
+1. **Admission control.** A waiting room at the edge hands out signed places in line and admits
+   users at the rate the shards can commit. A user turned away by the queue costs the edge a few
+   bytes; a user turned away by the database cost it a transaction.
+2. **Fail fast in memory.** Once the Tatkal quota of 3A on a train is gone for most journeys, the
+   shard keeps a "sold out" summary per class and quota and rejects without touching a row. For a
+   train with 96 Tatkal berths and 20,000 interested users, more than 99% of requests end here.
+3. **Reads off the write path.** Availability comes from the read model. A stale count costs one
+   failed booking attempt; reading the shard for every search would cost the shard.
+4. **No retries from the server side.** A booking that fails on a conflict is retried inside the
+   shard (pick the next berth), never by asking the client to resubmit the whole flow.
+
+The sim below shows the first mechanism in isolation: the same minute with and without a waiting
+room.
 
 <TatkalRushSim mode="compare" />
 
-The waiting room sells the same seats several times faster, with no error pages at all, because
-every request the servers handle is one somebody is still waiting for. Its winners are the people
-who arrived first. And it ends the misery quickly: a person who was never going to get a seat finds
-out in seconds, instead of refreshing for a minute.
-
-Some numbers for our design, illustrative: if a booking takes about 3 requests and the booking
-servers handle 6,000 req/s comfortably, the room admits about 1,600 users a second at 80% of
-capacity. With 96 berths and an average party of 2.5, about 40 bookings sell a train's 3AC quota,
-so the first few seconds of admissions decide it.
-
-A waiting room is a cousin of [rate limiting](/resilience/rate-limiting/), with a different
-promise. A rate limiter answers "too many, go away" to each caller over its share. A waiting room
-answers "wait, you are number 4,812" to everyone, and keeps the order. Its other cousin is
-**load shedding** (a page of its own, coming soon): when a server is drowning anyway, drop the
-least important work first. Here, search and availability can be shed before booking ever is.
-
-Two more choices from real flash-sale systems are worth knowing. Cloudflare's waiting room keeps
-each user's place in an encrypted cookie and coordinates the admission rate across its data
-centres ([Cloudflare, 2021](https://blog.cloudflare.com/building-waiting-room-on-workers-and-durable-objects)).
-Queue-it argues that pure first come, first served at a scheduled moment rewards bots with the
-fastest clocks, so it shuffles everyone who arrived before the start into a random order, then
-serves later arrivals in order ([Queue-it](https://www.queue-it.com/blog/first-in-first-out-randomization)).
-That is a real trade-off for Tatkal: random order among the 10:00:00 arrivals is arguably fairer to
-humans, but "first come, first served" is what people expect from a railway counter.
-
-:::note[From the trenches]
-Teams usually discover that the expensive work at a peak is not the work they planned for. In a
-spike, the cost moves to the edges: TLS handshakes, logins, session lookups, error pages, and
-requests completed for users who already left. Measure the work per successful booking during
-the worst minute, not the average minute, and you will find where to cut.
-:::
-
-Inside the room's stream, not all requests are equal. Most of them are reads: search, train
-lists, availability, fare. Only one request per booking, the hold, has to touch the exact seat
-count. That asymmetry is the second big lever, after the queue.
-
-- **Serve reads from copies.** Availability can come from a read replica or a cache that is a
-  second or two behind. Showing "AVL 63" when the truth is "AVL 61" costs nothing, because the
-  hold re-checks the real number. The moment you insist that every availability check reads the
-  primary inventory, every search competes with every booking for the same rows.
-- **Precompute what does not change in the window.** The timetable, the route between two
-  stations, the fare table and the list of trains do not change at 10:00. They can be computed
-  overnight and served from the edge like static pages.
-- **Keep the booking path short.** Every request after admission should do one thing and return.
-  Anything that can happen later, such as sending the SMS, writing analytics events or updating
-  loyalty points, goes onto a queue for workers to handle after the rush.
-- **Shed reads before writes.** If the servers are struggling anyway, refusing a fresh search is
-  far cheaper than failing a user who is halfway through paying. Give the booking and payment paths
-  their own capacity, so a flood of searches cannot starve them.
-
-A worked example with illustrative numbers: if 10 of the 12 requests in a booking are reads, and 90%
-of reads come from a cache at the edge, the booking servers see about 3 requests per booking
-instead of 12. The same servers can then admit four times as many users per second. Caching is not
-glamorous, but at a peak it is often the cheapest capacity you will ever buy.
-
-The last lever is the clock itself. The 2015 move from one opening time to two (10:00 for AC,
-11:00 for non-AC) split one crowd into two smaller ones. Pre-login before the window
-moves the expensive OTP step out of the critical minute. Every piece of work you can do before
-10:00:00 is work the spike does not have to carry.
-
-### Keeping bots out without locking people out
-
-A bot here is a script that books faster than any human: it fills forms in milliseconds, solves or
-outsources CAPTCHAs, and runs many accounts at once. Agents with illegal software used them to
-grab Tatkal seats and resell them. In 2020, the Railway Protection Force named tools such as ANMS,
-MAC and Jaguar that could get past login CAPTCHAs, booking CAPTCHAs and even bank OTP pages
-([Onmanorama, February 2020](https://www.onmanorama.com/news/india/2020/02/18/indian-railways-tatkal-ticket-illegal-software.html)).
-
-Bots hurt twice. They take seats that humans wanted, and they add load at the worst possible moment:
-a bot that does not get a seat retries at machine speed. When up to half of the login attempts in
-the first five minutes are bots, the system is doing double work for half the customers.
-
-No single check stops a determined bot, so real systems stack several, each using different
-evidence. A script has to defeat all of them; a human usually passes without noticing most.
-
-<Figure caption="Each layer stops a different kind of bot using different evidence, from traffic patterns at the edge to identity at login to rules about who may book when. The green layer holds IRCTC's published rules.">
-  <BotLayers />
-</Figure>
-
-Walking down the layers:
-
-1. **Edge.** Look at the traffic itself: request rates per IP address and per device, browser
-   fingerprints, how the mouse moves, whether the page's scripts actually ran. This is where a CDN's
-   bot product sits, and where most of the cheap bots die.
-2. **Login.** Make each account expensive to use. CAPTCHAs slow scripts down (though paid services
-   solve them). The Aadhaar OTP is the stronger idea: it ties the account to a real person and a
-   real phone number, so a farm of a thousand fake accounts needs a thousand real identities.
-3. **Account.** Watch accounts over time. An AI-based system flagged 2.5 crore suspicious IDs by
-   June 2025, and 3.02 crore by December 2025
-   ([All India Radio, December 2025](https://www.newsonair.gov.in/government-deactivates-over-3-crore-suspicious-railway-user-ids/)).
-   Newly registered accounts without Aadhaar had to wait three days before booking Tatkal
-   ([IANS, June 2025](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204)).
-4. **Rules.** Remove the incentive. Agents cannot book in the first 30 minutes, and a booking
-   carries at most four passengers, so even a successful bot books a family's worth, not a coach.
-
-The hard part is the cost of mistakes on each side. Block too little and the bots win. Block too
-much and a grandmother on a slow phone in a small town fails a CAPTCHA three times and loses her
-seat. A useful rule of thumb from anti-abuse work: **push checks earlier and make them invisible
-where you can** (edge signals, pre-login), and keep the visible friction (CAPTCHA, OTP) for moments
-where it buys the most.
-
-How much did it help? In December 2025 the government said that on trains with the OTP check, the
-time for which confirmed Tatkal tickets stayed available rose by about 65%
-([Free Press Journal, December 2025](https://www.freepressjournal.in/tech/aadhaar-otp-boosts-tatkal-fairness-irctc-blocks-302-cr-fake-ids-availability-jumps-65)).
-That is the government's own measurement, not an independent one, but the direction makes sense:
-seats that last longer are seats that humans had time to click on.
-
-:::caution[A waiting room alone feeds the bots]
-A first come, first served queue is a gift to whoever arrives first, and scripts arrive first. Put
-the bot checks before the queue position is handed out, not after, or bots will hold the front
-of the line and humans will wait politely behind them.
-:::
-
-### Never selling one seat twice
-
-This is the requirement that cannot bend. A slow site is a bad morning. An oversold berth is two
-families with the same berth number and a ticket checker who has to choose.
-
-Here is the mistake almost everyone makes first. A booking handler reads the count, does something
-slow (calculates the fare, checks the passenger list, calls another service), then subtracts:
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="oversell.py (the naive version)"
-# runnable version: examples/irctc-tatkal-booking/python/oversell.py
-async def book(self, party: int) -> bool:
-    if self.available >= party:  # check...
-        await asyncio.sleep(random.uniform(0, 0.01))  # ...something slow happens here...
-        self.available -= party  # ...then act on a number that may be stale
-        return True
-    return False
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="oversell.mjs (the naive version)"
-// runnable version: examples/irctc-tatkal-booking/js/oversell.mjs
-async book(party) {
-  if (this.available >= party) { // check...
-    await sleep(random() * 10); // ...something slow happens here...
-    this.available -= party; // ...then act on a number that may be stale
-    return true;
-  }
-  return false;
-}
-```
-  </TabItem>
-</Tabs>
-
-Between the check and the subtraction, a thousand other requests read the same count. The example
-in the repo fires 1,000 concurrent bookings at 120 berths:
-
-```text title="output of examples/irctc-tatkal-booking/python/oversell.py"
-naive : 1000 bookings, 2627 seats sold of 120, available now -2507
-atomic:   47 bookings,  120 seats sold of 120, available now 0
-```
-
-That is a **race condition**: the result depends on the timing of requests that should not affect
-each other. The fix is to make the check and the take one indivisible step. In a SQL database it is
-one statement:
-
-```sql
-UPDATE quota
-SET    available = available - 2
-WHERE  train = '12163' AND journey_date = '2026-10-24'
-  AND  class = '3A' AND quota = 'TQ'
-  AND  available >= 2;
--- 1 row updated: you have the berths. 0 rows updated: not enough left.
-```
-
-The repo's `conditional_update.py` runs this statement against SQLite. The database applies the
-condition and the change together, so two requests can never both see
-"2 left" and both take them. This is the conditional-update form of
-**optimistic concurrency** (a page of its own, coming soon): no one waits for a lock up front, and
-the update itself checks the condition.
-
-The alternative is **pessimistic locking**: `SELECT ... FOR UPDATE` locks the quota row, you decide,
-you update, you commit. It is also correct, but the lock is held for as long as your code takes to
-decide. If that includes a fare calculation or a network call, every other booking for that train
-waits in line behind it.
-
-That brings up the real enemy at Tatkal scale: the **hot row**. All 20,000 people who want 3AC on
-one train are fighting over one counter. Whatever database you use, updates to one row happen one
-at a time. If each takes 1 ms inside the database (an illustrative figure), that row tops out near
-1,000 updates a second, however many servers you buy. Three ideas keep a hot row survivable:
-
-- **Make the critical section tiny.** Do everything slow (fare, validation, passenger checks)
-  before the update. The update itself only checks and subtracts.
-- **Partition naturally.** Each train, date, class and quota is its own row, so different trains
-  never contend. A popular train is hot; thousands of other trains that day are not.
-- **Meter the demand.** The waiting room above limits how many people can even try to update the
-  row each second. The two designs work together.
-
-Now the seat's life, which the step-through already hinted at:
-
-<Figure caption="A seat is free, held while its buyer pays, or booked. A hold that runs out or a payment that fails returns the seat; a cancellation returns it to the waitlist first. Every arrow is one atomic update.">
-  <SeatStates />
-</Figure>
-
-The **hold** is a seat set aside with an expiry time. It answers a real tension: you must not
-charge someone for a seat you might not have, and you must not let someone keep a seat forever
-while they look for their UPI PIN. Our design uses 15 minutes, which is illustrative. Shorter
-holds give seats back sooner to other buyers; longer holds give slow payers (and slow banks) time
-to finish. Whatever you pick, an expired hold must return its seats automatically, either through a
-background job or by checking expiry at the next booking attempt, as our example does.
-
-Which berth number (lower, middle, upper, coach B3 or B4) a passenger gets is a separate, later
-step. It can follow preferences such as lower berths for senior citizens, and since only the count
-was contended, it runs without anyone fighting over it. Splitting "how many" from "which ones" is
-what keeps the hot part small.
-
 ### Payments: when money leaves but no ticket arrives
 
-Back to Priya. Her ₹2,840 left her account, and no ticket came. Nothing was stolen. Two systems
-that do not share a transaction disagreed for a while.
+The berth is in the railway's database; the money is in the passenger's bank. No transaction spans
+both, so the booking is a small **saga**: hold the berth (local commit), take the payment (remote),
+confirm or release (local commit), with a refund as the compensation when the last step cannot
+happen.
 
-A **distributed transaction** is one change that must happen in two separate systems, all or
-nothing. The seat lives in the railway's database. The money lives in Priya's bank. No single
-`COMMIT` covers both, so any of these can happen:
-
-1. **Late success.** The bank debits her at 10:02, but the confirmation reaches the railway after
-   the hold has expired and the seats were sold to someone else.
-2. **Lost message.** The bank debits her, the gateway's callback to the railway is lost in the
-   network, and the booking server never hears that she paid.
-3. **Duplicate message.** The gateway, unsure the first callback arrived, sends it again. Handled
-   naively, that is a second ticket, or a crash on a seat that is already booked.
-4. **Ambiguous failure.** The browser times out on the payment page. Did the payment go through?
-   Nobody at the railway knows yet.
-
-The first of these is easiest to see on a timeline.
-
-<Figure caption="The seat hold and the payment run on two clocks with no shared transaction. When the bank's confirmation lands after the hold has expired, money has moved and the seat has not, until reconciliation settles it.">
+<Figure caption="The hold and the payment run on two clocks. If the bank's confirmation lands after the hold expired and the bits were given to someone else, money has moved and the berth has not, until reconciliation settles it.">
   <PaymentGap />
 </Figure>
 
-You cannot make the gap disappear. You can make sure every case ends correctly, with three tools.
+Four failures to design for, and the answer to each:
 
-**Idempotent callbacks.** Every payment attempt gets an ID before the user leaves for the bank.
-When a callback arrives, the booking server looks up that ID. If it has already handled it, it
-returns the same answer as last time and does nothing else. This is the idea of an
-[idempotency key](https://stripe.com/blog/idempotency) (see the prerequisite page): a repeated
-message must have the same effect as one message.
+- **Late success.** The callback arrives after the hold expired. Try the allocation again for the
+  same journey; if a berth fits, confirm; otherwise refund at once and record why.
+- **Duplicate callback.** The gateway retries. The callback handler looks up the payment ID first; a
+  repeat gets the same answer and does nothing. This is an [idempotency key](https://stripe.com/blog/idempotency)
+  with the payment ID as primary key of an outcomes table.
+- **Lost callback.** No handler ever runs. A reconciliation job asks the gateway every few minutes
+  for successful payments and settles any it has no outcome for, through the same handler.
+- **Ambiguous timeout.** The client does not know if it paid. The status comes from the server, by
+  payment ID, never from retrying the payment.
 
-**A defined outcome for late money.** When the payment confirmation arrives for an expired hold,
-try to take the seats again; if they are still free, book them. If not, start a refund
-immediately and record why. Never leave the money in limbo.
+The bank side has its own deadline: the RBI requires failed debits to be reversed within one to five
+days depending on the channel, with compensation of ₹100 a day after that
+([RBI, 2019](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693)).
 
-**Reconciliation.** A background job, every few minutes, asks the gateway for the list of
-successful payments and compares it with its own records. A payment the railway never heard about
-gets settled the same way as a late callback: book if possible, otherwise refund. This sweep is
-what catches the lost messages, which by definition no callback handler will ever see.
-
-Together these form a small **saga**: a sequence of local steps, each with a compensating step
-that undoes it if a later step fails. Here the compensation for "money taken" is "money refunded".
-
-The banking side has rules of its own. The Reserve Bank of India's 2019 circular on failed
-transactions sets deadlines by which banks must reverse a debit that did not complete, between one
-and five days after the transaction depending on the channel, and requires them to pay the customer
-₹100 for each day of delay beyond that, without the customer having to complain
-([RBI, September 2019](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693)). On the
-railway side, reports describe IRCTC starting automatic refunds for "debited but not booked"
-transactions, with the bank then taking a few working days to credit the account
-([ETV Bharat, March 2024](https://www.etvbharat.com/en/!bharat/passengers-to-get-money-back-in-one-hour-as-irctc-refunds-get-faster-enn24031402147)).
-So Priya will get her money back. The design question is how fast, and whether she has to ask.
-
-:::danger[Never "fix" a stuck payment by hand-editing the booking]
-The tempting shortcut during an incident is to mark a stuck booking as paid in the database. If the
-callback then arrives, or reconciliation runs, the same payment can produce a second ticket or a
-refund for money that was kept. Fix stuck payments only through the same idempotent path the
-callback uses, so every route to "paid" goes through one gate.
+:::danger[Every path to "paid" goes through one gate]
+During an incident, the tempting fix for a stuck booking is to mark it paid by hand. When the
+delayed callback or the reconciliation job then arrives, the same payment produces a second ticket,
+or a refund of money that bought a berth. Fix stuck payments only by replaying them through the
+idempotent handler.
 :::
-
-### Waitlists and cancellations
-
-When the quota is gone, the railway does not only say no. It sells a **waitlisted** ticket: you
-pay now, you get a place in line, and if enough confirmed passengers cancel before the train
-leaves, you move up into a berth. Some classes also have **RAC** (Reservation Against
-Cancellation): two RAC passengers share one side-lower berth, so they can travel, sitting, while
-they wait for a full berth.
-
-<Figure caption="The waitlist is an ordered queue behind the confirmed seats. A cancellation frees a berth and everyone behind it moves up one place, until the chart freezes the order a few hours before departure.">
-  <Waitlist />
-</Figure>
-
-As a data structure, this is an ordered queue per train, date, class and quota, and the hard rule
-is the same as before: one freed berth, one promotion, done atomically, in order. A cancellation
-and a promotion should be one transaction, or a crash between them leaves a free berth that nobody
-was moved into.
-
-Some published rules shape the queue (as of October 2026):
-
-- **It is capped.** In mid-2025 the railways capped how long a waitlist may grow, at 60% of
-  capacity for AC classes and 30% for non-AC classes, after briefly trying 25%. Officials said
-  that usually only 20 to 25% of waitlisted tickets get confirmed
-  ([PTI via The Week, June 2025](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html)).
-  A cap stops the system from selling hope it cannot deliver.
-- **It freezes at charting.** Since July 2025 the first reservation chart is prepared at least
-  8 hours before departure, earlier for morning trains
-  ([All India Radio, 2025](https://www.newsonair.gov.in/railway-board-to-prepare-reservation-charts-8-hours-prior-to-train-departure)).
-  An online ticket still fully waitlisted at that point is cancelled automatically and refunded,
-  minus a clerkage fee ([Lok Sabha](https://eparlib.nic.in/bitstream/123456789/951605/1/AU1903.pdf)).
-
-From a design point of view, charting is a batch job that turns a live, changing queue into a
-fixed list the train crew can use. Doing it earlier gives waitlisted passengers certainty sooner,
-at the cost of fewer last-minute promotions. That is a product decision wearing an engineering
-coat, and the railways have moved it more than once.
 
 ## When things go wrong
 
-Outages at Tatkal time are public and frequent enough to have their own news coverage. The root
-causes are not public; IRCTC's statements usually say "maintenance" or "technical reasons".
-
-- **26 December 2024.** The site and app were down for about an hour and a half; IRCTC cited
-  maintenance
-  ([Business Standard](https://business-standard.com/india-news/irctc-website-down-here-s-how-you-can-book-or-cancel-your-train-tickets-124122600390_1.html)).
-- **31 December 2024.** Users reported login failures around 10 AM, during the AC Tatkal window,
-  in what Business Today called the third outage that month
-  ([Business Today](https://www.businesstoday.in/amp/india/story/irctc-website-down-site-and-app-experience-major-outage-ahead-of-new-year-third-in-a-month-459099-2024-12-31)).
-
-Outside India, the clearest public example of the same problem is Ticketmaster's November 2022
-presale for Taylor Swift's tour: the company said its systems received 3.5 billion requests, four
-times its previous peak, driven by bots and by fans without access codes, and the general sale was
-later cancelled ([CBS News, November 2022](https://www.cbsnews.com/amp/pittsburgh/news/ticketmaster-cancels-taylor-swift-eras-tour-ticket-sales)).
-
-In our design, here is what fails at the peak and what the user sees:
-
-| What breaks | What the user sees | What limits the damage |
+| Failure | What users see | Design response |
 |---|---|---|
-| Booking servers overloaded | Spinners, then error pages | Waiting room; shedding search before booking |
-| Seat inventory slow (hot rows) | Long waits after "Book" | Tiny critical section; metered admission |
-| Payment gateway slow | Payment page hangs | Holds long enough to cover slow banks; reconciliation |
-| Callbacks lost | "Transaction failed" after a debit | Reconciliation sweep; automatic refund |
-| SMS provider slow | Ticket on screen, SMS late | Messages queued and retried, never in the booking path |
-| Login or OTP service down | Nobody can start | Encourage login before the window; separate capacity for login |
-
-:::danger[A retry loop in the payment path loses real money]
-If a booking server retries "confirm booking" after an ambiguous error without an idempotency key,
-it can confirm twice, or refund a payment that was also confirmed. Every retry in the money path
-must carry the same payment ID, and every handler must check it first.
-:::
+| Expiry job lags 10 minutes | Berths held by abandoned sessions show "sold out" | Check `expires_at` at read time too: an expired hold counts as free even before the job runs |
+| Read model stale by 30 s | Users see availability, booking fails | Accept it; show the fresh count from the failed attempt |
+| Shard primary dies at 10:00:02 | Bookings for that train stall | Standby replays the log; requests in flight are idempotent by request ID so retries do not double-book |
+| Callback storm after a bank outage | Thousands of late successes | Late-success path rebooks or refunds; reconciliation catches the rest |
+| Cancellation and promotion in two transactions | A new booking takes a waitlisted passenger's berth | One transaction, or one event on the single writer |
 
 ## Build a piece of it
 
-Here is the heart of the design in about 50 lines: seat holds that expire, a payment callback that
-is safe to receive twice, a late payment that becomes a refund, and a reconciliation sweep. It is in
-memory to stay readable; in production `available` is the conditional `UPDATE` above, and
-`outcomes` is a table with the payment ID as its primary key.
+The inventory model and the conditional update, against SQLite: eight berths, seven segments, 40
+concurrent requests for overlapping journeys, each doing 20 ms of work between choosing a berth and
+writing it. The naive version reads, waits, then ORs the bits in; the correct one makes the check
+part of the `UPDATE` and chooses again when it gets zero rows.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
-```python title="seat_hold.py"
-# runnable version: examples/irctc-tatkal-booking/python/seat_hold.py
-class Quota:
-    def __init__(self, seats: int) -> None:
-        self.available = seats
-        self.bookings: dict[int, Booking] = {}
-        self.outcomes: dict[str, str] = {}  # payment_id -> what we did, so repeats get the same answer
-        self.ids, self.pnrs = count(1), count(4_512_000_001)
+```python title="berth_allocator.py"
+# runnable version: examples/irctc-tatkal-booking/python/berth_allocator.py
+def need(a: int, b: int) -> int:
+    """Bits a..b-1 set: the segments a journey from station a to station b occupies."""
+    return ((1 << (b - a)) - 1) << a
 
-    def release_expired(self, now: float) -> None:
-        for b in self.bookings.values():
-            if b.status == "HELD" and now >= b.expires_at:
-                b.status = "EXPIRED"
-                self.available += b.party  # the seats go back for the next person
 
-    def hold(self, party: int, now: float) -> Booking | None:
-        self.release_expired(now)
-        if self.available < party:  # check and take together, nothing in between
-            return None
-        self.available -= party
-        b = Booking(next(self.ids), party, now + HOLD_SECONDS)
-        self.bookings[b.id] = b
-        return b
+def waste(mask: int, a: int, b: int) -> int:
+    """How much free run is left around the journey on this berth. Smaller = tighter fit."""
+    lo, hi = a, b
+    while lo > 0 and not mask >> (lo - 1) & 1:
+        lo -= 1
+    while hi < SEGMENTS and not mask >> hi & 1:
+        hi += 1
+    return (a - lo) + (hi - b)
 
-    def on_payment(self, booking_id: int, payment_id: str, now: float) -> str:
-        """Called by the payment gateway, at least once, maybe late. Must be idempotent."""
-        if payment_id in self.outcomes:
-            return self.outcomes[payment_id]  # a repeat: same answer, no second ticket
-        self.release_expired(now)
-        b = self.bookings[booking_id]
-        if b.status == "EXPIRED" and self.available >= b.party:
-            self.available -= b.party  # paid late, but seats are still free: take them again
-            b.status = "HELD"
-        if b.status == "HELD":
-            b.status, b.pnr = "CONFIRMED", str(next(self.pnrs))
-            outcome = f"ticket PNR {b.pnr}"
-        else:
-            outcome = "no seats left: refund"  # money arrived, seats did not: give it back
-        self.outcomes[payment_id] = outcome
-        return outcome
 
-    def reconcile(self, paid_at_gateway: dict[int, str], now: float) -> list[str]:
-        """Every few minutes: ask the gateway which payments succeeded, and settle any we missed."""
-        return [f"booking {b}: {self.on_payment(b, p, now)}"
-                for b, p in paid_at_gateway.items() if p not in self.outcomes]
+def best_berth(db: sqlite3.Connection, a: int, b: int, senior: bool) -> int | None:
+    rows = db.execute("SELECT id, kind, mask FROM berth WHERE mask & ? = 0", (need(a, b),)).fetchall()
+    # Tightest fit first; seniors get lower berths first; then by berth number.
+    rows.sort(key=lambda r: (waste(r[2], a, b), senior and r[1] != "LB", r[0]))
+    return rows[0][0] if rows else None
+
+
+async def book(db: sqlite3.Connection, a: int, b: int, senior: bool, stats: dict) -> int | None:
+    n = need(a, b)
+    berth_id = best_berth(db, a, b, senior)  # what the user was shown
+    await asyncio.sleep(0.02)  # the same slow work; the choice above is now stale
+    while berth_id is not None:
+        with db:  # one short transaction: the check and the take are one statement
+            taken = db.execute(
+                "UPDATE berth SET mask = mask | ? WHERE id = ? AND mask & ? = 0", (n, berth_id, n)
+            ).rowcount
+            if taken:
+                db.execute("INSERT INTO booking (berth_id, from_idx, to_idx) VALUES (?, ?, ?)", (berth_id, a, b))
+                return berth_id
+        stats["retries"] += 1  # an overlapping journey got this berth first: re-read, choose again
+        berth_id = best_berth(db, a, b, senior)
+    return None
 ```
   </TabItem>
   <TabItem label="JavaScript">
-```js title="seat-hold.mjs"
-// runnable version: examples/irctc-tatkal-booking/js/seat-hold.mjs
-class Quota {
-  available;
-  bookings = new Map();
-  outcomes = new Map(); // paymentId -> what we did, so repeats get the same answer
-  #nextId = 1;
-  #nextPnr = 4_512_000_001;
+```js title="berth-allocator.mjs"
+// runnable version: examples/irctc-tatkal-booking/js/berth-allocator.mjs
+const need = (a, b) => ((1 << (b - a)) - 1) << a;
 
-  constructor(seats) { this.available = seats; }
+/** How much free run is left around the journey on this berth. Smaller = tighter fit. */
+function waste(mask, a, b) {
+  let lo = a;
+  let hi = b;
+  while (lo > 0 && !((mask >> (lo - 1)) & 1)) lo--;
+  while (hi < SEGMENTS && !((mask >> hi) & 1)) hi++;
+  return a - lo + (hi - b);
+}
 
-  releaseExpired(now) {
-    for (const b of this.bookings.values()) {
-      if (b.status === 'HELD' && now >= b.expiresAt) {
-        b.status = 'EXPIRED';
-        this.available += b.party; // the seats go back for the next person
-      }
+function bestBerth(db, a, b, senior) {
+  const rows = db.prepare('SELECT id, kind, mask FROM berth WHERE mask & ? = 0').all(need(a, b));
+  // Tightest fit first; seniors get lower berths first; then by berth number.
+  const key = (r) => [waste(r.mask, a, b), senior && r.kind !== 'LB' ? 1 : 0, r.id];
+  rows.sort((x, y) => key(x).reduce((d, v, i) => d || v - key(y)[i], 0));
+  return rows.length ? rows[0].id : null;
+}
+
+async function book(db, a, b, senior, stats) {
+  const n = need(a, b);
+  let berthId = bestBerth(db, a, b, senior); // what the user was shown
+  await sleep(20); // the same slow work; the choice above is now stale
+  while (berthId !== null) {
+    db.exec('BEGIN'); // one short transaction: the check and the take are one statement
+    const taken = db.prepare('UPDATE berth SET mask = mask | ? WHERE id = ? AND mask & ? = 0').run(n, berthId, n).changes;
+    if (taken) {
+      db.prepare('INSERT INTO booking (berth_id, from_idx, to_idx) VALUES (?, ?, ?)').run(berthId, a, b);
+      db.exec('COMMIT');
+      return berthId;
     }
+    db.exec('COMMIT');
+    stats.retries++; // an overlapping journey got this berth first: re-read, choose again
+    berthId = bestBerth(db, a, b, senior);
   }
-
-  hold(party, now) {
-    this.releaseExpired(now);
-    if (this.available < party) return null; // check and take together, nothing in between
-    this.available -= party;
-    const b = { id: this.#nextId++, party, expiresAt: now + HOLD_SECONDS, status: 'HELD', pnr: null };
-    this.bookings.set(b.id, b);
-    return b;
-  }
-
-  /** Called by the payment gateway, at least once, maybe late. Must be idempotent. */
-  onPayment(bookingId, paymentId, now) {
-    if (this.outcomes.has(paymentId)) return this.outcomes.get(paymentId); // a repeat: same answer
-    this.releaseExpired(now);
-    const b = this.bookings.get(bookingId);
-    if (b.status === 'EXPIRED' && this.available >= b.party) {
-      this.available -= b.party; // paid late, but seats are still free: take them again
-      b.status = 'HELD';
-    }
-    let outcome;
-    if (b.status === 'HELD') {
-      b.status = 'CONFIRMED';
-      b.pnr = String(this.#nextPnr++);
-      outcome = `ticket PNR ${b.pnr}`;
-    } else {
-      outcome = 'no seats left: refund'; // money arrived, seats did not: give it back
-    }
-    this.outcomes.set(paymentId, outcome);
-    return outcome;
-  }
-
-  /** Every few minutes: ask the gateway which payments succeeded, and settle any we missed. */
-  reconcile(paidAtGateway, now) {
-    return [...paidAtGateway]
-      .filter(([, paymentId]) => !this.outcomes.has(paymentId))
-      .map(([bookingId, paymentId]) => `booking ${bookingId}: ${this.onPayment(bookingId, paymentId, now)}`);
-  }
+  return null;
 }
 ```
   </TabItem>
 </Tabs>
 
-The full example plays out a small Tatkal morning with six berths. Both languages print the same:
+```text title="python berth_allocator.py (node berth-allocator.mjs prints the same)"
+8 berths x 7 segments (NDLS..NGP); 40 concurrent requests, 20 ms of work each
 
-```text title="output"
-10:00:05 Asha holds 2, Ben holds 4. Seats left: 0
-10:00:05 Chen asks for 2: not available
-10:02:00 Asha's bank calls back:      ticket PNR 4512000001
-10:02:03 the same callback, retried:  ticket PNR 4512000001
-10:15:12 Ben's hold expired; Chen and Dev hold 2 each. Seats left: 0
-10:16:00 Ben's payment finally arrives:  no seats left: refund
-10:17:00 Chen pays:                     ticket PNR 4512000002
-10:18:20 reconciliation, booking 4: ticket PNR 4512000003
+naive    40 of 40 booked, 276 overlapping pairs,  0 retries
+correct  29 of 40 booked,   0 overlapping pairs, 34 retries
+
+bitmask check: berth booked NDLS-AGC 1100000, journey AGC-BPL needs 0011100, AND = 0 -> it fits
 ```
 
-Read it line by line: Asha's retried callback gets the same PNR, not a second ticket. Ben has
-Priya's morning: his money arrived after his hold expired and the berths had gone to Chen and Dev, so he gets
-a refund, decided once and recorded. Dev's callback never arrived at all, and reconciliation found
-his payment and booked him. The repo also has
-[`oversell.py` and `oversell.mjs`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/irctc-tatkal-booking),
-the race from the previous section.
+The naive version "booked" all 40 by stacking journeys on top of each other: 276 pairs of
+passengers share a segment of a berth. The correct version booked the 29 that fit and turned the
+rest away, with 34 cheap retries caused by stale choices. The verification query is worth keeping
+as a production invariant check: any two bookings on one berth with
+`x.from_idx < y.to_idx AND y.from_idx < x.to_idx` is an oversell.
+
+The payment side (holds that expire, an idempotent callback, reconciliation) is in
+`seat_hold.py` and `seat-hold.mjs` in the same folder. Full code and run instructions:
+[`examples/irctc-tatkal-booking/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/irctc-tatkal-booking).
 
 ## Trade-offs, and what we'd change
 
-Every choice in this design gives something up.
-
-**Waiting room vs letting everyone in.** The room adds a few seconds of waiting even when there is
-no overload, and it is one more system that can fail; if it breaks, nobody gets in. You would
-build it so that it fails open to a simple static "try again" page rather than to an unprotected
-backend. Without a room, though, you are betting the peak on never being bigger than your servers,
-and Tatkal demand is set by how many people need to travel, not by your budget.
-
-**First come, first served vs randomising the start.** Strict order rewards the fastest clocks and
-connections, which favours bots and people on fibre over people on 4G in a small town. Shuffling
-everyone who arrived in the first few seconds is fairer to humans and harder to explain to them.
-
-**Hold length.** Long holds protect slow payers and slow banks; short holds return abandoned seats
-sooner. A common middle ground is a short hold that is extended once a payment has actually started.
-
-**Strict inventory vs speed.** One exact count per train, date, class and quota is simple to reason
-about and can never oversell, but it is a hot row. A design that splits a train's quota into
-several smaller buckets spreads the contention and lets you sell from them in parallel, at the cost
-of occasionally saying "not available" in one bucket while another has a berth.
-
-**Friction vs fairness.** Every anti-bot step costs real users some time and some failures.
-Aadhaar OTP is strong evidence of a real person, and also a new dependency in the critical minute.
-
-**At 10 times the scale** you would add more partitions per hot train, admission control that
-adapts to measured booking latency instead of a fixed rate, and a dedicated inventory service in
-front of the database. **At a tenth of the scale**, say a college fest booking 500 seats, one
-database with a conditional `UPDATE`, a short hold and an idempotent payment callback is all you
-need. Do not build the waiting room until the spike is real.
+- **Single writer per train-date vs row locks in a shared database.** The single writer removes
+  contention and makes best-fit free, at the cost of building failover, log replay and routing
+  yourself. Row locks reuse the database's machinery and are simpler to operate, at the cost of
+  contention on popular trains and pressure to spread allocations. Below a few thousand concurrent
+  bookings per train, the conditional update in PostgreSQL is the simpler choice.
+- **Bitmask per berth vs one row per berth-segment.** A row per segment makes availability a
+  `GROUP BY` and a booking a multi-row update with more locks. The bitmask keeps a booking to one
+  row and one statement, and needs care only for routes past 64 stops.
+- **Best-fit vs fast.** Best-fit costs a scan over candidate berths inside the critical section.
+  On 1,300 berths that is microseconds; on a 50,000-seat stadium it would need an index of free runs.
+- **Cancellation with promotion in one transaction.** Correct and simple, but a cancellation now
+  does work proportional to the waitlist length. Capped waitlists keep that bounded.
+- **At 10× scale** the shard per train-date still holds; what breaks first is the read side and the
+  edge. **At 0.1×**, one PostgreSQL instance with conditional updates does all of this.
 
 ## Interview corner
 
-"Design a ticket booking system" (or "design BookMyShow", "design a flash sale") is a common
-interview question, and Tatkal is the hardest version of it. A good 45 minutes looks like this:
+"Design a train ticket booking system" is a favourite because it looks like a seat-booking problem
+and is not. A strong 45 minutes:
 
-1. **Requirements, 5 minutes.** Ask about scale and shape: how many users, how many seats, how
-   spiky. Name the two non-negotiables out loud: no double booking, no money without a ticket.
-2. **Estimates, 5 minutes.** Users at the peak, requests per booking, seats per event, and the
-   point that demand is far higher than supply.
-3. **High-level design, 10 minutes.** Draw the boxes from the big picture above, and say why each
-   exists.
-4. **Deep dives, 20 minutes.** The interviewer will push on one or two: the race on the seat
-   count, the payment gap, or the spike.
-5. **Wrap up, 5 minutes.** Failure modes and what you would monitor (holds expiring unpaid, refund
-   backlog, admission rate, error rate at the edge).
+1. Requirements and numbers (5 min): partial journeys, quotas, waitlist, the 10 AM spike.
+2. Data model (10 min): berth with segment bitmask, why counters fail, availability as a query.
+3. Concurrency (15 min): the lost update, then conditional update vs `SKIP LOCKED` vs single writer,
+   with their costs.
+4. Allocation and waitlist (10 min): best-fit, group bookings, segment-aware promotion.
+5. Spike and payments (5 min): admission control, holds, idempotent callbacks.
 
-The follow-up questions that come up most often:
+The follow-ups interviewers usually ask:
 
-- *Two users click the last seat at the same moment. Who gets it?* The one whose conditional
-  update runs first; the other's update matches zero rows. Explain why a read followed by a write
-  is not enough.
-- *The payment succeeds but your server crashes before saving the booking. What now?*
-  Reconciliation against the gateway, plus an idempotent payment ID, so the eventual callback or
-  sweep books or refunds exactly once.
-- *How do you stop one popular event from slowing down everything else?* Partition by event (or
-  train and date), give hot events their own admission control, and make sure a hot row cannot
-  starve other rows of database connections.
-- *How do you keep it fair?* A waiting room, bot defences before the queue, and per-booking limits.
-  Mention the fairness trade-off of strict order.
+- **"Why not lock the row while the user is paying?"** Because a lock is held by a database session
+  for minutes, blocks every reader of that row with `FOR UPDATE`, and vanishes if the session dies.
+  A hold is data: bits set, a status and an expiry, released by a job.
+- **"How do you handle two passengers booking four berths each in opposite order?"** Lock ordering
+  by (coach, berth), or one multi-row conditional `UPDATE` with a row-count check.
+- **"How does the waitlist promote correctly with partial journeys?"** Walk in order, give each entry
+  a fitting part of the freed bits, in the same transaction as the cancellation.
+- **"Where is your bottleneck at 10:00?"** Not the write rate. Contention on one train's rows,
+  then reads and retries; then the answer is partitioning by train-date and admission control.
 
 ## Check yourself
 
 <details>
-<summary>1. A hold lasts 15 minutes. What happens to a train's quota if half of all holders abandon the payment page?</summary>
+<summary>1. A berth's mask on a 7-segment route is 1000110 (segment 0 first). Which of these fit: NDLS→MTJ (segment 0), MTJ→GWL (segments 1–2), GWL→ET (segments 3–5)?</summary>
 
-Half the berths sit unused for up to 15 minutes, then flow back to the quota when the holds expire,
-and are sold to whoever books next. Long holds cost seats in the minutes that matter most, which is
-why holds are kept short and returned automatically, not by a person.
-
-</details>
-
-<details>
-<summary>2. The booking servers double in number. Does a single popular train sell out faster?</summary>
-
-Only up to a point. More servers help with search, availability and payment pages, but all bookings
-for that train still update one inventory row, one at a time. Once that row is the bottleneck, more
-servers only add more requests waiting for it.
+Only MTJ→GWL. Read left to right, 1000110 has bits 0, 4 and 5 set. NDLS→MTJ needs bit 0: clash.
+MTJ→GWL needs bits 1 and 2 (0110000): AND is zero, it fits. GWL→ET needs bits 3 to 5 (0001110):
+clash on 4 and 5. Reading masks by eye is error-prone, which is why the check is one `&` in code.
 
 </details>
 
 <details>
-<summary>3. The payment gateway sends the same "paid" callback three times. What should the booking server do?</summary>
+<summary>2. You switch from a coach-level FOR UPDATE to FOR UPDATE SKIP LOCKED with ORDER BY berth_no. Latency drops. A week later, the business reports more end-to-end passengers turned away on long routes. Why?</summary>
 
-Handle the first one, record the outcome against the payment ID, and answer the next two with the
-recorded outcome without changing anything. Three callbacks, one ticket.
-
-</details>
-
-<details>
-<summary>4. Why might a waiting room let in 1,600 users a second when the servers could handle 2,000?</summary>
-
-Headroom. Admitted users arrive in bursts, some bookings take more requests than others, and a
-server near 100% has long queues and slow responses. Running at about 80% keeps the queue short, so
-nothing times out and no work is wasted.
+SKIP LOCKED gives each concurrent request the first unlocked berth that fits, not the tightest fit.
+Short journeys get spread over many berths, chopping free runs into short pieces, so fewer berths
+stay free for the whole route. Fix it with best-fit ordering inside a single writer, or score
+candidates by fit and use the conditional update.
 
 </details>
 
 <details>
-<summary>5. A user's payment page times out, so they try again and pay a second time. Both payments succeed. What should happen?</summary>
+<summary>3. Your booking transaction runs at PostgreSQL REPEATABLE READ and uses the conditional UPDATE. Under load you see errors with SQLSTATE 40001. Is your data wrong?</summary>
 
-Each payment attempt has its own ID, but both point at the same booking. The first to arrive
-confirms the booking; the second finds it already confirmed and must be refunded, automatically.
-Reconciliation checks that every successful payment maps to exactly one ticket or one refund.
+No. At repeatable read, PostgreSQL refuses to update a row that changed after your snapshot and
+raises a serialization failure instead of re-checking the condition. The data is safe; the
+transaction must be retried. At read committed the same `UPDATE` would re-evaluate the `WHERE` and
+return zero rows instead.
+
+</details>
+
+<details>
+<summary>4. A passenger cancels NDLS→BPL at 10:00:05. At 10:00:05.001 a new Tatkal request for AGC→GWL books that berth. WL 1 was AGC→GWL. What went wrong?</summary>
+
+The cancellation and the waitlist promotion ran in separate transactions, so the freed bits were
+visible to new bookings in between. The berth belonged to WL 1. Clear the bits and promote in one
+transaction, or process cancellation and promotion as one event on the train's single writer.
 
 </details>
 
 ## Recap
 
-- **The spike is the problem, not the average.** Demand at 10:00:00 is synchronised, and errors turn
-  into retries. A **waiting room** at the edge meters users in, keeps every server request useful,
-  and tells the losers quickly.
-- **Bots are stopped in layers**: edge signals, login with OTP, account history, and rules such as
-  the agent embargo and four passengers per booking.
-- **Never sell a berth twice** by making check-and-take one atomic step, keeping the critical
-  section tiny, and partitioning the inventory by train, date, class and quota.
-- **"Money deducted, no ticket"** comes from two systems with no shared transaction. Holds,
-  idempotent callbacks and a reconciliation sweep make every payment end in a ticket or a refund.
-- **The waitlist** is an ordered queue behind the confirmed seats; cancellations promote people
-  atomically, and charting freezes the order.
-- The big lesson: you cannot give everyone a seat. **Design for deciding quickly, correctly and
-  fairly who gets one, and for telling everyone else.**
+- Rail inventory is per **segment**: a berth is a bitmask, a journey is a mask, `mask & need = 0`
+  means it fits. Counters per station pair do not work.
+- **Read, work, write** loses updates under default isolation; the database will not warn you.
+- Correct options: lock the coach (simple, serial), conditional `UPDATE` (short locks, retries),
+  `SKIP LOCKED` (no waits, worse allocation), or a **single writer per train-date** (no locks, best
+  allocation, you build failover).
+- **Allocation decides sellable capacity.** Best-fit keeps long runs free; spreading to avoid
+  contention fragments the train.
+- **Waitlists promote by fit, not by number,** and promotion must be atomic with the cancellation.
+- Holds are data with an expiry, payments are a saga with idempotent callbacks and reconciliation,
+  and the spike is handled before the database by admission control and fail-fast summaries.
 
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'payment-system', why: 'The payment side of booking, designed properly: ledgers, reconciliation and refunds at scale.' },
-  { slug: 'load-shedding', why: 'What to drop first when the whole system is overloaded, so the important work survives the peak.' },
-  { slug: 'saga-pattern', why: 'The general form of "hold, pay, confirm or compensate" across systems that share no transaction.' },
-  { slug: 'hot-keys', why: 'One train, one row, twenty thousand writers: how systems survive keys that everyone wants at once.' },
-  { slug: 'idempotency-keys', why: 'The tool that makes a repeated payment callback harmless, in depth.' },
-  { slug: 'rate-limiting', why: 'The waiting room\'s cousin: limiting each caller to a fair share instead of queueing everyone.' },
+  { slug: 'acid-and-isolation-levels', why: 'Why read committed lets the lost update through, and what repeatable read and serializable change.' },
+  { slug: 'optimistic-vs-pessimistic-locking', why: 'The conditional update and FOR UPDATE in general, with their failure modes.' },
+  { slug: 'deadlocks', why: 'Lock ordering, detection and timeouts, for multi-berth bookings.' },
+  { slug: 'partitioning-and-sharding', why: 'Choosing a partition key like train-date, and what happens when one partition is hot.' },
+  { slug: 'payment-system', why: 'The payment saga, reconciliation and refunds, designed properly.' },
+  { slug: 'rate-limiting', why: 'The admission-control side of 10:00:00.' },
 ]} />
 
 ## Further reading
 
 **Official sources**
 
-- [IRCTC: internet ticketing](https://irctc.com/internet-ticketing.html) — IRCTC's own page with the tickets-per-minute record.
-- [All India Radio: Aadhaar OTP for Tatkal (June 2025)](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1) — the 2025 identity rules and the agent embargo.
-- [All India Radio: over 3 crore suspicious IDs deactivated (December 2025)](https://www.newsonair.gov.in/government-deactivates-over-3-crore-suspicious-railway-user-ids/) — the government's account of its anti-bot work.
 - [All India Radio: charts 8 hours before departure (2025)](https://www.newsonair.gov.in/railway-board-to-prepare-reservation-charts-8-hours-prior-to-train-departure) — when the waitlist freezes.
-- [Lok Sabha: Tatkal quota caps (2015)](https://eparlib.nic.in/bitstream/123456789/658143/1/12864.pdf) — how many berths per coach can be Tatkal.
+- [All India Radio: Aadhaar OTP for Tatkal (June 2025)](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1) — identity checks and the agent embargo.
+- [All India Radio: 60-day advance reservation period (2024)](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days) — how far ahead train-dates are live.
+- [Lok Sabha: remote location and pooled quotas (2010)](https://eparlib.nic.in/bitstream/123456789/581602/1/86072.pdf) — quotas earmarked per station by the zonal railway.
+- [Lok Sabha: lower berths for senior citizens (2025)](https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf) — automatic lower-berth allotment and the per-coach numbers.
 - [Lok Sabha: waitlisted e-tickets after charting](https://eparlib.nic.in/bitstream/123456789/951605/1/AU1903.pdf) — automatic cancellation and refund.
-- [PIB: next-generation PRS migration (August 2026)](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf) — the move to a new reservation system.
-- [RBI: turnaround time for failed transactions (September 2019)](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693) — reversal deadlines and compensation for debits that did not complete.
+- [PIB: next-generation PRS (August 2026)](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf) — the move to a new reservation system.
+- [RBI: turnaround time for failed transactions (2019)](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693) — reversal deadlines and compensation.
 
-**Engineering blogs**
+**Databases and engineering**
 
-- [Cloudflare: Building Waiting Room on Workers and Durable Objects (2021)](https://blog.cloudflare.com/building-waiting-room-on-workers-and-durable-objects) — how a waiting room keeps places in line and a global admission rate.
-- [Queue-it: how it works](https://queue-it.com/developers/how-queue-it-works) and [FIFO vs randomisation](https://www.queue-it.com/blog/first-in-first-out-randomization) — queue IDs, admission rates, and the case for shuffling early arrivals.
-- [AWS: Virtual Waiting Room on AWS](https://docs.aws.amazon.com/solutions/latest/virtual-waiting-room-on-aws/architecture-overview.html) — a reference architecture you can read end to end.
-- [Stripe: Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) — idempotency keys for payments, from the source.
+- [PostgreSQL: transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — how `UPDATE` re-checks rows at read committed, and serialization failures at repeatable read.
+- [PostgreSQL: SELECT, the locking clause](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — `FOR UPDATE` and `SKIP LOCKED`.
+- [PostgreSQL: lock management settings](https://www.postgresql.org/docs/current/runtime-config-locks.html) — `deadlock_timeout`.
+- [MySQL: InnoDB locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) — current reads for `UPDATE` and `SELECT ... FOR UPDATE`.
+- [Martin Fowler: The LMAX architecture](https://martinfowler.com/articles/lmax.html) — a single-threaded business logic processor with an input log, the idea behind the single writer per shard.
+- [Stripe: idempotency](https://stripe.com/blog/idempotency) — idempotency keys for payments.
+- [Cloudflare: Building Waiting Room](https://blog.cloudflare.com/building-waiting-room-on-workers-and-durable-objects) — admission control at the edge.
 
-**News and explainers**
+**News**
 
-- [Business Today: staggered Tatkal timings (2015)](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html) — the 10 and 11 AM split and its reason.
-- [IANS: AI system deactivates 2.5 crore IDs (June 2025)](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204) — the bot share of logins in the first five minutes.
-- [IANS: IRCTC booking figures (June 2026)](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101) — per-minute peak and daily averages.
-- [IANS via Morung Express: OTP on 322 trains (December 2025)](https://morungexpress.com/aadhaar-otp-verification-now-in-322-trains-for-online-tatkal-booking-3-crore-fake-user-ids-busted) — how far the OTP rollout had reached.
-- [Free Press Journal: availability after OTP (December 2025)](https://www.freepressjournal.in/tech/aadhaar-otp-boosts-tatkal-fairness-irctc-blocks-302-cr-fake-ids-availability-jumps-65) — the reported effect of the OTP check.
-- [PTI via The Week: online share of tickets (July 2025)](https://www.theweek.in/wire-updates/national/2025/07/25/del90-rsq-rail-online-ticket.html) and [waitlist cap (June 2025)](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html) — two parliamentary figures.
-- [Newslaundry: IRCTC's history (2016)](https://www.newslaundry.com/2016/01/20/from-29-tickets-booked-in-a-day-to-13-lakh-tickets-a-day-irctc-has-come-a-long-way) — capacity growth from 2,000 tickets a minute.
-- [MediaNama: Tatkal measures (2012)](https://www.medianama.com/2012/07/223-irctc-takes-several-steps-to-improve-tatkal-ticket-bookings/) — early load numbers and anti-abuse steps.
-- [Voice&Data: the Passenger Reservation System](https://www.voicendata.com/transformational-it-projects-from-yore-indian-railways-passenger-reservation-system) — history of the reservation core.
-- [Onmanorama: illegal Tatkal software (2020)](https://www.onmanorama.com/news/india/2020/02/18/indian-railways-tatkal-ticket-illegal-software.html) — what the booking bots could do.
-- [ETV Bharat: faster refunds (2024)](https://www.etvbharat.com/en/!bharat/passengers-to-get-money-back-in-one-hour-as-irctc-refunds-get-faster-enn24031402147) — automatic refunds for debited-but-not-booked payments.
-- [Business Standard](https://business-standard.com/india-news/irctc-website-down-here-s-how-you-can-book-or-cancel-your-train-tickets-124122600390_1.html) and [Business Today](https://www.businesstoday.in/amp/india/story/irctc-website-down-site-and-app-experience-major-outage-ahead-of-new-year-third-in-a-month-459099-2024-12-31) on the December 2024 outages.
-- [CBS News: Ticketmaster cancels the Eras Tour general sale (2022)](https://www.cbsnews.com/amp/pittsburgh/news/ticketmaster-cancels-taylor-swift-eras-tour-ticket-sales) — the same problem outside India.
+- [IANS: IRCTC booking figures (June 2026)](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101) — the per-minute peak.
+- [Business Today: staggered Tatkal timings (2015)](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html) — the 10 and 11 AM split.
+- [IANS: suspicious IDs and bots (June 2025)](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204) — the bot share of Tatkal logins.
+- [PTI via The Week: waitlist cap (June 2025)](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html) — 60% and 30% caps and confirmation rates.
+- [Deccan Herald: RAC and lower berth rules (2025)](https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790) and [second reservation chart (2020)](https://www.deccanherald.com/india/railways-to-restore-system-of-issuing-second-reservation-charts-30-minutes-before-departure-of-trains-898230.html).
+- [The Quint: chart vacancy online (2019)](https://thequint.com/news/india/irctc-check-train-reservation-chart-vacant-seats-online-website-app) — vacant berths, including between intermediate stations.
+- [Tribune: seat selection in the new PRS](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train) — choosing seats like airlines.

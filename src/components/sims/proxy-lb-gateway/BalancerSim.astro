@@ -1,0 +1,19 @@
+---
+// L4 vs L7 balancing with long-lived connections and a slow backend. See balancer-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="lb-balancer"
+  title="Same traffic, same backends, three balancers"
+  description="Three lanes run the same requests. Clients each hold one long-lived HTTP/2 connection and send 60 requests a second on it. Each lane shows the backends as bars filled to their utilisation over the last second, with the number of queued requests in red under a bar when it is falling behind, and its utilisation otherwise. Lane one balances connections at layer 4; lane two balances requests at layer 7 with round robin; lane three balances requests at layer 7 to the backend with the fewest requests in flight."
+  watchFor="With 4 connections and 6 backends, the layer 4 lane leaves two backends idle while the others work harder; the layer 7 lanes use all six. Raise connections to 8: two layer 4 backends now get two connections each, more than they can serve, and their queues grow without limit while the layer 7 lanes stay fast. Then set connections back to 4 and make backend 1 three times slower: round robin keeps sending it its full share and its queue explodes; least outstanding requests notices and sends it less."
+  viewBox="0 0 400 384"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createBalancerModel } from './balancer-model';
+
+  mountAll('lb-balancer', createBalancerModel);
+</script>

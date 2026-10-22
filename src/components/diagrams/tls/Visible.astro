@@ -1,0 +1,44 @@
+---
+// What a passive observer on the path learns from one HTTPS visit over TLS 1.3, without breaking
+// any cryptography. Amber rows are visible, green rows are hidden; the muted line says when a row
+// changes.
+const rows = [
+  { what: 'IP addresses and ports', note: 'always', seen: true },
+  { what: 'The DNS lookup', note: 'unless DNS over HTTPS or TLS', seen: true },
+  { what: 'Server name (SNI)', note: 'unless Encrypted Client Hello', seen: true },
+  { what: 'ALPN offer, key shares', note: 'in the ClientHello', seen: true },
+  { what: 'Certificate chain', note: 'TLS 1.2 sent it in the clear', seen: false },
+  { what: 'Path, headers, cookies', note: 'and the body', seen: false },
+  { what: 'Size and timing', note: 'of every record, always', seen: true },
+];
+const ROW = 52;
+const Y0 = 40;
+---
+
+<svg viewBox="0 0 400 412" width="100%" role="img" aria-labelledby="tls-vis-t tls-vis-d">
+  <title id="tls-vis-t">What an observer sees in one HTTPS visit over TLS 1.3</title>
+  <desc id="tls-vis-d">
+    Seven rows. Seen: the IP addresses and ports, always; the DNS lookup, unless DNS over HTTPS or
+    TLS is used; the server name in SNI, unless Encrypted Client Hello is used; the ALPN offer and
+    key shares in the ClientHello; and the size and timing of every record, always. Hidden: the
+    certificate chain, which TLS 1.2 sent in the clear; and the path, headers, cookies and body.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one visit, watched from the café Wi-Fi</text>
+
+  {
+    rows.map((r, i) => {
+      const y = Y0 + i * ROW;
+      const tone = r.seen ? 'warn' : 'ok';
+      return (
+        <g>
+          <rect x="4" y={y} width="392" height={ROW - 8} rx="6" stroke-width="1.5"
+            style={`fill: var(--viz-${tone}-soft); stroke: var(--viz-${tone})`} />
+          <text x="14" y={y + 19} font-size="17" font-weight="700" style="fill: var(--viz-ink)">{r.what}</text>
+          <text x="14" y={y + 37} font-size="15" style="fill: var(--viz-muted)">{r.note}</text>
+          <text x="384" y={y + 28} font-size="17" font-weight="700" text-anchor="end" style={`fill: var(--viz-${tone})`}>{r.seen ? 'seen' : 'hidden'}</text>
+        </g>
+      );
+    })
+  }
+</svg>

@@ -1,0 +1,19 @@
+---
+// One response over a fresh TCP connection, round by round. See slowstart-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="slow-start"
+  title="One response, one fresh connection, round by round"
+  description="A bar chart of packets sent in each round trip of one download. Each bar is one round trip; a red cap marks packets lost in that round. A dashed green line marks how many packets would fill the link. Underneath, three bars compare how long the same download takes on this link, with ten times the bandwidth, and with half the round-trip time."
+  watchFor="With the defaults, 100 KB needs three round trips of data (10, 20, then 39 packets) and arrives about 455 ms after the request, while the link alone could carry it in 8 ms. Ten times the bandwidth saves 4 ms; half the round trip saves 225 ms. Then set the size to 10 KB and 20 KB, and add 2% loss to watch one lost packet end the doubling."
+  viewBox="0 0 400 260"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createSlowStartModel } from './slowstart-model';
+
+  mountAll('slow-start', createSlowStartModel);
+</script>

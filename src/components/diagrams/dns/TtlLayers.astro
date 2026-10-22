@@ -1,0 +1,57 @@
+---
+// One answer travelling up from the authoritative server to an open connection, and what each
+// layer does to its TTL on the way. Numbers are one illustrative lookup; the defaults are sourced
+// on the page (as of October 2026).
+const ROWS = [
+  { name: 'Authoritative server', note: 'publishes the record with TTL 300', value: '300 s', tone: 'store' },
+  { name: 'Recursive resolver', note: 'hands out the time left; may cap it', value: '212 s', tone: 'server' },
+  { name: 'OS stub resolver', note: 'glibc keeps nothing; a local daemon may', value: '≤ 212 s', tone: 'server' },
+  { name: 'Language runtime', note: 'Java: 30 s · Chrome: 60 s · Node: none', value: '30 s', tone: 'client' },
+  { name: 'Open connection', note: 'never asks DNS again until it closes', value: 'hours', tone: 'warn' },
+];
+const TOP = 44;
+const H = 62;
+const GAP = 26;
+const height = TOP + ROWS.length * H + (ROWS.length - 1) * GAP + 6;
+---
+
+<svg viewBox={`0 0 400 ${height}`} width="100%" role="img" aria-labelledby="dns-ttl-t dns-ttl-d">
+  <title id="dns-ttl-t">What each layer does to one TTL</title>
+  <desc id="dns-ttl-d">
+    Five boxes stacked from top to bottom, with arrows showing one answer travelling down from the
+    source to the application. The authoritative server publishes the record with a TTL of 300 seconds. The
+    recursive resolver hands out only the time left on its copy, 212 seconds in this example, and
+    may cap it. The operating system's stub resolver keeps nothing in plain glibc, though a local
+    caching daemon may keep it for up to that time. The language runtime applies its own rule:
+    Java keeps lookups for 30 seconds, Chrome 60 seconds, Node's lookup keeps nothing. Finally an
+    open connection keeps using the address for hours, until it closes, without asking DNS again.
+  </desc>
+  <defs>
+    <marker id="dns-ttl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one answer, from the source up to your code</text>
+
+  {
+    ROWS.map((r, i) => {
+      const y = TOP + i * (H + GAP);
+      return (
+        <g>
+          <rect x="4" y={y} width="392" height={H} rx={r.tone === 'client' ? 16 : 6} stroke-width="2" style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+          <text x="16" y={y + 26} font-size="19" font-weight="700" style="fill: var(--viz-ink)">{r.name}</text>
+          <text x="16" y={y + 50} font-size="16" style="fill: var(--viz-muted)">{r.note}</text>
+          <text x="384" y={y + 26} font-size="19" font-weight="700" text-anchor="end" style={`fill: var(--viz-${r.tone === 'warn' ? 'bad' : 'ink'}); font-family: var(--sl-font-mono)`}>{r.value}</text>
+        </g>
+      );
+    })
+  }
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dns-ttl-arrow)">
+    {ROWS.slice(1).map((_, i) => {
+      const bottom = TOP + i * (H + GAP) + H;
+      return <line x1="200" y1={bottom + 2} x2="200" y2={bottom + GAP - 3} />;
+    })}
+  </g>
+</svg>

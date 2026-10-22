@@ -1,6 +1,6 @@
 ---
 name: add-topic
-description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
+description: Research, write, illustrate and publish one topic page on the system design site — question-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
 argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--no-push] [--update]"
 disable-model-invocation: true
 allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node *) Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
@@ -8,7 +8,8 @@ allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node 
 
 # Add a topic: $ARGUMENTS
 
-Before starting, read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
+Before starting, read the "Owner's standing feedback" section of `style-guide.md`; it overrides
+anything below that conflicts with it. Then read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
 `template-case-study.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
 
 Work through the phases in order. Don't skip a phase because the topic feels familiar.
@@ -73,6 +74,12 @@ Always research, even topics you know well. Aim for 6–12 sources, in this prio
 For fast-moving topics (specs, cloud products, AI tooling), find the current version and record the
 version and date.
 
+**Sources must be from 2020 or later.** Do not use any blog post, paper, talk, incident report,
+benchmark or measurement published before 2020. If a well-known fact only has an older source, find
+a 2020+ source that confirms it still holds, or drop it. The only exception is a standard that is
+still the current version (an RFC or spec in force): cite it for what it specifies, nothing more.
+Record the publication year of every source in `research/<slug>.md`.
+
 Write `research/<slug>.md` with:
 
 - key facts, each with its source URL
@@ -89,7 +96,7 @@ Keep quotes in notes under 15 words. Notes are for understanding, not for pastin
 Fill the chosen template's sections with bullet outlines, and give each section a word budget
 that adds up to the page's reading budget (see "Length" in `style-guide.md`). Decide:
 
-- the opening story and the question it ends on
+- the opening hook: the 2–4 sentence question the reader has never asked themselves
 - the everyday analogy and where it breaks
 - the list of mechanisms or variants for "How it works"
 - the diagram list: one line each on what it shows
@@ -104,9 +111,10 @@ If `--review` was given: show the outline and wait for the user.
 Create `src/content/docs/<track>/<slug>.mdx` from the template chosen in Phase 1.
 
 - Follow the section order and the voice and clarity rules in `style-guide.md`.
-- Stay inside the reading budget in `style-guide.md`: 40–45 minutes, up to 50 when the topic
-  needs the extra visuals, as shown by the "min read" in the page header. When a section runs long, cut or
-  move detail to the page that owns it; don't squeeze the opening story or the core idea.
+- Stay inside the reading budget in `style-guide.md` (usually 30–45 minutes, 50 at most, as shown
+  by the "min read" in the page header). Never pad to reach a time. When a section runs long, cut
+  or move detail to the page that owns it; don't squeeze the core mechanisms.
+- No repetition across sections, nothing the reader already knows (style guide, "No repetition").
 - Weave in the user's notes from Phase 0.
 - Remove every template comment.
 
@@ -138,13 +146,14 @@ Follow `visuals.md`.
 Fix anything that fails. Don't publish with known failures.
 
 - [ ] All sections of the chosen template present, in order, with no leftover template comments
-- [ ] Reading time in the page header is inside the budget (40–45 min, 50 at most)
-- [ ] Opens with a problem story; nothing explained before it's motivated
+- [ ] Reading time in the page header fits the topic (usually 30–45 min, 50 at most), with no padding
+- [ ] Opens with a sharp technical question in 2–4 sentences, no narrative; nothing is said twice
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
 - [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption
 - [ ] Every code example ran; page snippets match the files in `examples/`
 - [ ] Changeable facts carry "as of <Month YYYY>" with a source
+- [ ] Every source is from 2020 or later (except standards still in force), with its year shown in Further reading
 - [ ] Nothing copied from sources; every source listed in Further reading
 - [ ] All internal links resolve (published pages or "coming soon")
 - [ ] `npm run build` passes with no errors

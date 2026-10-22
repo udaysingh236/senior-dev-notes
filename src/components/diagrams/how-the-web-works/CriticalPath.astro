@@ -1,0 +1,65 @@
+---
+// The hero: a page load is a chain of discoveries. Each arrow is at least one round trip, and an
+// arrow to a new host adds a DNS lookup and a connection set-up. The longest chain sets the time.
+// The top-right corner is left empty for the Figure's enlarge button.
+---
+
+<svg viewBox="0 0 400 372" width="100%" role="img" aria-labelledby="hw-cp-t hw-cp-d">
+  <title id="hw-cp-t">A page load is the longest chain of dependent round trips</title>
+  <desc id="hw-cp-d">
+    The HTML is fetched first. Its first packets name the CSS, the JavaScript and the images, which
+    each cost at least one more round trip. The CSS names a web font on another host, which costs
+    a DNS lookup and three more round trips. The JavaScript, once it runs, calls an API on another
+    host, which also costs a lookup and three round trips. The images are not needed for the first
+    render. The page is ready when the longest chain, HTML then JavaScript then API, finishes.
+  </desc>
+  <defs>
+    <marker id="hw-cp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="hw-cp-arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  <!-- Resources -->
+  <g stroke-width="2">
+    <rect x="8" y="8" width="120" height="52" rx="8" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="8" y="132" width="120" height="52" rx="8" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="140" y="132" width="120" height="52" rx="8" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+    <rect x="272" y="132" width="120" height="52" rx="8" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-dasharray="6 4" />
+    <rect x="8" y="256" width="120" height="52" rx="8" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="140" y="256" width="120" height="52" rx="8" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  </g>
+  <g font-size="20" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+    <text x="68" y="41">HTML</text>
+    <text x="68" y="165">CSS</text>
+    <text x="200" y="165">JS</text>
+    <text x="332" y="165">Images</text>
+    <text x="68" y="289">Font</text>
+    <text x="200" y="289">API call</text>
+  </g>
+
+  <!-- Discovered in the first HTML packets -->
+  <g stroke-width="2" fill="none">
+    <line x1="68" y1="62" x2="68" y2="128" style="stroke: var(--viz-flow)" marker-end="url(#hw-cp-arrow)" />
+    <line x1="96" y1="62" x2="196" y2="128" style="stroke: var(--viz-bad)" marker-end="url(#hw-cp-arrow-bad)" />
+    <line x1="120" y1="58" x2="320" y2="128" style="stroke: var(--viz-flow)" stroke-dasharray="6 4" marker-end="url(#hw-cp-arrow)" />
+    <line x1="68" y1="186" x2="68" y2="252" style="stroke: var(--viz-flow)" marker-end="url(#hw-cp-arrow)" />
+    <line x1="200" y1="186" x2="200" y2="252" style="stroke: var(--viz-bad)" marker-end="url(#hw-cp-arrow-bad)" />
+  </g>
+  <g font-size="19" font-weight="600">
+    <text x="144" y="30" style="fill: var(--viz-muted)">named in the first</text>
+    <text x="144" y="52" style="fill: var(--viz-muted)">HTML packets</text>
+    <text x="10" y="104" style="fill: var(--viz-flow)">+1</text>
+    <text x="76" y="228" style="fill: var(--viz-flow)">+3 RTT</text>
+    <text x="208" y="214" style="fill: var(--viz-bad)">+3 RTT,</text>
+    <text x="208" y="238" style="fill: var(--viz-bad)">after JS runs</text>
+  </g>
+  <g font-size="19" style="fill: var(--viz-muted)">
+    <text x="272" y="278">images: off</text>
+    <text x="272" y="302">this chain</text>
+    <text x="8" y="336">new host = DNS + TCP + TLS + request</text>
+    <text x="8" y="360" font-weight="700" style="fill: var(--viz-bad)">longest chain: HTML → JS → API</text>
+  </g>
+</svg>

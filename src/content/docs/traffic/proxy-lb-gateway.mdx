@@ -1,8 +1,8 @@
 ---
 title: Reverse Proxy vs Load Balancer vs API Gateway
-description: Three names for the box in front of your servers. What each one is for, what it can see and change, where the three overlap, how real stacks layer them, and how to decide which ones you actually need.
-tagline: Three names for the box in front of your servers, and why they are not always the same box.
-difficulty: beginner
+description: What a reverse proxy, a layer 4 or layer 7 load balancer and an API gateway can each read and decide, why per-connection balancing fails with HTTP/2 and gRPC, how retries multiply across hops, and how to pick the fewest boxes that do the job.
+tagline: The difference is not the feature list. It is what each box can read, and whether it decides per connection or per request.
+difficulty: intermediate
 track: traffic
 prerequisites: [how-the-web-works, tls]
 next: [reverse-proxies, load-balancing, api-gateways]
@@ -14,404 +14,244 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
-import StepThrough from '../../../components/StepThrough.astro';
 import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
 import Role from '../../../components/diagrams/proxy-lb-gateway/Role.astro';
 import WhatItSees from '../../../components/diagrams/proxy-lb-gateway/WhatItSees.astro';
 import Choose from '../../../components/diagrams/proxy-lb-gateway/Choose.astro';
 import RealStack from '../../../components/diagrams/proxy-lb-gateway/RealStack.astro';
+import BalancerSim from '../../../components/sims/proxy-lb-gateway/BalancerSim.astro';
+import TimeoutSim from '../../../components/sims/proxy-lb-gateway/TimeoutSim.astro';
 
-## Three people, one word, three boxes
+## The question
 
-Imagine a design review at a small team in Bengaluru that runs the ordering API for a chain of
-restaurants. The app is growing: a website, an Android app, and now two delivery partners who want
-to call the API directly. Someone draws a box in front of the servers and writes "gateway" on it.
-Everyone nods.
+Put a layer 4 load balancer in front of six gRPC servers, and send traffic from four clients. Two
+servers sit idle and four run hot. Add six more servers and nothing changes. Swap in a layer 7 proxy
+and the load spreads evenly, but now that box must decrypt and parse every request. Then make one
+server three times slower: round robin, the default almost everywhere, keeps feeding it its full
+share and its queue grows by seconds.
 
-The backend lead meant "something that checks the partners' API keys and limits how often they
-call". The infrastructure engineer meant "something that spreads traffic over our four servers".
-The new graduate on the team, who had read a blog post the night before, meant "nginx". Each of
-them went off and built their version.
-
-Three weeks later the request path is a managed API gateway, then a cloud load balancer, then
-nginx, then the app. Two of those three hops do TLS. Rate limiting is configured in two places
-with two different numbers, so nobody can say what the limit really is. The monthly report export,
-which takes about 40 seconds to build, now fails every time with a 504, because the managed gateway
-gives up on a backend after 29 seconds. And the app's own rate limiter, which counts requests per
-client IP address, starts throttling everyone at once: every request now arrives from the address
-of the load balancer, so the whole of India looks like one very busy customer.
-
-Nobody did anything foolish. Each person picked a reasonable box for the job they had in mind.
-The mistake was in the word. "Reverse proxy", "load balancer" and "API gateway" overlap so much
-that people use them as synonyms, and they are not. This page answers one question: **what does
-each of these boxes do, where do they overlap, and how do you decide which ones your system
-actually needs?**
+Reverse proxies, load balancers and API gateways are usually compared by feature lists. The
+comparison that explains the behaviour above is different: **what each box can read, and whether
+it decides once per connection or once per request.**
 
 ## What they have in common
 
-All three are **intermediaries**: programs that sit between a client and the server that really
-answers the request, receive the request, and send it on. HTTP's own specification has a section
-on them ([RFC 9110, section 3.7](https://www.rfc-editor.org/rfc/rfc9110#section-3.7)), and that is
-the first place the confusion starts. The specification names three kinds: a **proxy**, a
-**gateway** and a **tunnel**. What the specification calls a gateway is what most engineers call a
-reverse proxy. So the word "gateway" meant "reverse proxy" decades before anyone sold a product
-called an API gateway.
+All three are **intermediaries** that work for the server side: the client connects to them, they
+open their own connection to a server behind them (the **backend**, **upstream** or **origin**),
+and the client cannot tell how many servers are behind. HTTP's own specification calls this kind of
+intermediary a **gateway**
+([RFC 9110, section 3.7](https://www.rfc-editor.org/rfc/rfc9110#section-3.7)); most engineers call
+it a reverse proxy. So "gateway" meant "reverse proxy" long before anyone sold an API gateway, which
+is half of the naming confusion.
 
-The intermediary we care about here works for the server, not the client. It helps to see the
-difference:
+The other half is that these are **roles**, not kinds of machine. nginx, HAProxy and Envoy can each
+play all three; Kong is an API gateway built on nginx; AWS's Application Load Balancer is called a
+load balancer but routes by path and can check logins. What separates the roles is one line:
 
-- A **forward proxy** acts for the client. Your company's office proxy is one: your laptop is
-  configured to send requests through it, and it reaches out to any website on your behalf. The
-  websites see the proxy, not you.
-- A **reverse proxy** acts for the server. The client does not know it exists. It types
-  `api.example.in`, DNS returns the address of the reverse proxy, and the proxy decides which
-  real server behind it should answer. The client sees one server; there might be fifty.
+- A **layer 4** (L4) box sees TCP or UDP: addresses, ports, bytes. It never decrypts TLS, so it
+  cannot read a path, a header or an API key, and the unit it can balance is a **connection**.
+- A **layer 7** (L7) box terminates the client's connection, decrypts it and parses HTTP. It can
+  read and change everything, and the unit it can balance is a **request**.
 
-Every box on this page is a reverse proxy in that broad sense: it owns the public address, it
-receives the client's connection, and it opens its own connection to a server behind it. That
-server is called the **backend**, the **upstream** or the **origin**; the three words mean the
-same thing here. If you read the page on
-[what happens when you type a URL](/foundations/how-the-web-works/), this is the box that the
-request hits first after DNS.
-
-Because they all stand in the same place, they all touch the same problems:
-
-- They are on the path of every request, so they are a natural place for work that every request
-  needs: encryption, logging, protection from abuse.
-- They hide the backends, so the backends can change, move or fail without clients noticing.
-- They add a hop. Each hop is another network round trip (inside one data centre, usually well
-  under a millisecond), another connection to manage, another timeout, and another thing that can
-  fail for every user at once.
-
-The last word we need is **layer**, which describes how much of a request a box reads. A
-**layer 4** (L4) box works with TCP or UDP connections: addresses, ports and bytes. A **layer 7**
-(L7) box understands the application protocol, almost always HTTP: methods, paths, headers,
-cookies, bodies. The [TCP vs UDP](/networking/tcp-vs-udp/) page covers layer 4; most of this page
-lives at layer 7. As we will see, the line between layer 4 and layer 7 is the real dividing line
-between these boxes, much more than the product names.
-
-So the names get mixed up because the boxes stand in the same spot, share most of their machinery,
-and are often the very same program configured three ways. What differs is the job.
+Every box adds a hop: another connection to manage, another timeout, and another component that
+fails for every request at once.
 
 ## Each one on its own
 
-Each of the three sections below has the same shape: its one job, what it can see, what it can
-change, a small diagram in the same layout, typical tools, and when to reach for it. The deep
-mechanics of each live on its own page; here we only need enough to tell them apart.
-
 ### Reverse proxy
 
-**Its one job:** stand in front of an application and handle the parts of HTTP that the
-application should not have to.
+**Its job:** stand in front of an application and handle the parts of HTTP the application should
+not have to. It is layer 7: it sees the whole request and response.
 
-**What it can see:** the whole HTTP request and response. A reverse proxy usually ends the TLS
-connection itself (**TLS termination**: it holds the certificate and decrypts the traffic), so it
-can read the method, path, headers, cookies and body, and it can read the server's answer on the
-way back. The [TLS page](/networking/tls/#where-tls-ends-inside-your-system) shows the ways TLS
-can end at or behind this box.
-
-**What it can change:** almost anything. Common jobs:
-
-- **End TLS** and talk plain HTTP, or a fresh TLS connection, to the app.
-- **Buffer slow clients.** A phone on a weak 4G link might take 10 seconds to upload a request.
-  The proxy collects the whole request first, then hands it to the app in a few milliseconds, so
-  the app's worker is busy for milliseconds instead of seconds. The same buffering protects the
-  app from attacks such as **slowloris**, where an attacker opens many connections and sends
-  bytes very slowly to tie up every worker.
-- **Cache** answers that are the same for everyone, and **compress** responses.
-- **Serve static files** (images, JavaScript, CSS) directly from disk without bothering the app.
-- **Rewrite** paths and headers: add `X-Forwarded-For` so the app knows the real client address,
-  strip internal headers from responses, redirect `http://` to `https://`.
+- **TLS termination.** It holds the certificate and decrypts; the [TLS page](/networking/tls/#where-tls-ends-inside-your-system)
+  covers re-encryption and passthrough.
+- **Buffering slow clients.** Say Gunicorn runs 4 workers, each request needs 20 ms of real work,
+  and 100 users on poor mobile links each take 2 s to upload a request. Without a proxy, each
+  worker waits 2 s for bytes before 20 ms of work: 2 requests a second. With nginx in front holding
+  the slow uploads (it is built for thousands of idle connections) and handing each complete request
+  over in one go, the same 4 workers serve about 200 a second. The same mechanism defends against
+  **slowloris**, an attack that ties up workers by sending bytes very slowly.
+- **Caching, compression, static files,** and **header rewriting**: `X-Forwarded-For`, redirects to
+  HTTPS, stripping internal headers from responses.
 
 <Figure caption="A reverse proxy in front of one app. It reads the whole request, which is what lets it end TLS, buffer, cache and rewrite headers. With a single upstream, nothing is being balanced.">
   <Role kind="proxy" />
 </Figure>
 
-Some numbers make the buffering point concrete. Say the app runs Gunicorn with 4 worker
-processes, each handling one request at a time, and each request needs 20 ms of real work. On
-office Wi-Fi a request arrives in a few milliseconds, so 4 workers serve about 200 requests a
-second. Now 100 users on slow mobile links each take 2 seconds to send their request. Without a
-proxy, each worker sits waiting for bytes for 2 seconds before its 20 ms of work, so the 4 workers
-serve 2 requests a second, and the other 96 users queue up behind them. With nginx in front,
-nginx holds the 100 slow uploads open cheaply (it is built to keep thousands of idle connections),
-and hands each finished request to a worker in one go. The workers are back to about 200 requests
-a second. Same app, same machine; the only change is who waits for the slow network.
-
-Notice there is only one app behind it. A reverse proxy is useful even then, which is why it is
-the first of the three most systems get. The classic case is a Python or Ruby app server such as
-Gunicorn, which is good at running your code and poor at holding thousands of slow connections
-open. Put nginx in front and the slow-connection problem goes away.
-
-**Typical tools:** nginx, Caddy, HAProxy, Envoy, Traefik, Apache httpd. Cloudflare, Fastly and
-other CDNs are reverse proxies run as a service, placed in many cities.
-
-**Reach for it when** you have one app and want HTTPS, compression, static files and protection
-from slow clients without writing them yourself. In practice I would put one in front of any app
-server that faces the internet, from the first day. It is the cheapest of the three to run, and
-the one you are least likely to regret.
+**Typical tools:** nginx, Caddy, HAProxy, Envoy, Traefik; CDNs are reverse proxies run as a
+service. **Reach for it** in front of any app server that faces the internet, from day one; it is
+the cheapest of the three to run.
 
 ### Load balancer
 
-**Its one job:** spread incoming work over a **pool** of identical copies of a service, and stop
-sending work to copies that are not healthy.
-
-**What it can see:** that depends on its layer, and this is the most important thing on the page
-to get right.
-
-- A **layer 4 load balancer** sees connections. It reads the IP addresses and TCP or UDP ports,
-  picks a backend, and forwards the packets of that connection there. It never decrypts TLS, so it
-  cannot read the path, the cookies or the API key. It does not know HTTP exists.
-- A **layer 7 load balancer** sees requests. It ends TLS, reads each HTTP request, and can pick a
-  different backend for every request, even on the same connection. A layer 7 load balancer is a
-  reverse proxy with a pool behind it.
+**Its job:** spread work over a **pool** of identical copies, and stop sending work to copies that
+are unhealthy. Whether it can do that per request depends entirely on its layer.
 
 <Figure caption="What each box can read in one HTTPS request. A layer 4 balancer reads addresses and ports and forwards the rest as bytes it cannot decrypt. Anything that ends TLS can read and change every header and the body.">
   <WhatItSees />
 </Figure>
 
-Look at the two brackets on the right. The short one is everything a layer 4 balancer knows. The
-long one is what a reverse proxy, layer 7 balancer or gateway knows. Everything else in this page
-follows from that difference: a box can only make decisions about things it can read.
+A layer 4 balancer picks a backend when a connection opens and sends every packet of that
+connection there. That works when connections are short and numerous (HTTP/1.1 browsers open many).
+It breaks when they are long-lived and **multiplexed**: an HTTP/2 or gRPC client opens one
+connection and sends thousands of requests over it for hours. The whole client then lands on one
+backend, and the balancer cannot move individual requests, because it cannot see them. This is
+why gRPC behind a plain Kubernetes `Service` (an L4 mechanism) is famously uneven
+([Kubernetes blog, 2018](https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/)).
 
-**What it can change:** where each connection or request goes, and when a backend counts as dead.
+A layer 7 balancer is a reverse proxy with a pool behind it. It terminates the client's
+connections, keeps its own pool of connections to every backend, and picks a backend for each
+request. That costs TLS and parsing on every request, and buys the right unit of balancing.
 
-- **Choosing a backend** with an algorithm: **round robin** (each backend in turn, nginx's
-  default), **least connections** (the backend with the fewest open), or a **hash** of the client
-  address or a key, so the same client keeps landing on the same backend.
-- **Health checks.** An **active** check calls each backend every few seconds (for example
-  `GET /healthz`) and removes the ones that fail. A **passive** check watches real traffic: in
-  open-source nginx, one failed attempt marks a backend down for 10 seconds by default (the
-  `max_fails=1` and `fail_timeout=10s` defaults in the
-  [upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html), as of October
-  2026).
-- **Draining**: during a deploy, stop sending new work to a backend while its current requests
-  finish.
+**The algorithm matters once requests are the unit:**
+
+- **Round robin**: each backend in turn. nginx's default. Fair only if every backend is equally fast.
+- **Least connections / least outstanding requests**: the backend with the fewest in flight. A slow
+  backend accumulates in-flight requests, so it automatically gets fewer new ones.
+- **Power of two choices**: pick two backends at random, send to the less loaded one. Nearly as
+  good as checking every backend, and far cheaper at large pool sizes; Envoy's least-request policy
+  uses it ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
+- **Hashing** a client address or key, when the same client must reach the same backend.
+
+Here is all of it at once, on the same traffic: four long-lived connections at 60 requests a second
+each, six backends that can each serve 100 a second.
+
+<BalancerSim />
+
+Three effects to take away. Per-connection balancing leaves backends idle and overloads others as
+soon as connections outnumber or unevenly share the backends. Round robin is blind to a slow
+backend and builds a queue there that dominates the tail latency. Least outstanding requests reacts
+to slowness without any health check at all, because a slow server's in-flight count is the signal.
+
+One trap in the other direction: a freshly started backend has nothing in flight, so least
+outstanding requests (and least connections) send it a burst of traffic while its caches are cold,
+its connection pools are empty and, on the JVM, its code is not yet compiled. The fix is **slow
+start**: ramp a new backend's share up over 30 to 60 seconds. Envoy has a slow start mode for its
+round robin and least-request balancers; check that whatever you run has one before you autoscale.
+
+**Health checks** remove dead backends. **Active** checks call each backend every few seconds
+(`GET /healthz`); **passive** checks watch real traffic: in open-source nginx, one failed attempt
+takes a backend out for 10 s by default (`max_fails=1`, `fail_timeout=10s` in the
+[upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html), as of October
+2026). **Draining** stops new work to a backend during a deploy while in-flight requests finish.
 
 <Figure caption="A load balancer in front of three copies of the same app. Its decisions are which copy gets each connection or request, and which copies to skip. Here the middle one failed its health check and gets nothing.">
   <Role kind="lb" />
 </Figure>
 
-A layer 4 balancer is much cheaper per request, because it does no TLS and parses nothing. Google's
+Layer 4 still earns its place. It is far cheaper per byte: Google's
 [Maglev](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/)
-paper (2016) describes a software layer 4 balancer where one ordinary Linux machine fills a
-10 Gbps link with small packets; Cloudflare's
-[Unimog](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/) does similar work in
-every Cloudflare data centre using XDP, a fast path in the Linux kernel. The price is that a
-layer 4 balancer is blind to everything inside the connection: it cannot route `/images` to one
-pool and `/api` to another.
+fills a 10 Gbps link with small packets on one ordinary Linux machine, and Cloudflare's
+[Unimog](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/) spreads connections
+across every server in each data centre with XDP in the kernel. **Reach for L4** for non-HTTP
+traffic (databases, UDP game protocols, MQTT), for fixed IP addresses partners can allow-list, for
+TLS passthrough, and in front of your L7 tier to scale it. **Reach for L7** whenever connections
+are long-lived, routing depends on the request, or backends differ in speed.
 
-**Typical tools:** at layer 4, AWS Network Load Balancer, Google Cloud's network load balancers,
-HAProxy in TCP mode, Linux IPVS, Maglev-style balancers. At layer 7, AWS Application Load
-Balancer, Google Cloud's application load balancers, nginx, HAProxy, Envoy. The
-[DNS page](/networking/dns/) covers a third, coarser kind: answering DNS queries with different
-addresses to spread users across regions.
+**Who balances the load balancer?** One L4 machine is a single point of failure, so large sites run
+many and spread traffic over them below layer 4. The routers in front announce the same address
+from every balancer and spread packets over them with **ECMP** (equal-cost multi-path routing),
+which hashes each packet's addresses and ports so a connection's packets keep taking the same path.
+When a balancer is added or removed, that hash changes for some connections; Maglev handles it with
+consistent hashing (most connections still map to the same backend) plus a table of established
+connections. Across regions, the same trick runs one level up: **anycast** announces one address from
+many data centres and lets internet routing pick the nearest, while DNS-based balancing (the
+[DNS page](/networking/dns/)) hands out different addresses per region. It is load balancing all the
+way down; only the layer, and what each layer can see, changes.
 
-**Reach for it when** you have more than one copy of a service, which you will want as soon as one
-machine is not enough, or as soon as a single machine failing should not take you down. Reach for
-layer 4 when the traffic is not HTTP (a database, a game protocol over UDP, MQTT), when you need
-fixed IP addresses that partners can put in a firewall rule, or when you want TLS to pass through
-untouched to the backend.
+**Typical tools:** L4: AWS Network Load Balancer, Google Cloud network load balancers, HAProxy in
+TCP mode, Linux IPVS. L7: AWS Application Load Balancer, nginx, HAProxy, Envoy.
 
 ### API gateway
 
-**Its one job:** be the single front door for many services that outside clients call as an API,
-and handle the work that every API call needs before any service sees it.
+**Its job:** be the single front door for many services that outside clients call as an API, and
+decide about the **caller** before any service sees the call. Everything a reverse proxy sees, plus
+who is calling and on which plan.
 
-**What it can see:** everything a reverse proxy sees, plus who the caller is. That second part is
-the difference. A gateway reads the API key, the OAuth access token or the client certificate,
-looks up which customer and plan it belongs to, and makes decisions about that caller.
+- **Authentication**: reject missing, unknown or expired keys and tokens (401) at the edge, and pass
+  the verified identity inward, ideally as a signed token rather than a plain header.
+- **Per-caller rate limits and quotas**: 100 req/s on the free plan, 2,000 on the paid one, a
+  million a month. The [rate limiting page](/resilience/rate-limiting/) covers the counters.
+- **Routing** by path, version or header to different services; **transformation** between
+  protocols (JSON over HTTP in front of gRPC); **aggregation** of several service calls into one.
+- **The API product**: developer portal, self-service keys, usage analytics and billing.
 
-**What it can change:** typical gateway features, most of which are about callers rather than
-servers:
-
-- **Authentication**: reject calls with no key, an unknown key or an expired token (401), before
-  they reach a service. Many gateways then pass the verified identity to the service in a header
-  such as `X-User` or a signed token.
-- **Rate limits and quotas per caller**: 100 requests a second for the free plan, 2,000 for the
-  paid one, a million a month in total. The [rate limiting page](/resilience/rate-limiting/)
-  covers how these counters work and why gateways are a natural place for them.
-- **Routing by path, version or header** to different services: `/orders/*` to the orders
-  service, `/v2/users/*` to the new users service.
-- **Request and response transformation**: rename fields, translate between protocols (for
-  example JSON over HTTP in front of gRPC services), add or strip headers.
-- **Aggregation**: one call from a mobile app fans out to three services and returns one combined
-  answer. Done carefully, this is the **backends for frontends** pattern
-  ([Sam Newman](https://samnewman.io/patterns/architectural/bff/)), where each kind of client gets
-  its own small gateway.
-- **The API product around it**: developer portals, key issuing, usage analytics and billing.
+Why put this in one place? With twelve services, each validating keys and counting calls its own
+way, revoking a leaked key means twelve services must notice, and changing a plan limit means
+twelve teams make the change. With a gateway, both are one change. Aggregation has a number too: a
+phone on a 150 ms round trip that needs three services pays at least 450 ms calling them in
+sequence; a gateway next to the services makes the three calls in about a millisecond each and the
+phone pays one round trip. One small gateway per kind of client is the **backends for frontends**
+pattern ([Sam Newman](https://samnewman.io/patterns/architectural/bff/)).
 
 <Figure caption="An API gateway in front of three different services. It turns callers away before any service sees them (401 for no valid key, 429 for too many calls) and routes the rest by path. The boxes behind it are different services, not copies of one.">
   <Role kind="gateway" />
 </Figure>
 
-Why put this work in one place? Picture twelve services, each written by a different team. Without
-a gateway, each one validates API keys, counts calls per customer and logs usage in its own way.
-When a partner's key leaks and must be revoked, twelve services have to notice. When the free plan
-changes from 100 to 50 calls a second, twelve teams make the change, and some forget. With a
-gateway, each of those is one change in one place, and the services keep only the logic that is
-really theirs.
-
-Aggregation is worth a number too. A mobile app on a 150 ms round trip that needs data from three
-services pays at least 450 ms if it calls them one after another. In parallel it pays one round trip, but
-sends three requests that can each fail separately on a weak link. A gateway in the same data centre as the services
-can make the three calls in about a millisecond each and return one answer, so the phone pays one
-round trip. That is the honest reason backends for frontends exist.
-
-Compare the three figures. The proxy had one app behind it, the load balancer had three copies of
-one app, and the gateway has three different services. A gateway still balances load: behind
-"orders" there are usually several copies, and the gateway picks one. Balancing is one of its
-jobs, not its purpose.
-
-**Typical tools:** Kong (built on nginx and OpenResty), Apache APISIX, Tyk, Envoy-based gateways
-such as Envoy Gateway and Emissary, Spring Cloud Gateway, Netflix's
-[Zuul](https://github.com/Netflix/zuul), and managed services: Amazon API Gateway, Azure API
-Management, Google Apigee and Cloud API Gateway.
-
-**Reach for it when** you have several services that outside callers reach as one API, especially
-callers you do not control: partners, third-party developers, mobile apps you cannot update
-quickly. Without a gateway, every service has to repeat the same key checks, the same rate limits,
-and the same logging, and they drift apart. With one service and your own web frontend as the only
-caller, a gateway mostly adds a hop.
+**Typical tools:** Kong, Apache APISIX, Tyk, Envoy Gateway, Spring Cloud Gateway, and managed
+services: Amazon API Gateway, Azure API Management, Google Apigee. **Reach for it** when callers you
+do not control (partners, third-party developers, mobile apps you cannot update quickly) reach
+several services as one API. With one service and your own frontend as the only caller, a gateway
+mostly adds a hop.
 
 ## How they overlap
-
-You have now seen all three on their own. Here is how they fit together. The key idea is that
-these are **roles**, not separate kinds of machine. One program can play one role, two, or all
-three, depending on how you configure it.
 
 <Figure caption="An API gateway is a reverse proxy with API jobs added. Load balancing is a job both a reverse proxy and a plain layer 4 balancer do, so it straddles the line between them. The only box that is not a reverse proxy at all is the layer 4 balancer, which never reads HTTP.">
   <Layers />
 </Figure>
 
-Read the figure from the outside in:
+Read it from the outside in. Anything that terminates HTTP is a reverse proxy. A reverse proxy with
+a pool is a layer 7 load balancer. A reverse proxy that also knows the caller is an API gateway. The
+layer 4 balancer is the only different kind of thing, and it shares exactly one job with the rest.
 
-- The big box is the **reverse proxy**: anything that terminates the client's HTTP connection and
-  makes its own connection to a backend. Ending TLS, buffering, caching and rewriting live here.
-- Inside it is the **API gateway**: a reverse proxy that also knows who is calling. Everything a
-  reverse proxy can do, a gateway can do; the reverse is not true without plugins.
-- The band across the bottom edge is **load balancing**. A reverse proxy with a pool behind it
-  is a layer 7 load balancer. A layer 4 balancer does the same job, picking a backend and skipping
-  the unhealthy ones, without ever reading HTTP.
-- The dashed box at the bottom is the **layer 4 load balancer**: the only one of the three that is
-  not a reverse proxy in the HTTP sense, because it never terminates HTTP.
-
-This is why the arguments about names never end. nginx is a reverse proxy, a layer 7 load balancer
-when you give it an `upstream` block, and a modest API gateway with a few more directives, as we
-will see in the code below. Kong is an API gateway that is literally nginx inside. AWS Application
-Load Balancer is called a load balancer, but it terminates TLS, routes by path and host, and can
-check logins through OpenID Connect, which is most of the way to a gateway. Envoy plays every role
-on this page depending on its configuration.
-
-The same habit helps when you read any product's documentation. Ignore the name on the box and
-look for three answers. Does it terminate HTTP, or only forward TCP and UDP? Does it know who the
-caller is, or only what the request is? Is it built for one app, for many copies of one app, or
-for many different services? A "load balancer" that terminates HTTP, routes by path and checks
-logins is doing gateway work. A "gateway" that only matches paths and spreads requests over pods
-is a reverse proxy and load balancer with a newer name. Neither is wrong; you only need to know
-which jobs you are getting.
-
-So when someone says "put it behind the gateway", the useful question back is not "which product?"
-but "which jobs?". Ending TLS, spreading load, and checking callers are three different jobs. Write
-down which ones you need and where each one lives, and the names stop mattering.
+When you evaluate a product, ignore its name and ask three questions. Does it terminate HTTP, or
+only forward bytes? Does it know who the caller is, or only what the request is? Does it decide per
+connection or per request? A "load balancer" that routes by path and checks logins is doing gateway
+work; a Kubernetes "Gateway" (the [Gateway API](https://gateway-api.sigs.k8s.io/)'s `Gateway` and
+`HTTPRoute`) mostly describes routing and balancing, which is the reverse-proxy role.
 
 ## Side by side
 
 | | Reverse proxy | Load balancer | API gateway |
 |---|---|---|---|
-| Main job | Handle HTTP chores for an app | Spread work over identical copies | One front door for many APIs and their callers |
-| Network layer | 7 (HTTP) | 4 (TCP/UDP) or 7 (HTTP) | 7 (HTTP, sometimes gRPC or WebSocket) |
-| Knows about the request | Everything in it | Addresses and ports at L4; everything at L7 | Everything, plus who the caller is and their plan |
-| Typical features | TLS, buffering, caching, compression, static files, rewrites | Algorithms, health checks, draining, sticky sessions | Auth, per-caller limits and quotas, routing, transformation, developer portal |
-| What sits behind it | One app, or a few | Many copies of one service | Many different services |
-| Typical tools | nginx, Caddy, HAProxy, Envoy, CDNs | AWS NLB/ALB, Maglev, HAProxy, nginx, Envoy | Kong, APISIX, Tyk, Envoy Gateway, Amazon API Gateway, Apigee |
-| Cost to run | Low; one small process | L4 very low per request; L7 similar to a proxy | Highest: per-request work, shared state for limits, often priced per million calls |
-| What goes wrong | Misconfigured headers, buffering hides streaming | Uneven load, slow health detection, sticky sessions | Becomes a bottleneck or a home for business logic |
-
-If you keep one line from the table, keep the third: what each box *knows*. A reverse proxy knows
-the request, a load balancer knows the pool, and a gateway knows the caller. Most products blur
-the other rows, but the question "what does this box need to know to do its job?" sorts any design.
+| Main job | HTTP chores for an app | Spread work over identical copies | One front door for many APIs and their callers |
+| Layer | 7 | 4 or 7 | 7 |
+| Unit it decides on | Request | Connection (L4) or request (L7) | Request, plus the caller |
+| Knows | The whole request | Addresses and ports (L4); the whole request (L7) | The request and who sent it |
+| Typical features | TLS, buffering, caching, rewrites | Algorithms, health checks, draining | Auth, per-caller limits and quotas, routing, transformation, portal |
+| Behind it | One app or a few | Copies of one service | Different services |
+| Cost per request | Low | Very low (L4); like a proxy (L7) | Highest: identity lookups, shared counters, often billed per call |
+| Typical failure | Buffering breaks streaming; bad forwarded headers | Uneven load, slow detection of slow backends | Bottleneck, or a home for business logic |
 
 ## How to choose
-
-Start from your situation, not from the product list. The flow below asks three questions in the
-order most systems meet them. Each "yes" adds a role; each "no" means you do not need that role
-yet.
 
 <Figure caption="Each yes adds one role, usually to a box you already have. Most systems stop after the first or second question, and many small ones never need a separate gateway at all.">
   <Choose />
 </Figure>
 
-In words:
+1. **One app on one server**: a reverse proxy (nginx, Caddy) for TLS and slow clients, or nothing if
+   your platform already runs one.
+2. **More than one copy**: load balancing, usually as configuration on the proxy you have or your
+   cloud's managed L7 balancer. Use least outstanding requests if backends can differ in speed.
+3. **Many services or outside callers**: an API gateway, behind the balancer, when you need
+   per-caller work. Path routing alone does not need a gateway product.
+4. **Non-HTTP traffic, fixed IPs, or very high connection rates**: an L4 balancer in front of
+   everything, which is also how the L7 tier itself scales.
 
-1. **One app on one server.** You may not need any of these yet. If the app faces the internet,
-   a single reverse proxy (nginx or Caddy) in front of it is worth having for TLS and slow
-   clients. On a platform such as Heroku, Render or Netlify, the platform already runs one for
-   you.
-2. **More than one copy of the app.** Add load balancing. If you already have a reverse proxy,
-   this is a configuration change, not a new box: give it a pool and a health check. On a cloud
-   provider, its managed layer 7 balancer does the same job and spreads itself across zones.
-3. **Many services, or callers you do not control.** Add an API gateway, usually behind the load
-   balancer, or use a load balancer whose rules are rich enough for your needs. The trigger is
-   caller-facing work: keys, per-customer limits, versioning, a developer portal. Ten internal
-   services called only by your own frontend do not need a gateway product; a reverse proxy with
-   path rules routes them fine.
-4. **Non-HTTP traffic, fixed IP addresses, or very high connection rates.** Put a layer 4
-   balancer in front of everything else. It is also how you scale the layer 7 tier itself: an L4
-   balancer spreads connections over several copies of your proxies or gateways.
-
-:::tip[Add roles to boxes you already have]
-Every extra box is another hop, another timeout and another bill. Before adding a box, check
-whether one you already run can play the role. The design in the opening story needed one cloud
-load balancer with path rules and one place for rate limits, not three products with three sets of
-timeouts.
-:::
-
-One more filter: **who will run it?** A self-hosted gateway such as Kong or APISIX needs a team
-to upgrade it, scale it and debug it at 3 AM. A managed one costs money per call and comes with
-limits you must design around, like Amazon API Gateway's default 29-second integration timeout and
-10 MB payload limit for REST APIs ([AWS quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html),
-as of October 2026; since June 2024 the timeout can be raised for Regional and private REST
-APIs). That 29 seconds is the exact limit the report export in our story ran into.
-
-### Back to the restaurant team
-
-Here is how the team from the opening story could run the same flow on their own system. They
-have four copies of one ordering app, a website and an Android app of their own, and two delivery
-partners who call the API with keys.
-
-- More than one copy? Yes, four. So they need load balancing. The cloud provider's layer 7 load
-  balancer covers that, ends TLS with a managed certificate, and spreads itself across zones.
-- Many services, or outside callers? Outside callers, yes: two partners, each with a key. But
-  there is only one service, and two partners is not a developer platform. The key check and a
-  per-partner limit fit in one place: either nginx in front of the app with a `map` and a
-  `limit_req`, as in the code below, or a small middleware in the app itself. When there are
-  twenty partners who want to create their own keys and see their own usage, a gateway product
-  earns its place.
-- Non-HTTP traffic, fixed IPs, huge volume? Not yet.
-
-That is one managed load balancer and one place for the partner rules, instead of three products.
-The 29-second gateway limit disappears with the managed gateway. The report export still deserves
-a better design, because 40 seconds is too long to hold any HTTP request open through any number
-of boxes: start the export, return `202 Accepted` with a job ID, and let the client poll for the
-finished file. And the rate limiter that throttled everyone now keys on the partner's key, which
-the proxy can see, instead of an address that the load balancer replaced.
-
-Notice what decided the design. Not the product names, but three questions about the system: how
-many copies, who calls it, and what kind of traffic it carries.
+Managed gateways come with limits you design around. Amazon API Gateway's REST APIs, for example,
+give up on a backend after 29 seconds by default and cap payloads at 10 MB
+([AWS quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html), as of
+October 2026; since June 2024 the timeout can be raised for Regional and private REST APIs). A
+40-second report export behind it fails every time, which is the right outcome: long work belongs in
+a job that returns `202 Accepted` and a status URL, not in an open HTTP request through several hops.
 
 ## See it in action
 
-The demo below is one process that plays each role in turn, switched on one after another, so you
-can watch the roles stack. It starts three tiny backends (`orders-1`, `orders-2`, `users-1`) that
-reply with their own name and the headers they received, then runs a front door three times:
-
-- as a **reverse proxy**: forward to one upstream, and set `X-Forwarded-For`;
-- as a **load balancer**: round robin over two copies, and mark a failed one down for 10 seconds;
-- as an **API gateway**: check an API key, limit each key to 3 calls in 10 seconds, and route by
-  path to different services.
-
-The roles are cumulative, the way real products are: the gateway branch runs first, then the
-balancing loop that all roles share.
+One process that plays each role in turn, so you can watch the roles stack: as a **reverse proxy**
+it forwards to one upstream and sets `X-Forwarded-For`; as a **load balancer** it round-robins over
+two copies and marks a failed one down for 10 s; as an **API gateway** it checks an API key, limits
+each key to 3 calls in 10 s, and routes by path. The gateway branch runs first, then the balancing
+loop all roles share.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -545,324 +385,220 @@ server {
 
 Full code, the nginx test script and run instructions: [`examples/proxy-lb-gateway/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/proxy-lb-gateway).
 
-Thirty lines of nginx played all three roles. That is the practical lesson of this section: before
-you buy a gateway, check whether the reverse proxy you already run can do the two or three gateway
-jobs you need. Once you need a developer portal, keys that customers create themselves, or usage
-billing, a real gateway earns its place.
-
 ## How real stacks combine them
-
-In a real system with real traffic, the roles are usually spread over several tiers, each doing
-the job it is best at. Here is a common shape, top to bottom:
 
 <Figure caption="A common production stack. The edge ends TLS and absorbs attacks, the layer 4 balancer gives fixed addresses and spreads connections over the gateways, and the gateways check callers and balance over each service's copies. Every arrow is a separate connection.">
   <RealStack />
 </Figure>
 
-- **CDN or edge network**: a reverse proxy spread over hundreds of cities. It ends TLS close to the
-  user, caches what it can, and absorbs floods of bad traffic before they reach you.
-- **Layer 4 balancer**: one or a few fixed IP addresses, spreading TCP connections over several
-  copies of the next tier. It is how the layer 7 tier itself scales and survives losing a machine.
-- **API gateway or layer 7 balancer**: several identical copies, each checking keys and limits and
-  routing by path.
-- **Services**: each with several copies. The gateway, or a **service mesh** (a small proxy such
-  as Envoy running next to every service), balances requests across them.
+Each tier does what it is best at: the edge (a CDN, a reverse proxy in many cities) ends TLS near
+users and absorbs attacks; the L4 balancer gives stable addresses and spreads connections over
+several gateway copies; the gateways decide about callers and balance requests over each service's
+copies. **North-south** traffic (from outside) takes this path; **east-west** traffic (service to
+service) usually skips the gateway and goes through internal L7 balancing or a **service mesh**, a
+small proxy such as Envoy next to every service.
 
-Two terms help here. **North-south** traffic comes from outside into your system; it goes through
-the edge, the balancer and the gateway. **East-west** traffic is one of your services calling
-another inside the system; it usually skips the gateway and goes through internal load balancing
-or a mesh instead.
-
-Here is one request walking through that stack. Watch how each box does only its own part, and
-how the layer 4 balancer never reads a single header:
-
-<StepThrough
-  title="One HTTPS request through a real stack"
-  actors={[
-    { id: 'client', label: 'Client', kind: 'client' },
-    { id: 'l4', label: 'L4 balancer', kind: 'server' },
-    { id: 'gw', label: 'Gateway #2', kind: 'server' },
-    { id: 'orders', label: 'orders #3', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'client', to: 'l4', label: 'TCP to :443', text: 'The client opens a TCP connection to the address DNS gave it, which belongs to the layer 4 balancer. The balancer hashes the addresses and ports, picks gateway copy #2, and remembers that choice for the life of the connection.' },
-    { from: 'l4', to: 'gw', label: 'same bytes', text: 'Every packet of this connection now goes to gateway #2. The balancer forwards bytes it cannot read; the TLS handshake passes through it untouched.' },
-    { from: 'client', to: 'gw', label: 'GET /orders/42', text: 'TLS ends at the gateway, which holds the certificate. Only now is the HTTP request readable: the path, the headers, and the API key.' },
-    { from: 'gw', to: 'gw', label: 'key, limit, route', text: 'The gateway looks up the key (it belongs to a delivery partner on the paid plan), checks that the partner is under its limit, and matches /orders/* to the orders service.', tone: 'ok' },
-    { from: 'gw', to: 'orders', label: 'GET + X-User', text: 'The gateway picks orders copy #3, the one with the fewest requests in flight, and sends the request on its own connection, with the verified caller in a header and the client address in X-Forwarded-For.' },
-    { from: 'orders', to: 'gw', label: '200 JSON', text: 'The orders service answers. It never saw the API key and never checked a rate limit.', dashed: true, tone: 'ok' },
-    { from: 'gw', to: 'client', label: '200 JSON', text: 'The answer goes back over the client\'s TLS connection, through the layer 4 balancer as more unreadable bytes.', dashed: true, tone: 'ok' },
-  ]}
-  summary="Three boxes, three roles: the layer 4 balancer chose a gateway by connection, the gateway decided about the caller, and the gateway's own balancing chose a copy of the service. Each could fail or scale on its own."
-/>
+Published systems follow the same pattern. Netflix runs its edge gateway, Zuul, behind cloud load
+balancers, and moved it from a thread per connection to non-blocking I/O because the front door is
+where open connections pile up when backends slow down or devices retry
+([Netflix TechBlog, 2016](https://netflixtechblog.com/zuul-2-the-netflix-journey-to-asynchronous-non-blocking-systems-45947377fb5c)).
+Cloudflare layers Unimog (L4) under Pingora, its Rust HTTP proxy that replaced nginx in 2022 and
+serves over a trillion requests a day with about a third of the CPU and memory
+([Cloudflare, 2022](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/)).
+In Kubernetes, the community `ingress-nginx` controller was retired in March 2026 and the project
+points to the Gateway API instead
+([Kubernetes blog](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/), as of October 2026).
 
 ### What every extra hop costs
 
-Each tier in that stack earns its place at scale, but each one also adds costs that are hard to see
-on a whiteboard and painful in production. Three of them catch almost every team.
+**Timeouts must shrink as you go inward, and only one hop should retry.** Every hop has a timeout
+for the hop behind it, and the service does not stop working when its caller gives up. If the
+gateway gives up after 1 s on a service that needs 1.2 s, and retries, and the client gives up after
+1.5 s and also retries, one click turns into several executions of the same expensive request, most
+of them for nobody:
 
-**Timeouts must shrink as you go inward.** Every box has its own timeout for waiting on the box
-behind it. If an outer box gives up before an inner one, the inner box keeps working on a request
-nobody is waiting for any more, and the client sees an error from a box it has never heard of. Our
-opening story had exactly this: the managed gateway waited 29 seconds, the report took 40, so every
-export ended in a 504 from the gateway while the app finished the work and threw it away. A
-workable rule: the client waits longest, and each box inward waits a little less than the one
-outside it, so that the box closest to the problem is the one that reports it.
+<TimeoutSim />
 
-**Idle connections must be closed from the outside first.** Proxies and balancers keep connections
-to their backends open and reuse them, because a new TCP and TLS handshake for every request is
-expensive. Each side closes an idle connection after its own idle timeout. If the backend closes
-first, there is a short window where the balancer sends a new request down a connection that the
-backend has already closed, and the client gets a 502. AWS's Application Load Balancer keeps idle
-connections for 60 seconds by default, while Node.js's HTTP server closes them after 5 seconds and
-Gunicorn after 2 (all as of October 2026). AWS's guidance is to set the application's keep-alive
-timeout longer than the load balancer's idle timeout
-([ALB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html)).
-Teams that skip this see a small, steady trickle of 502s that never shows up in the app's own
-logs, because the app never received those requests.
+With two retries at each of two hops, a click can become nine service executions; the sim's
+defaults average about six per click with over 90% of the service's work wasted, and the user still
+sees an error about half the time. Under real overload it is worse than the sim shows, because the
+extra executions make the service slower still, which causes more timeouts: the retry storm that
+Google's SRE book describes as a main driver of cascading failures
+([Google SRE book](https://sre.google/sre-book/addressing-cascading-failures/)). The rules that
+follow: the client waits longest and each hop inward waits a little less; retry at one layer
+(usually the outermost that knows whether the request is safe to repeat), with a budget; and pass a
+deadline inward so the service can stop work nobody will read.
 
-**Each tier must check the health of the next.** The layer 4 balancer checks the gateways, and
-the gateways check the services. If one link in that chain checks the wrong thing, for example a
-gateway health check that returns 200 even when the gateway cannot reach any service, the balancer
-keeps sending traffic into a dead end. A health check should say "I can do my job", not only "my
-process is running". The page on health checks and readiness probes covers how to draw that line.
+**Idle connections must be closed from the outside first.** Proxies keep connections to backends
+open and reuse them. If the backend closes an idle connection before the balancer does, the balancer
+can send a request down a connection the backend has already closed, and the client gets a 502 that
+never appears in the app's logs. AWS's Application Load Balancer keeps idle connections for 60 s by
+default, while Node.js's HTTP server closes them after 5 s and Gunicorn after 2 s (as of October
+2026); AWS's guidance is to set the application's keep-alive timeout longer than the load balancer's
+idle timeout ([ALB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html)).
 
-None of these costs is a reason to avoid the stack. They are the reason to add tiers only when the
-reason is real, and to write down every tier's timeouts in one place when you do.
-
-Real systems published by their owners follow the same pattern, with their own names:
-
-- **Netflix** runs its edge gateway, Zuul, behind cloud load balancers. Moving it from one thread
-  per connection to a non-blocking design (Zuul 2) was driven by exactly the gateway's position:
-  when backends slow down or devices retry, the number of open connections at the front door
-  climbs ([Netflix TechBlog, 2016](https://netflixtechblog.com/zuul-2-the-netflix-journey-to-asynchronous-non-blocking-systems-45947377fb5c)).
-- **Cloudflare** layers the roles inside each data centre: Unimog spreads connections at layer 4
-  over all servers, and its own HTTP proxy, Pingora, does the layer 7 work. Pingora replaced nginx
-  in 2022 and serves over a trillion requests a day with about a third of the CPU and memory of
-  the old setup ([Cloudflare, September 2022](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/)).
-- **Kubernetes** calls its front door "ingress". An ingress controller is a reverse proxy and
-  layer 7 balancer (often nginx or Envoy) that reads routing rules from the cluster. The community
-  `ingress-nginx` controller was retired in March 2026 and the project points users to the newer
-  [Gateway API](https://gateway-api.sigs.k8s.io/), whose resources are called `GatewayClass`,
-  `Gateway` and `HTTPRoute`
-  ([Kubernetes blog](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/), as of
-  October 2026). Despite the name, Gateway API mostly describes routing and load balancing, not
-  API keys and plans; a Kubernetes "Gateway" is the reverse-proxy-and-balancer role.
-
-That last point shows how deep the naming problem goes. Even the Kubernetes project chose the word
-"gateway" for something closer to a reverse proxy, which, as we saw, is what the HTTP specification
-meant by it all along.
+**Health checks must mean "I can do my job".** The L4 balancer checks the gateways; the gateways
+check the services. A gateway health check that returns 200 while the gateway cannot reach any
+service keeps traffic flowing into a dead end.
 
 ## Common confusions
 
-**"They are three different products, so we need one of each."**
-They are three roles. One nginx or Envoy process can play all three; a cloud layer 7 balancer
-covers proxy and balancing, and some of the gateway. What's true: list the jobs, then pick the
-fewest boxes that cover them. Each extra box adds a hop, a timeout, a bill and a failure point.
+**"They are three products, so we need one of each."** They are roles. List the jobs (end TLS,
+spread load, decide about callers), then pick the fewest boxes that cover them. Every extra box is
+a hop, a timeout and a failure point.
 
-**"A load balancer is always a separate box in front of the reverse proxy."**
-Only a layer 4 balancer is a different kind of thing. A layer 7 load balancer is a reverse proxy
-with a pool. What's true: "do we need a load balancer?" usually means "do we need a pool?", and
-that is often a configuration change on the proxy you have.
-
-**"A layer 4 balancer spreads my requests evenly."**
-It spreads *connections*. That is the same thing only when each connection carries roughly the
-same amount of work. HTTP/1.1 clients open many short connections, so it mostly works. HTTP/2 and
-gRPC clients open one connection and send thousands of requests over it for hours. Behind a layer
-4 balancer, that client's entire load lands on whichever backend got the connection. Picture eight
-service copies behind a layer 4 balancer and three busy gRPC clients: at most three copies do all
-the work while five sit idle, and adding more copies changes nothing. What's true: for long-lived,
-multiplexed connections, balance at layer 7 (a proxy or mesh that picks a backend per request), or
-have clients balance across backends themselves.
-
-**"X-Forwarded-For tells you the client's address."**
-Any client can send its own `X-Forwarded-For` with any address in it, and a proxy that appends to
-it passes the lie along. Only the entries added by proxies you control can be trusted. What's
-true: either have your outermost proxy overwrite the header, as the demo does, or read the list
-from the right and take the first address that is not one of your own proxies, as
-[MDN describes](https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Forwarded-For). The
-standard form is the `Forwarded` header ([RFC 7239](https://www.rfc-editor.org/rfc/rfc7239)),
-with the same trust rule. Behind a layer 4 balancer there is no HTTP header to add at all; the
-client address reaches the backend only if the balancer preserves it or uses the
-[PROXY protocol](https://www.haproxy.org/download/3.1/doc/proxy-protocol.txt), a small header
-in front of the connection's first bytes.
+**"X-Forwarded-For is the client's address."** Any client can send its own `X-Forwarded-For`, and a
+proxy that appends to it passes the lie along. Only entries added by proxies you control are
+trustworthy: overwrite the header at your outermost proxy (as the demo does), or read the list from
+the right and take the first address that is not one of your proxies
+([MDN](https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Forwarded-For)). The standard form is
+`Forwarded` ([RFC 7239](https://www.rfc-editor.org/rfc/rfc7239)), with the same trust rule. Behind
+an L4 balancer there is no header to add; the address arrives only if the balancer preserves it or
+uses the [PROXY protocol](https://www.haproxy.org/download/3.1/doc/proxy-protocol.txt).
 
 :::danger[A spoofable header used for security]
-Rate limits, IP allow-lists and fraud checks keyed on a client-supplied `X-Forwarded-For` can be
-bypassed by anyone who sets the header. Rate limits keyed on the socket address behind a proxy
-lump every user together, which is what happened to the app in our opening story. Decide where
-your trust boundary is, and read the address only from there.
+Rate limits, allow-lists and fraud checks keyed on a client-supplied `X-Forwarded-For` can be
+bypassed by anyone who sets the header. Limits keyed on the socket address behind a proxy lump every
+user into one client. Decide where your trust boundary is and read the address only from there.
 :::
 
-**"The gateway checks authentication, so services can trust every request."**
-Services can trust requests that came through the gateway. If a service is also reachable directly,
-from another service, a debugging port, or a misconfigured network rule, anyone who can reach it
-can set `X-User: admin` themselves. What's true: lock services so that only the gateway can reach
-them (network rules, or mutual TLS, covered on the [TLS page](/networking/tls/)), or have the
-gateway pass a signed token that the service verifies, rather than a plain header.
+**"The gateway checks auth, so services can trust every request."** Only requests that came through
+the gateway. If a service is reachable any other way (another service, a debug port, a loose network
+rule), anyone can send `X-User: admin`. Lock services so only the gateway can reach them (network
+policy or [mutual TLS](/networking/tls/)), or pass a signed token the service verifies.
 
-**"The gateway is a good place for business logic."**
-It is tempting: it already sees every request, so why not compute the discount there, or merge
-three responses with custom rules? Because then a shared box, usually owned by a platform team,
-holds logic that belongs to a product team, and every change to that logic is a change to the front
-door of the whole company. ThoughtWorks put
+**"The gateway is a good place for business logic."** It sees every request, so it is tempting. But
+then a shared box owned by a platform team holds logic owned by product teams, and every change is a
+change to the company's front door. ThoughtWorks put
 ["overambitious API gateways"](https://www.thoughtworks.com/radar/platforms/overambitious-api-gateways)
-on Hold on its Technology Radar for this reason: keep gateways to generic work such as
-authentication and rate limits, and keep domain logic in services.
+on Hold for this reason: keep gateways to generic work such as authentication and rate limits.
 
 :::caution[Every feature in the front door runs on every request]
-On 2 July 2019, a new firewall rule with a badly behaved regular expression went out to
-Cloudflare's edge proxies worldwide. Matching it used all the CPU on the machines handling HTTP
-traffic, and Cloudflare's customers saw 502 errors for about 27 minutes
-([Cloudflare's postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/)).
-The rule was small; its position was the problem. Anything you add to a proxy or gateway that every
-request passes through shares fate with every request: roll changes out gradually, and keep the
-work there cheap and bounded.
+On 2 July 2019 a new firewall rule with a backtracking regular expression went out to Cloudflare's
+edge proxies worldwide, used all the CPU on the machines handling HTTP, and caused 502 errors for
+about 27 minutes
+([Cloudflare postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/)).
+Anything in a box every request passes through shares fate with every request: roll it out
+gradually, and keep its work cheap and bounded.
 :::
 
-**"Sticky sessions are a load-balancer feature I should turn on."**
-**Sticky sessions** send the same client to the same backend every time, usually by a cookie or a
-hash of the client address. They are a workaround for servers that keep per-user state in memory.
-They make load uneven, and when that server dies, its users lose their state anyway. What's true:
-store session state somewhere shared (a database or a cache) so that any copy can serve any user,
-and leave stickiness for the cases that truly need it, such as long-lived WebSocket connections.
+**"Sticky sessions are a feature to turn on."** They send a client to the same backend every time,
+which papers over per-user state kept in a server's memory. They make load uneven (the L4 problem,
+by choice) and lose the state when that server dies anyway. Keep session state in a shared store,
+and keep stickiness for cases that need it, such as WebSocket connections.
 
 ## Interview corner
 
-**"What is the difference between a reverse proxy, a load balancer and an API gateway?"**
-A strong answer starts with roles: a reverse proxy handles HTTP on behalf of servers, a load
-balancer spreads work over identical copies, and an API gateway is a reverse proxy that also knows
-who is calling and enforces keys, limits and routing for many services. Then it names the real
-dividing line, layer 4 versus layer 7, and says plainly that one product such as nginx or Envoy
-can play all three. The usual follow-up: *"So when would you use a separate product for each?"*
-Answer with scale and ownership: a layer 4 tier for fixed addresses and to scale the layer 7 tier,
-and a dedicated gateway when there are external developers, plans and quotas, or a separate team
-running the front door.
+**"Reverse proxy vs load balancer vs API gateway?"** Strong answers start with roles and the L4/L7
+line: what each box can read, and per-connection versus per-request decisions. Then: one product can
+play all three. Follow-up: *"When would you run separate products?"* An L4 tier for fixed addresses
+and to scale the L7 tier; a dedicated gateway when there are external developers, plans and quotas,
+or a separate team owning the front door.
 
-**"Layer 4 or layer 7 load balancing: when would you pick each?"**
-Layer 4 for non-HTTP protocols, very high connection rates, fixed IPs, and TLS passthrough when
-the backend must hold the certificate. Layer 7 when routing depends on the request: path, host,
-header, cookie, or per-request balancing over long-lived HTTP/2 connections. A strong answer
-mentions the cost of layer 7 (it ends TLS and parses every request) and the blindness of layer 4.
-The follow-up is often: *"How does the backend learn the client's IP behind each one?"*
-`X-Forwarded-For` or `Forwarded` at layer 7, address preservation or the PROXY protocol at
-layer 4, and in both cases only from a trusted hop.
+**"Your gRPC service behind a Kubernetes Service has some pods at 90% CPU and some idle. Why?"**
+kube-proxy balances connections, and each gRPC client holds one long-lived HTTP/2 connection. Fixes:
+an L7 proxy or mesh that balances per request, client-side balancing over all pod addresses (a
+headless Service), or forcing connections to be recycled periodically. Follow-up: *"Which algorithm
+would you use?"* Least outstanding requests or power of two choices, so slow pods get less.
 
-**"Isn't the API gateway a single point of failure?"**
-Only if there is one copy. Gateways are run as several stateless copies behind a layer 4
-balancer, across zones. The state they need, such as rate-limit counters, lives in a shared store
-like Redis, and the gateway should fail open or closed by a deliberate choice when that store is
-down. The follow-up: *"And a bottleneck?"* It can become one if it holds slow, heavy logic; keep
-it to cheap checks, give it timeouts shorter than the client's, and watch its own latency
-percentiles as closely as any service.
+**"Isn't the gateway a single point of failure and a bottleneck?"** Not if it runs as several
+stateless copies behind an L4 balancer across zones, with shared state (rate-limit counters) in a
+store like Redis and a deliberate fail-open or fail-closed choice when that store is down. It becomes
+a bottleneck when it holds slow logic, so keep it to cheap checks and timeouts shorter than the
+client's.
 
-**"Where does authentication happen in a microservice system with a gateway?"**
-The gateway checks the caller (an API key, or the signature and expiry of an access token) and
-rejects the bad ones early. Services still decide what that caller is allowed to do, because only
-they know the business rules (that is authorization, and it belongs in the service). A strong
-answer also covers how the identity travels inward (a signed token rather than a plain header)
-and how services are protected from being called around the gateway.
+**"Where does authentication happen with a gateway?"** The gateway authenticates (who is this, is
+the token valid) and rejects early. Services still authorize (may this caller do this), because only
+they know the rules. Identity travels inward as a signed token, and services are not reachable
+around the gateway.
 
 ## Check yourself
 
 <details>
-<summary>1. You run one Django app on one virtual machine. You want HTTPS, compressed responses, and static files served fast. Which of the three do you add?</summary>
+<summary>1. You move a gRPC service from 4 to 12 pods behind an L4 balancer to fix latency. Nothing improves. Why, and what do you change?</summary>
 
-A reverse proxy, such as nginx or Caddy, on the same machine. It ends TLS, compresses, serves
-static files from disk, and buffers slow clients so Gunicorn's few workers are not tied up. There
-is nothing to balance yet, and no outside API callers to manage, so neither a separate load
-balancer nor a gateway would earn its hop.
-
-</details>
-
-<details>
-<summary>2. You run a multiplayer game server that speaks its own protocol over UDP, and you now need four copies of it behind one address. What do you put in front?</summary>
-
-A layer 4 load balancer that supports UDP, such as AWS Network Load Balancer or a Maglev-style
-balancer, hashing on the client's address and port so each player's packets keep reaching the same
-server. A reverse proxy or API gateway would not help: they speak HTTP, and this traffic is not
-HTTP. You would also want the balancer to preserve client addresses, since the game servers
-probably need them.
+Each client holds one long-lived connection, and the L4 balancer assigned each connection to one pod
+when it opened. New pods get no existing connections, so they sit idle. Balance per request with an
+L7 proxy or mesh, or balance on the client over all pod addresses.
 
 </details>
 
 <details>
-<summary>3. Six internal services now need to be opened to delivery partners, each partner with its own key and a monthly quota by plan. What do you add, and where?</summary>
+<summary>2. Six identical backends behind round robin; one gets a noisy neighbour and becomes 3× slower. p50 latency is fine but p99 is seconds. Why does round robin cause this, and what fixes it without a health check?</summary>
 
-An API gateway, placed behind your existing load balancer (or with several copies behind a layer
-4 balancer), routing by path to the six services. The gateway issues and checks keys, counts each
-partner's usage against their plan, and rejects with 401 or 429 before services see the call.
-Lock the services so only the gateway can reach them, and keep business rules out of the gateway.
-If you only needed path routing, a reverse proxy would do; it is the per-caller work that makes a
-gateway worth it.
+Round robin keeps sending the slow backend one sixth of the traffic, more than it can serve, so a
+queue builds there and every request that lands on it waits. Least outstanding requests (or power of
+two choices) sends new requests to backends with fewer in flight; the slow one accumulates in-flight
+requests and so receives fewer, which needs no health check.
 
 </details>
 
 <details>
-<summary>4. After moving your app behind a cloud load balancer, your per-IP rate limiter starts blocking almost every user at the same moment. What happened, and what is the fix?</summary>
+<summary>3. The gateway times out a backend after 30 s and retries twice; the mobile app times out after 10 s and retries three times. The backend slows to 12 s. What happens?</summary>
 
-The app now sees every connection coming from the load balancer's addresses, so its limiter counts
-all users as one or a few clients and they share one limit. The fix is to key the limiter on the
-real client address: read it from `X-Forwarded-For` or `Forwarded`, taking the rightmost entry
-that is not one of your own proxies, and trust that header only when the connection came from your
-balancer. Even better, move the per-client limit to the edge or gateway, which sees the client
-directly and knows the caller's identity, not only their address.
+Every app attempt times out at 10 s while the gateway is still waiting, so the app retries and
+starts another gateway request, which may itself retry. Requests multiply at the slow backend
+(up to 4 app attempts, each starting gateway work that can run up to 3 backend calls) and nearly all
+of that work is for callers that already gave up, which slows it further. Make timeouts shrink
+inward (the gateway's under the app's), retry at one layer with a budget, and pass deadlines inward.
+
+</details>
+
+<details>
+<summary>4. After moving behind a cloud load balancer, your per-IP rate limiter blocks almost every user at the same time. Why, and what is the fix?</summary>
+
+Every connection now comes from the balancer's addresses, so all users share a few "clients". Key
+the limiter on the real address from `X-Forwarded-For` or `Forwarded`, taking the rightmost entry
+that is not one of your own proxies and only when the connection came from your balancer; better,
+limit at the edge or gateway, which knows the caller's identity, not only their address.
 
 </details>
 
 ## Recap
 
-- A **reverse proxy** is for handling HTTP on behalf of your servers: TLS, buffering, caching and
-  rewriting.
-- A **load balancer** is for spreading work over identical copies and avoiding the unhealthy ones,
-  either by connection (layer 4) or by request (layer 7).
-- An **API gateway** is for being the single front door to many services, and deciding about the
-  caller: keys, limits, routing, quotas.
-
-How they relate:
-
-- They are roles, not boxes. A gateway is a reverse proxy with API jobs; a layer 7 balancer is a
-  reverse proxy with a pool; only a layer 4 balancer is a different kind of thing.
-- The real dividing line is what each box can read. Decisions can only be made about what is
-  visible.
-- Add roles to boxes you already run before adding boxes. Every hop is another timeout, another
-  bill and another shared fate.
+- A **reverse proxy** handles HTTP for your servers: TLS, buffering, caching, rewriting.
+- A **load balancer** spreads work over copies: per **connection** at L4, per **request** at L7.
+  Long-lived HTTP/2 and gRPC connections need L7.
+- An **API gateway** is a reverse proxy that decides about the **caller**: keys, limits, routes,
+  quotas.
+- Round robin is blind to slow backends; least outstanding requests reacts to them.
+- They are roles: one product can play all three. Add roles to boxes you have before adding boxes.
+- Every hop needs a timeout shorter than the one outside it, and only one hop should retry.
 
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'reverse-proxies', why: 'How a reverse proxy works inside: buffering, TLS termination, caching, and the headers it must get right.' },
-  { slug: 'load-balancing', why: 'The algorithms behind spreading load, how health checks fit in, and why round robin is often not enough.' },
-  { slug: 'api-gateways', why: 'Auth, rate limits, routing and backends for frontends for many services behind one front door.' },
-  { slug: 'rate-limiting', why: 'The counters that gateways and edges use to keep one caller from taking everything.' },
-  { slug: 'tls', why: 'Where TLS can end in this stack, and what mutual TLS adds between the gateway and services.' },
+  { slug: 'reverse-proxies', why: 'Buffering, TLS termination, caching and the headers a proxy must get right.' },
+  { slug: 'load-balancing', why: 'Algorithms in depth: least requests, power of two choices, consistent hashing, health checks.' },
+  { slug: 'api-gateways', why: 'Auth, per-caller limits, routing and backends for frontends.' },
+  { slug: 'timeouts', why: 'Deadlines that shrink inward, and how to pass them between services.' },
+  { slug: 'retries-and-backoff', why: 'Retry budgets and jitter, so one slow service does not become a retry storm.' },
 ]} />
 
 ## Further reading
 
 **Specs & official docs**
 
-- [RFC 9110, HTTP Semantics, section 3.7](https://www.rfc-editor.org/rfc/rfc9110#section-3.7) — proxies, gateways and tunnels, and why "gateway" first meant reverse proxy.
-- [RFC 7239, Forwarded HTTP extension](https://www.rfc-editor.org/rfc/rfc7239) — the standard header for the client address and protocol behind proxies.
-- [MDN: X-Forwarded-For](https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Forwarded-For) — the clearest explanation of which entries to trust.
-- [HAProxy: the PROXY protocol](https://www.haproxy.org/download/3.1/doc/proxy-protocol.txt) — passing the client address through a layer 4 hop.
+- [RFC 9110, section 3.7](https://www.rfc-editor.org/rfc/rfc9110#section-3.7) — proxies, gateways and tunnels, and why "gateway" first meant reverse proxy.
+- [RFC 7239, Forwarded](https://www.rfc-editor.org/rfc/rfc7239) and [MDN: X-Forwarded-For](https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Forwarded-For) — the client address behind proxies, and which entries to trust.
+- [HAProxy: the PROXY protocol](https://www.haproxy.org/download/3.1/doc/proxy-protocol.txt) — the client address through a layer 4 hop.
 - [nginx upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) and [proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) — round robin, passive health checks, buffering.
-- [Envoy: What is Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/what_is_envoy) — one proxy with layer 4 and layer 7 filters, used at the edge and between services.
-- [AWS: Network Load Balancer](https://aws.amazon.com/elasticloadbalancing/network-load-balancer/) and [Application Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html) — the layer 4 and layer 7 managed balancers side by side.
-- [Amazon API Gateway quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html) and [the 2024 timeout change](https://aws.amazon.com/about-aws/whats-new/2024/06/amazon-api-gateway-integration-timeout-limit-29-seconds/) — the 29-second limit and how it can be raised.
-- [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) and [the ingress-nginx retirement notice](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) — the current way to describe the front door of a cluster.
+- [Envoy: load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — round robin, least request with power of two choices, ring hash.
+- [AWS: Network Load Balancer](https://aws.amazon.com/elasticloadbalancing/network-load-balancer/) and [ALB attributes](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html) — L4 and L7 managed balancers, and the idle timeout.
+- [Amazon API Gateway quotas](https://docs.aws.amazon.com/apigateway/latest/developerguide/limits.html) and [the 2024 timeout change](https://aws.amazon.com/about-aws/whats-new/2024/06/amazon-api-gateway-integration-timeout-limit-29-seconds/) — the 29-second limit.
+- [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/) and [the ingress-nginx retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) — the current front door of a cluster.
 - [Kong Gateway docs](https://developer.konghq.com/gateway/) — a gateway built from nginx plus plugins.
 
 **Engineering blogs & papers**
 
-- [Google: Maglev, a fast and reliable software network load balancer](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/) (NSDI 2016) — layer 4 balancing on ordinary Linux machines, with consistent hashing.
-- [Cloudflare: Unimog, Cloudflare's edge load balancer](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/) (2020) — layer 4 balancing with XDP inside every data centre.
-- [Cloudflare: How we built Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/) (2022) — replacing nginx as the layer 7 proxy, and why.
-- [Cloudflare: Details of the July 2, 2019 outage](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/) — what happens when every request runs one bad rule.
-- [Netflix: Zuul 2, the journey to asynchronous, non-blocking systems](https://netflixtechblog.com/zuul-2-the-netflix-journey-to-asynchronous-non-blocking-systems-45947377fb5c) (2016) — the edge gateway under connection pressure.
+- [Kubernetes: gRPC load balancing without tears (2018)](https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/) — why L4 balancing fails for gRPC, and the fixes.
+- [Google: Maglev (NSDI 2016)](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/) — software L4 balancing with consistent hashing.
+- [Cloudflare: Unimog (2020)](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/) and [Pingora (2022)](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/) — L4 and L7 layered inside each data centre.
+- [Cloudflare: the July 2, 2019 outage](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019/) — one rule, every request.
+- [Netflix: Zuul 2 (2016)](https://netflixtechblog.com/zuul-2-the-netflix-journey-to-asynchronous-non-blocking-systems-45947377fb5c) — an edge gateway under connection pressure.
+- [Google SRE book: Addressing cascading failures](https://sre.google/sre-book/addressing-cascading-failures/) — retries, deadlines and overload.
 
-**Explainers & patterns**
+**Patterns**
 
-- [microservices.io: API gateway pattern](https://microservices.io/patterns/apigateway.html) — the pattern and its variations, by Chris Richardson.
-- [Sam Newman: Backends for frontends](https://samnewman.io/patterns/architectural/bff/) — one small gateway per kind of client.
-- [ThoughtWorks Technology Radar: Overambitious API gateways](https://www.thoughtworks.com/radar/platforms/overambitious-api-gateways) — why domain logic does not belong in the gateway.
+- [microservices.io: API gateway](https://microservices.io/patterns/apigateway.html) and [Sam Newman: backends for frontends](https://samnewman.io/patterns/architectural/bff/).
+- [ThoughtWorks Radar: overambitious API gateways](https://www.thoughtworks.com/radar/platforms/overambitious-api-gateways) — why domain logic stays out of the gateway.

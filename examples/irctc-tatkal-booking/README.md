@@ -7,8 +7,7 @@ check them against the page.
 
 | File (Python / JavaScript) | What it shows |
 |---|---|
-| `oversell.py` / `oversell.mjs` | 1,000 concurrent bookings for 120 seats: check-then-act oversells, check-and-take in one step does not |
-| `conditional_update.py` | The check-and-take as one SQL `UPDATE ... WHERE available >= 2`, run against SQLite |
+| `berth_allocator.py` / `berth-allocator.mjs` | Segment-wise inventory in SQLite: one bitmask per berth, 40 concurrent requests. Read-work-write double-books segments; best-fit plus a conditional `UPDATE ... WHERE mask & need = 0` does not |
 | `seat_hold.py` / `seat-hold.mjs` | Seat holds that expire, an idempotent payment callback, a late payment that becomes a refund, and a reconciliation sweep that finds a lost callback |
 
 ## Run
@@ -16,18 +15,16 @@ check them against the page.
 ```bash
 # Python
 cd python
-python oversell.py
-python conditional_update.py
+python berth_allocator.py
 python seat_hold.py
 
 # JavaScript
 cd js
-node oversell.mjs
+node --no-warnings berth-allocator.mjs   # node:sqlite, Node 22.5+
 node seat-hold.mjs
 ```
 
-The exact naive oversell numbers depend on the random seed and differ slightly between the two
-languages; the atomic line always sells exactly 120 seats. `seat_hold` prints the same lines in
-both languages.
+Both languages generate the same journeys from the same small random generator and print the same
+lines. The naive line always shows overlapping pairs; the correct line always shows 0.
 
 Tested on 2026-10-22 with Python 3.13.16 and Node 22.22.0.

@@ -1,0 +1,19 @@
+---
+// An observer naming encrypted pages by their size, and padding fighting back. See size-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tls-size-leak"
+  title="Naming encrypted pages by their size"
+  description="A horizontal size axis from 0 to 64 KB. Twelve short black ticks along the top mark the typical encrypted size of each of twelve pages on a health site, which the observer measured in advance. Each visit drops a marker at the size seen on the wire. A filled red circle means the observer named the page correctly from the size alone; an outlined green square means it guessed wrong. With padding on, dashed amber lines mark the bucket boundaries every response is padded up to."
+  watchFor="With no padding and 3% variation per visit, the observer names the page about 8 times in 10, against 1 in 12 for a blind guess, without decrypting a byte. Pad to 16 KB buckets and it falls to about 1 in 4, at the cost of about a quarter more bytes. Set the variation to 0 and size alone names every visit."
+  viewBox="0 0 400 236"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createSizeModel } from './size-model';
+
+  mountAll('tls-size-leak', createSizeModel);
+</script>

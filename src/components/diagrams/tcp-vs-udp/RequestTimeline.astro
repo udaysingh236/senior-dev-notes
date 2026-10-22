@@ -1,0 +1,87 @@
+---
+// Where the time goes for one 100 KB HTTPS response on a brand-new TCP connection, 100 ms round
+// trip, 50 Mbit/s link: two round trips of handshakes, three of slow start (10, 20 and 39
+// segments of 1,460 bytes), against what the link alone needs. Numbers match cwnd-model.ts with
+// size 100 KB.
+const X0 = 118;
+const X1 = 388;
+const T = 520; // ms shown
+const px = (ms: number) => X0 + (ms / T) * (X1 - X0);
+const ROW = 34;
+const TOP = 48;
+
+const rows = [
+  { label: 'TCP setup', from: 0, to: 100, tone: 'warn', note: '' },
+  { label: 'TLS 1.3', from: 100, to: 200, tone: 'warn', note: '' },
+  { label: '10 segments', from: 200, to: 300, tone: 'flow', note: '15 KB' },
+  { label: '20 segments', from: 300, to: 400, tone: 'flow', note: '29 KB' },
+  { label: '39 segments', from: 400, to: 509, tone: 'flow', note: '57 KB' },
+  { label: 'link alone', from: 0, to: 116, tone: 'ok', note: '116 ms' },
+];
+const axisY = TOP + rows.length * ROW + 6;
+---
+
+<svg viewBox="0 0 400 348" width="100%" role="img" aria-labelledby="tu-rt-t tu-rt-d">
+  <title id="tu-rt-t">Where the time goes in one response on a new TCP connection</title>
+  <desc id="tu-rt-d">
+    A timeline from 0 to 520 milliseconds for one 100 kilobyte HTTPS response on a new connection
+    with a 100 millisecond round trip. The TCP handshake takes the first round trip and TLS 1.3 the
+    second, both waiting. Then slow start sends 10 segments in the third round trip, 20 in the
+    fourth and the last 39 in the fifth, finishing at about 509 milliseconds. A last bar shows that
+    the link alone, at 50 megabits per second, needs one round trip plus 16 milliseconds: 116
+    milliseconds.
+  </desc>
+
+  <text x="4" y="24" font-size="17" style="fill: var(--viz-muted)">100 KB, new connection, RTT 100 ms</text>
+
+  {
+    rows.map((r, i) => {
+      const y = TOP + i * ROW;
+      return (
+        <g>
+          <text x="4" y={y + 21} font-size="18" style="fill: var(--viz-ink)">{r.label}</text>
+          <rect
+            x={px(r.from)}
+            y={y + 4}
+            width={px(r.to) - px(r.from)}
+            height={ROW - 10}
+            rx="4"
+            stroke-width="1.5"
+            style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`}
+          />
+          {r.note && (
+            <text
+              x={r.tone === 'ok' ? px(r.to) + 6 : (px(r.from) + px(r.to)) / 2}
+              y={y + 21}
+              font-size="16"
+              text-anchor={r.tone === 'ok' ? 'start' : 'middle'}
+              style={`fill: var(--viz-ink); font-family: var(--sl-font-mono)`}
+            >
+              {r.note}
+            </text>
+          )}
+        </g>
+      );
+    })
+  }
+
+  <!-- Time axis -->
+  <line x1={X0} y1={axisY} x2={X1} y2={axisY} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">
+    {[0, 100, 200, 300, 400, 500].map((t) => (
+      <g>
+        <line x1={px(t)} y1={axisY} x2={px(t)} y2={axisY + 5} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+        <text x={px(t)} y={axisY + 22}>{t}</text>
+      </g>
+    ))}
+  </g>
+  <text x={X0 - 18} y={axisY + 22} font-size="16" text-anchor="end" style="fill: var(--viz-muted)">ms</text>
+
+  <!-- The finish line -->
+  <line x1={px(509)} y1={TOP} x2={px(509)} y2={axisY} stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-flow)" />
+
+  <g font-size="18" font-style="italic" style="font-family: var(--note-font-display)">
+    <text x="4" y={axisY + 56} style="fill: var(--viz-warn)">amber: waiting for a round trip to finish</text>
+    <text x="4" y={axisY + 80} style="fill: var(--viz-flow)">blue: the window, doubling each round trip</text>
+  </g>
+</svg>

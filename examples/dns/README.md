@@ -3,9 +3,8 @@
 The code behind every snippet on the [DNS](https://seniordevnotes.netlify.app/networking/dns/) page.
 Python 3.11+ and Node 20+, standard library only, nothing to install.
 
-Most demos start their own tiny authoritative DNS server for the zone `shop.example.test` on
-`127.0.0.1:8053` and talk to it with real DNS packets, so they work offline. Only `lookup` needs the
-internet.
+Every demo starts its own tiny authoritative DNS server for the zone `shop.example.test` on
+`127.0.0.1:8053` and talks to it with real DNS packets, so everything works offline.
 
 | File (Python / JavaScript) | What it shows |
 |---|---|
@@ -14,8 +13,7 @@ internet.
 | `demo.py` / `demo.mjs` | Shared scaffolding: start the server, pretend API servers, a clock |
 | `naive_client.py` / `naive-client.mjs` | Resolve once and keep it for ever (breaks after a move), and resolve on every request (a lookup per request) |
 | `ttl_cache.py` / `ttl-cache.mjs` | A cache that honours each TTL, including negative caching from the SOA |
-| `resilient_resolver.py` / `resilient-resolver.mjs` | Several upstreams with timeouts, answer checks, TCP fallback on truncation, TTL clamps, serve-stale |
-| `lookup.py` / `lookup.mjs` | A tiny `dig`: real record types from 1.1.1.1, then the same question over DNS over HTTPS |
+| `resilient_resolver.py` / `resilient-resolver.mjs` | Several upstreams with short timeouts, answer checks, TCP fallback on truncation, TTL clamps, serve-stale |
 
 ## Run
 
@@ -24,35 +22,32 @@ internet.
 cd python
 python naive_client.py         # about 5 s
 python ttl_cache.py            # about 10 s
-python resilient_resolver.py   # about 3 s
-python lookup.py               # or: python lookup.py github.com MX
+python resilient_resolver.py   # about 4 s
 python toy_server.py           # leave running, then in another terminal:
-nslookup -port=8053 www.shop.example.test 127.0.0.1
+dig -p 8053 @127.0.0.1 www.shop.example.test   # or: nslookup -port=8053 www.shop.example.test 127.0.0.1
 
 # JavaScript
 cd js
 node naive-client.mjs
 node ttl-cache.mjs
 node resilient-resolver.mjs
-node lookup.mjs                # or: node lookup.mjs github.com MX
 node toy-server.mjs
 ```
 
 ## What to expect
 
-- The demos use a 2 second TTL and a 5 second negative TTL so a whole migration fits in a few
+- The demos use a 2-second TTL and a 5-second negative TTL so a whole migration fits in a few
   seconds. Real zones use minutes to days.
 - Port 8053 must be free. (Port 5353, a common choice for test DNS servers, is taken on most
   machines by multicast DNS.)
-- `resilient_resolver` asks a dead upstream on port 5399 first. On Windows, Python learns at once
-  that nothing is listening (`ConnectionResetError`, from an ICMP "port unreachable"), while Node,
-  and Python on Linux, wait out the 400 ms timeout. A resolver that silently drops packets always costs the full
-  timeout, which is why the timeout should be short.
-- `lookup` needs outgoing UDP on port 53 and HTTPS. TTLs in the output count down: they are the
-  time left in the resolver's cache, so they differ from run to run and between resolvers.
-- On Windows, Python reads the system trust store, which may not yet hold the root certificate
-  that `cloudflare-dns.com` chains to. `lookup.py` then prints "could not connect" for that DoH
-  server and carries on. Node ships its own root list and is not affected.
+- `resilient_resolver` asks a dead upstream on port 5399 first. On Linux, and in Node, it waits out
+  the 400 ms timeout; on Windows, Python may learn at once that nothing is listening
+  (`ConnectionResetError`, from an ICMP "port unreachable"). A resolver that silently drops
+  packets always costs the full timeout, which is why the timeout should be short.
 
-Tested on 2026-10-18 with Python 3.14.7 and Node 24.19.0 on Windows 11, and Python 3.12.3 on Ubuntu
-24.04 (WSL).
+The earlier `lookup` script (real lookups against 1.1.1.1 and DNS over HTTPS) was removed when the
+page was rewritten; the real-world numbers the page still quotes (remaining TTLs, negative TTLs,
+the 72-byte A record) come from its October 2026 runs, recorded in `research/dns.md`.
+
+Tested on 2026-10-22 with Python 3.13.16 and Node 22.22.0 on Linux; earlier on 2026-10-18 with
+Python 3.14.7 and Node 24.19.0 on Windows 11.

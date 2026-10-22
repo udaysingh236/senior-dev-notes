@@ -1,0 +1,19 @@
+---
+// One limit, many gateway nodes: four ways of enforcing it on the same traffic. See fleet-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="rl-fleet"
+  title="One limit of 100 req/s, enforced by N nodes"
+  description="Four lanes run the same requests from one client through four ways of enforcing a limit of 100 requests per second across a fleet of gateway nodes. Each lane shows bars for the requests admitted in each of the last eight seconds, a dashed line at the limit of 100, and the last full second as a number. Bars over the limit are red, bars well under it are amber. A pill at the top right says whether the shared store is up."
+  watchFor="With the defaults (10 nodes, the client spread over all 10, sending 300 req/s), the first lane admits about 300 a second, three times the limit, and the synced lane about 155. Set the client to reach 1 node: the 100 ÷ N lane drops to 10, a tenth of what the client paid for, while the shared lane stays at 100. Move the sync interval and watch the synced lane's excess grow with it. Then take the store down: the shared lane fails open and admits everything for three seconds."
+  viewBox="0 0 400 404"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createFleetModel } from './fleet-model';
+
+  mountAll('rl-fleet', createFleetModel);
+</script>

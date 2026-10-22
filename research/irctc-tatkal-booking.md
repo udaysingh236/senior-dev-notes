@@ -123,3 +123,25 @@ link and re-check wording and dates. Flags mark where sources disagree.
   agent embargo, 4-passenger cap, Aadhaar OTP); the payment reconciliation and RBI refund rules.
 - Our angle: separate sourced facts from our design, show the spike and retry storm in a sim,
   and spend real time on the payment gap.
+
+## Added in the 2026-10-22 rewrite (inventory, locking, allocation)
+
+- Pooled and remote-location quotas earmarked per station by zonal railways (Lok Sabha, 2010).
+  https://eparlib.nic.in/bitstream/123456789/581602/1/86072.pdf
+- Senior citizens and women 45+ auto-considered for lower berths; per-coach lower-berth reservation
+  about 6–7 SL, 4–5 3A, 3–4 2A (Lok Sabha 2025 reply via news). FLAG: confirm the PDF wording.
+  https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf
+- RAC shares a side lower berth (Deccan Herald, Nov 2025).
+  https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790
+- Second chart up to 30 minutes before departure (restored Oct 2020).
+  https://www.deccanherald.com/india/railways-to-restore-system-of-issuing-second-reservation-charts-30-minutes-before-departure-of-trains-898230.html
+- Chart vacancy published online including intermediate stations (2019).
+  https://thequint.com/news/india/irctc-check-train-reservation-chart-vacant-seats-online-website-app
+- Next-gen PRS: seat selection like airlines, >1.5 lakh bookings/min target (Tribune; PIB Aug 2026).
+- Database behaviour: PostgreSQL re-checks UPDATE WHERE on concurrently updated rows at read
+  committed; serialization failure 40001 at repeatable read; deadlock_timeout 1 s; SKIP LOCKED.
+  https://www.postgresql.org/docs/current/transaction-iso.html
+- Allocation experiment (our code): 500 runs, 8 berths × 7 segments, 10 short journeys then 8
+  full-route requests: packing (best fit) fits ~3.9 full-route passengers, random spreading ~1.4.
+- No public source on how CRIS/IRCTC store or lock berths; everything beyond the cited rules is
+  our design.

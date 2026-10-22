@@ -1,0 +1,19 @@
+---
+// A record moves while 200 resolver caches hold copies. See migration-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="dns-migration"
+  title="Moving a record: the TTL that matters is the one already cached"
+  description="A grid of 200 resolver caches, each holding a copy of one record. Amber cells hold the old address, green cells the new one, and cells turn red when they still hold the old address after the old server has been switched off. Cells with a dot are clients that never resolve again. Below, a line shows the share of lookups answered with the old address over time, with red fill where those lookups fail, and dashed markers for the moment the TTL was lowered, the address change and the switch-off."
+  watchFor="With the defaults, the TTL is lowered in the same edit as the address change, so caches keep their old copy for up to the old hour: 176 of 200 still point at the old server when it goes off at +10 min, and 28% of lookups after that fail. Slide the lead time to 60 min (one old TTL): by the change every cache holds a 60-second copy, the last one switches within about 2 minutes, and only the dotted clients fail. Watch the query counter too: the short TTL costs about fifty times more queries."
+  viewBox="0 0 400 364"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createMigrationModel } from './migration-model';
+
+  mountAll('dns-migration', createMigrationModel);
+</script>

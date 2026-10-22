@@ -12,15 +12,21 @@ Every page should let the reader see the idea, and where it moves, watch it move
 - One diagram per major mechanism or variant.
 - At least one interactive simulation, or a step-through when the concept is a sequence rather than
   something that changes over time.
+- A sim must show a mechanism the reader cannot see in a static diagram: contention, a race,
+  allocation, imbalance, queues filling, state changing under load. The reader changes an input
+  and sees the outcome change. A sim that only replays the steps of a user flow is not worth
+  building; a step-through or a diagram does that better.
 - Algorithm topics: one sim mode per algorithm, plus a compare mode that runs them side by side on
   the same input when that teaches something.
 - Protocol and flow topics (TLS, OAuth, DCR, 2PC): a step-through sequence diagram.
 - Comparison pages (`template-compare.mdx`): one overlap (hero) diagram, one small diagram per
   concept drawn in the same layout so they can be compared at a glance, and a decision-flow
-  diagram or list. A sim is optional: add one only when the concepts differ in behaviour over time.
-- Case studies (`template-case-study.mdx`): one architecture (hero) diagram of at most ~8 boxes, a
-  step-through of one request end to end, one diagram per deep dive, and a sim of the peak moment
-  (with and without the key mechanism) when the system's hard part is load.
+  diagram or list. Add a sim where the concepts behave differently under load (for example layer 4
+  vs layer 7 balancing with long-lived connections).
+- Case studies (`template-case-study.mdx`): one architecture (hero) diagram of at most ~8 boxes,
+  one diagram per deep dive, and a sim for each of the one or two hardest mechanisms (for a booking
+  system: the inventory data structure, and two transactions racing for the same row). A
+  step-through only where the order of messages is itself the hard part.
 
 ## Diagram rules (SVG)
 

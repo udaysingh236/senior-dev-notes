@@ -1,0 +1,19 @@
+---
+// Six certificates over two years, renewed by automation that sometimes breaks. See renewal-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tls-renewal"
+  title="Automated renewal at two-thirds of the lifetime, when the automation breaks"
+  description="Six rows, one per certificate (api, www, admin, payments, auth, partner), on a two-year time axis that fills in as the simulation runs. A row is green while its certificate is valid, a thin amber band while its renewal is overdue, and a tall red band while it has expired. A red cross above a row marks the day its renewal automation broke. A dashed line marks today."
+  watchFor="Each red cross is the automation breaking. With 47-day certificates renewed when 16 days are left and an alert at 14 days left, a break shows up as a short amber band and a human fixes it before expiry. Set the alert to 0: the same breaks turn red, because nothing tells a human until users do. Then drag the lifetime to 6 days: the renewal window is 2 days, so a 3-day fix lands after expiry, alert or not."
+  viewBox="0 0 400 312"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRenewalModel } from './renewal-model';
+
+  mountAll('tls-renewal', createRenewalModel);
+</script>
