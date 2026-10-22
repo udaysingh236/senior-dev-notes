@@ -1,0 +1,19 @@
+---
+// Check-then-act against a shared counter, versus an atomic increment. See race-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="rl-race"
+  title="Read, check, write: how much the race lets through"
+  description="Two lanes run the same requests from one client against one shared counter with a limit of 100 per second. The first lane reads the count, decides, then writes count plus one in a second round trip. The second lane increments atomically. Each lane shows bars for the requests admitted in each of the last eight seconds against a dashed line at 100, and the last full second as a number. Under the lanes, the rule of thumb: 100 times one plus the number of requests that arrive during one round trip."
+  watchFor="At 1,000 req/s and a 1 ms round trip, the two-step lane admits about 200 a second, twice the limit. Drop the rate to 100 req/s, which is about what a test from a laptop sends: the race vanishes and both lanes look correct. Then raise the round trip to 5 ms, as when the store is in another zone or busy: the two-step lane admits about 600. The atomic lane stays at 100 whatever you do."
+  viewBox="0 0 400 284"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRaceModel } from './race-model';
+
+  mountAll('rl-race', createRaceModel);
+</script>

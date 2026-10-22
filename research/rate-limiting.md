@@ -213,3 +213,80 @@ Explainers
 - Brandur Leach, "Rate limiting, cells, and GCRA" (2015) — https://brandur.org/rate-limiting
 - redis-cell (GCRA as a Redis module) — https://github.com/brandur/redis-cell
 - smudge.ai, "Rate limiting algorithms" — https://smudge.ai/blog/ratelimit-algorithms
+
+## Update for the October 2026 rewrite (researched 2026-10-22)
+
+Angle of the rewrite: what a limit really admits across a fleet, not the algorithms. New facts,
+measurements and sources:
+
+### Distributed counting
+
+- **Kong Rate Limiting Advanced, `sync_rate`**: 0 = synchronous (every request goes to the shared
+  store), -1 = node memory only, >0 = sync interval in seconds, minimum 0.02 s. The docs footnote
+  that the redis strategy is accurate only when `sync_rate` is 0. Kong's AI gateway policy says that
+  when a node loses Redis it keeps counting locally and resyncs later, so the cluster-wide limit can
+  be exceeded, but each node is still limited. Checked October 2026.
+  https://developer.konghq.com/plugins/rate-limiting-advanced/
+  https://developer.konghq.com/ai-gateway/policies/rate-limiting-advanced/
+- **Envoy local rate limit**: the token bucket is shared across the workers of one Envoy process,
+  so the limit is per Envoy instance. Same idea as nginx's shared-memory zone: per instance, not per
+  fleet.
+- **GitHub (Robert Mosolgo, April 2021)**: moved the API rate limiter from Memcached (shared with
+  other caches, so live limiter data could be evicted) to client-sharded Redis, one primary per
+  shard for writes, Lua for atomicity, key expiry instead of stored reset times. Described a
+  `X-RateLimit-Reset` value that wobbled by a second because the script returned a TTL that Ruby
+  added to its own clock; fixed by storing the absolute reset time. Also notes replicas do not
+  expire keys until the primary tells them to.
+  https://github.blog/engineering/infrastructure/how-we-scaled-github-api-sharded-replicated-rate-limiter-redis/
+- **Redis Lua costs**: a running script blocks its shard; after the busy threshold (default 5 s)
+  other clients get BUSY errors. In Redis Cluster, all keys used by one script must hash to the
+  same slot, hence hash tags like `rl:{tenant}:minute`.
+
+### Measured with our own sims (seed 42, `src/components/sims/rate-limiting/`)
+
+- Race (`race-model.ts`), limit 100/s, GET-check-SET vs atomic INCR: admitted per second follows
+  limit × (1 + rate × RTT) closely. 100 req/s, 1 ms: 99. 1,000 req/s, 1 ms: 198. 2,000 req/s, 2 ms:
+  495. 3,000 req/s, 1 ms: 404. 1,000 req/s, 5 ms: 604. Atomic lane: 100 in every case.
+- Fleet (`fleet-model.ts`), limit 100/s, 10 nodes, client spread over all 10 at 300 req/s, sync
+  200 ms: local full limit 298, local limit ÷ N 100, shared 100, synced 155. Sync 20/100/500/1000 ms:
+  107/128/232/289 (overshoot ≈ client rate × S). Spread 1 node: 100, 10, 100, 100. Client at exactly
+  100 req/s spread evenly: limit ÷ N admits 88 (Poisson variance alone rejects ~12%). Store down for
+  3 s at 1,000 req/s: shared (fail open) and synced lanes admit 940 to 1,013 per second.
+
+### Measured with the examples (2026-10-22: Redis 7.0.15, redis-py 8.1.0, node-redis 6.3.0)
+
+- redis-py 8.1.0's default standalone client was built with
+  `Retry(ExponentialWithJitterBackoff(base=0.01, cap=1), retries=10)` (inspected at runtime). One
+  limiter call against a Redis that is not running took 3.0 to 4.6 s across four runs before
+  raising, despite 50 ms socket timeouts. With `Retry(NoBackoff(), 0)`: under 10 ms. Note the
+  redis-py docs for the standalone client still say 3 retries; the installed version used 10.
+  Worth re-checking on upgrades. https://redis.readthedocs.io/en/latest/retry.html
+- node-redis default client (no `disableOfflineQueue`, default reconnect strategy): the command
+  queued while the client reconnected, and had no answer after 3 s.
+- nginx 1.24.0: burst of 20 → 11 × 200, 9 × 429; one second later 5 × 200 (same as the 1.30.6 run).
+
+### Cost-based limits
+
+- **Azure OpenAI**: TPM is enforced on an estimate made when the request arrives, from the prompt,
+  `max_tokens` and `best_of`, added to a running per-minute count; differs from the billed count.
+  https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota (checked October 2026)
+- OpenAI's own docs were not reachable here; third-party guides say `max_tokens` counts toward TPM
+  there too. Not used on the page.
+- Anthropic: limits are RPM, ITPM and OTPM per model class, 429 with retry-after. No official
+  statement found on how `max_tokens` affects OTPM. Not used on the page.
+  https://platform.claude.com/docs/en/api/rate-limits
+
+### Clients
+
+- AWS Architecture Blog, "Exponential Backoff And Jitter" (Marc Brooker): no-jitter backoff
+  clusters retries; full jitter and equal jitter use about the same number of calls; AWS SDKs ship
+  backoff with jitter in standard and adaptive modes.
+  https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+
+### Sources added to Further reading
+
+- Kong Rate Limiting Advanced — https://developer.konghq.com/plugins/rate-limiting-advanced/
+- redis-py retry helpers — https://redis.readthedocs.io/en/latest/retry.html
+- Azure OpenAI quota — https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota
+- GitHub blog (2021) — https://github.blog/engineering/infrastructure/how-we-scaled-github-api-sharded-replicated-rate-limiter-redis/
+- AWS Architecture Blog, backoff and jitter — https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/

@@ -1,0 +1,65 @@
+---
+// How X-Forwarded-For grows hop by hop, and which entry a rate limiter should key on.
+---
+
+<svg viewBox="0 0 400 520" width="100%" role="img" aria-labelledby="rl-xff-t rl-xff-d">
+  <title id="rl-xff-t">Reading the client address behind two proxies</title>
+  <desc id="rl-xff-d">
+    A client at 203.0.113.7 sends a request that already carries a forged X-Forwarded-For of
+    6.6.6.6. The CDN at 198.51.100.2 appends the address it saw, 203.0.113.7. The load balancer at
+    10.0.0.5 appends the address it saw, the CDN's. The app sees a connection from 10.0.0.5 and the
+    header "6.6.6.6, 203.0.113.7, 198.51.100.2". Reading from the right and skipping your own
+    proxies, the first address that is not yours, 203.0.113.7, is the real client. The leftmost
+    entry was typed by the client and must be ignored.
+  </desc>
+  <defs>
+    <marker id="rl-xff-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <g font-size="19" text-anchor="middle">
+    <rect x="8" y="16" width="176" height="60" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="96" y="42" font-weight="600" style="fill: var(--viz-ink)">Client</text>
+    <text x="96" y="66" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">203.0.113.7</text>
+
+    <rect x="8" y="116" width="176" height="60" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="96" y="142" font-weight="600" style="fill: var(--viz-ink)">CDN</text>
+    <text x="96" y="166" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">198.51.100.2</text>
+
+    <rect x="8" y="216" width="176" height="60" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="96" y="242" font-weight="600" style="fill: var(--viz-ink)">Load balancer</text>
+    <text x="96" y="266" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">10.0.0.5</text>
+
+    <rect x="8" y="316" width="176" height="48" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="96" y="347" font-weight="600" style="fill: var(--viz-ink)">App</text>
+  </g>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rl-xff-flow)">
+    <line x1="96" y1="78" x2="96" y2="112" />
+    <line x1="96" y1="178" x2="96" y2="212" />
+    <line x1="96" y1="278" x2="96" y2="312" />
+  </g>
+
+  <!-- What each hop does to the header. -->
+  <g font-size="19">
+    <text x="200" y="42" style="fill: var(--viz-muted)">forges XFF:</text>
+    <text x="200" y="66" style="fill: var(--viz-bad); font-family: var(--sl-font-mono)">6.6.6.6</text>
+    <text x="200" y="142" style="fill: var(--viz-muted)">appends:</text>
+    <text x="200" y="166" style="fill: var(--viz-ok); font-family: var(--sl-font-mono)">203.0.113.7</text>
+    <text x="200" y="242" style="fill: var(--viz-muted)">appends:</text>
+    <text x="200" y="266" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">198.51.100.2</text>
+    <text x="200" y="347" style="fill: var(--viz-muted)">peer: <tspan style="font-family: var(--sl-font-mono)">10.0.0.5</tspan></text>
+  </g>
+
+  <line x1="8" y1="388" x2="392" y2="388" stroke-width="1" style="stroke: var(--viz-stroke)" />
+  <text x="8" y="418" font-size="19" font-weight="700" style="fill: var(--viz-ink)">Read from the right:</text>
+  <g font-size="19">
+    <text x="8" y="452" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">198.51.100.2</text>
+    <text x="392" y="452" text-anchor="end" style="fill: var(--viz-muted)">our CDN, skip</text>
+    <text x="8" y="482" style="fill: var(--viz-ok); font-family: var(--sl-font-mono)">203.0.113.7</text>
+    <text x="392" y="482" text-anchor="end" font-weight="700" style="fill: var(--viz-ok)">the key</text>
+    <text x="8" y="512" style="fill: var(--viz-bad); font-family: var(--sl-font-mono)">6.6.6.6</text>
+    <text x="392" y="512" text-anchor="end" style="fill: var(--viz-bad)">forged, ignore</text>
+  </g>
+</svg>

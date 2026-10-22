@@ -1,10 +1,10 @@
 ---
 title: Rate Limiting
-description: How to stop one client from overwhelming a service. Token bucket, leaky bucket, GCRA, fixed and sliding windows, explained from first principles, then built with Redis, HTTP headers and a well-behaved client.
-tagline: One noisy client should never take everyone else down.
+description: What a rate limit really admits when many gateway nodes enforce it. Local versus shared counters, the check-then-act race and Lua atomicity, approximate counting and its error, failing open or closed, keys behind proxies, limits by cost, and how 429 and Retry-After shape client retries.
+tagline: The algorithm is the small part. The hard part is ten machines agreeing on one number in under a millisecond.
 difficulty: intermediate
 track: resilience
-prerequisites: [latency-vs-throughput, retries-and-backoff]
+prerequisites: [proxy-lb-gateway, retries-and-backoff]
 next: [load-shedding, circuit-breakers, backpressure, rate-limiter-service, llm-rate-limits]
 lastReviewed: 2026-10-22
 sidebar:
@@ -14,93 +14,67 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
-import StepThrough from '../../../components/StepThrough.astro';
-import Overview from '../../../components/diagrams/rate-limiting/Overview.astro';
-import Layers from '../../../components/diagrams/rate-limiting/Layers.astro';
-import TokenBucketDiagram from '../../../components/diagrams/rate-limiting/TokenBucket.astro';
-import LeakyBucketDiagram from '../../../components/diagrams/rate-limiting/LeakyBucket.astro';
-import FixedWindowDiagram from '../../../components/diagrams/rate-limiting/FixedWindow.astro';
-import SlidingLogDiagram from '../../../components/diagrams/rate-limiting/SlidingLog.astro';
-import SlidingCounterDiagram from '../../../components/diagrams/rate-limiting/SlidingCounter.astro';
 import FleetCounting from '../../../components/diagrams/rate-limiting/FleetCounting.astro';
+import TokenBucketDiagram from '../../../components/diagrams/rate-limiting/TokenBucket.astro';
+import FixedWindowDiagram from '../../../components/diagrams/rate-limiting/FixedWindow.astro';
+import SlidingCounterDiagram from '../../../components/diagrams/rate-limiting/SlidingCounter.astro';
+import Layers from '../../../components/diagrams/rate-limiting/Layers.astro';
+import ForwardedChain from '../../../components/diagrams/rate-limiting/ForwardedChain.astro';
 import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSim.astro';
+import FleetSim from '../../../components/sims/rate-limiting/FleetSim.astro';
+import RaceSim from '../../../components/sims/rate-limiting/RaceSim.astro';
 
-## A bad night for the API
+## The question
 
-Imagine a small online store on the first evening of its Diwali sale. The team has spent weeks
-getting ready. They added servers, warmed the caches, and load-tested checkout at three times last
-year's traffic. At 9 PM the sale opens and, for twenty minutes, everything holds.
+Your API promises 100 requests a second per key, and ten gateway nodes enforce it. Depending only
+on how the load balancer spreads one client's connections, that promise admits anywhere from 10 to
+1,000 requests a second. Move the counter into a shared Redis and the number becomes exact, until
+the client speeds up and a 1 ms round trip quietly lets through twice the limit. Then Redis stops
+answering, and every node must decide, inside the request, whether to let everything through or
+nothing. Which of these numbers does your limiter actually produce?
 
-At 9:20 the checkout page starts to spin. Then it starts to fail. The dashboards look strange:
-traffic on `GET /products` has jumped from 400 requests per second to 3,000, but the number of
-shoppers has not changed. The database connection pool, 40 connections that were plenty an hour
-ago, is completely full. Every request waits for a connection, most of them time out, and real
-customers with full carts see an error page.
-
-The on-call engineer finds the cause in the logs. A partner company syncs its inventory through the
-API, and its sync script retries failed requests immediately, with no pause. Under sale load a few
-requests timed out, the retries slowed the database further, more requests timed out, and the
-script retried harder. By 9:20, one API key was sending 92% of all traffic.
-
-Nobody was attacking the store. The script was doing exactly what its code said. What was missing
-was any part of the system able to say:
-*that is enough from you, for now, come back in a second.* Without it, one client's bug became
-every customer's outage.
-
-That missing piece is a rate limiter. This page answers one question: **how do you give each client
-a fair share of your service, so that one noisy caller cannot take everyone down, without punishing
-the innocent callers, and without the limiter itself becoming the next thing that breaks?**
+The algorithms (token bucket, sliding windows) are one section of this page. The rest is about the
+part that breaks in production: many machines, one number, a network in between, and clients
+reacting to every 429 you send.
 
 ## Why this problem exists
 
-Every service has a fixed capacity at any moment: CPU cores, database connections, memory, the
-throughput of the services it calls. Capacity grows in minutes; traffic changes in milliseconds.
+A **rate limit** is a promise about a **key** (an API key, a user, an IP address, or "this user on
+this endpoint") over time: at most N requests in a **window** of W seconds, or an average rate with
+an allowed **burst** on top. The promise is made once, in your docs or pricing page. It is enforced
+by every process that receives traffic, each seeing only its own slice, and each deciding in well
+under a millisecond, because the limiter runs before every request.
 
-Demand comes from callers you do not control. Most of the time traffic from many independent
-callers averages out. It stops working when one caller sends far more than its share, and that
-caller is rarely an attacker. It is usually a retry loop with no pause, a mobile release with a
-polling bug on a million phones, a batch job switched to "as fast as possible", a scraper or AI
-agent stuck in a loop, or someone trying passwords against your login endpoint.
+The status code for "you, specifically, sent too many" is **429 Too Many Requests**, defined in
+[RFC 6585](https://www.rfc-editor.org/rfc/rfc6585#section-4) (which also says a 429 must not be
+cached). The **Retry-After** header tells the client when to come back, as seconds or a date
+([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3)).
 
-The cost lands on everyone else: their requests queue behind the flood, slow down and fail. It
-also lands on your bill. Autoscaling happily adds servers to serve a bug, and if each request calls
-a paid service (SMS, payment checks, a large language model), every excess request costs money.
+Three things go wrong without a limiter, and each sets a requirement. A retry loop, a polling bug on
+a million phones or a scraper takes a share of capacity that belongs to everyone else, so the
+limiter must be **fair per key**. If requests call something paid (SMS, payment checks, a language
+model), excess requests become an invoice, so it must **count what costs money**, not only
+requests. And the limiter is now on the path of every request, so its own failure must not become
+the outage it was meant to prevent.
 
-**Rate limiting** caps how many requests a given caller may make in a given period, and rejects or
-delays the rest. A few more terms:
+Rate limiting is often confused with its neighbours. They all reject or slow requests, for
+different reasons:
 
-- The **key** is who you are counting: an API key, a user ID, an account, an IP address, or a
-  combination such as "this user on this endpoint".
-- The **limit** is how many requests that key may make, and the **window** is the period it applies
-  to, for example 100 requests per 60 seconds.
-- A **burst** is a short run of requests arriving much faster than the average rate. Some
-  algorithms allow bursts on purpose; others smooth them out.
-- **429 Too Many Requests** is the HTTP status code for "you, specifically, have sent too many".
-  It was defined in [RFC 6585](https://www.rfc-editor.org/rfc/rfc6585#section-4) in 2012, which
-  also says a 429 must not be cached.
-- **Retry-After** is a response header that tells the client when to come back, either as a number
-  of seconds or as a date ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3)).
+| Idea | Limits | Decided by | Typical answer |
+|---|---|---|---|
+| **Rate limit** | Requests (or cost) per key per unit of time | The key's recent behaviour | 429 with Retry-After |
+| **Quota** | Total usage per day or month, tied to a plan | The account | 429 or 403 until the period resets |
+| **Concurrency limit** | Requests per key in flight right now | What is running at this moment | 429, or wait |
+| **Load shedding** | Total work the server accepts | The server's own health | 503 for low-priority work |
 
-A rate limit is a promise about fairness: whatever anyone else does, you get your share, and nobody
-gets more than theirs. Real systems keep that promise at several places along a request's path.
-The diagram stacks them in the order a request meets them. Read the right-hand side: each layer
-counts by a different key, because each knows different things about the caller.
-
-<Figure caption="A request can be rate limited at every layer it passes through, and each layer keys on what it knows: the edge sees IP addresses, the gateway sees API keys, the service sees users and routes.">
-  <Layers />
-</Figure>
-
-The edge (a CDN or the front load balancer) only knows the IP address, so it handles floods. The API
-gateway knows the API key and pricing plan. The service knows the user and the exact operation, so
-it can protect expensive endpoints. Below it, limits on calls to the database or a partner API
-protect what cannot scale with you. And at the top, a well-built client limits itself before the
-server has to. We will come back to that one, because it is the most neglected.
+The line that matters: **a rate limiter is about fairness between callers; load shedding is about
+the server's survival.** A million well-behaved clients each under their limit still take you down.
+You need both, and load shedding has its own page (coming soon).
 
 ## The obvious fix, and why it breaks
 
-The first rate limiter most of us write lives inside the application: a dictionary of counters in
-memory, keyed by the caller's IP address and the current window, with a limit of 10 requests per 10
-seconds. The full example wires it into a web handler that keys on the connection's address.
+The first limiter most of us write is a dictionary of counters in the app's memory, keyed by the
+caller's address and the current window number:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -119,7 +93,6 @@ class NaiveLimiter:
         key = (client, int(now // WINDOW))
         self.counts[key] = self.counts.get(key, 0) + 1
         return self.counts[key] <= LIMIT
-
 ```
   </TabItem>
   <TabItem label="JavaScript">
@@ -143,505 +116,220 @@ export class NaiveLimiter {
   </TabItem>
 </Tabs>
 
-It looks reasonable, and on a laptop it works. The full example puts it through four situations
-every production system meets sooner or later:
+The full example puts it through four situations every production system meets:
 
-```text title="output"
+```text title="naive_limiter.py output"
 1. window boundary: 20 of 20 accepted within 0.1 s (limit is 10 per 10 s)
 2. four servers:    40 of 40 accepted in one window (each server counted alone)
 3. behind a proxy:  accepted asha 5/5, ben 5/5, chen 0/5 - three users share one counter
 4. shared store:    20 of 20 accepted, and the stored count says 1
 ```
 
-Each line is a different failure:
-
-1. **The window boundary.** Ten requests at 9.9 seconds count against the first window, ten at
-   10.0 seconds count against the second. Each window sees 10, so all 20 pass in a tenth of a
-   second.
-2. **More than one server.** Production runs several copies of the app behind a load balancer.
-   Each copy keeps its own dictionary, so with four servers a client gets four times the limit.
-   Restarting a server also wipes its counts.
-3. **Behind a proxy.** Once a load balancer sits in front of the app, the "client address" the app
-   sees is the load balancer's address. Every user shares one counter. This exact mistake caused a
-   real outage, which we will look at in the war stories.
-4. **A shared store, used carelessly.** The natural fix for problem 2 is to keep the counters in a
-   shared store such as Redis. But "read the count, check it, write count + 1" takes two round
-   trips. Twenty requests that arrive together all read 0 before any of them writes, so all twenty
-   are allowed, and the store ends up saying 1.
-
-The dictionary also grows forever, because nothing deletes old windows. None of these show up in a
-demo; all of them show up in production.
-
-Before we fix them, separate rate limiting from its neighbours. They all reject or slow requests,
-but for different reasons.
-
-| Idea | What it limits | Decided by | Typical answer |
-|---|---|---|---|
-| **Rate limit** | Requests per caller per unit of time | The caller's own recent behaviour | 429 with Retry-After |
-| **Quota** | Total usage over a long period (a day, a month), often tied to a plan or a bill | The caller's account | 429 or 403 until the period resets |
-| **Concurrency limit** | Requests per caller in progress at the same moment | How many are in flight now | 429, or wait |
-| **Load shedding** | Total work the server accepts | The server's own health (CPU, queue length) | 503 for low-priority work |
-| **Backpressure** | How fast an upstream sends | A downstream that is full, signalling upstream | Slow down, block, or buffer |
-| **Circuit breaker** | Calls *from* you *to* a failing dependency | The dependency's recent errors | Fail fast without calling |
-
-The line that matters most is between rate limiting and load shedding. **A rate limiter is about
-fairness between callers. Load shedding is about the server's own survival.** A per-client limiter
-will not save you when a million well-behaved clients arrive at once, because each is within its
-limit. You usually want both.
+Each line is a different failure, and each gets a section below. Line 1 is the **algorithm**: ten
+requests at 9.9 s and ten at 10.0 s land in different windows. Line 2 is **where the state lives**:
+four copies of the app, four dictionaries, four times the limit. Line 3 is **the key**: behind a
+load balancer, the connection's address is the balancer's, so every user shares one counter.
+Line 4 is **atomicity**: twenty requests read 0 from a shared store before any of them writes, all
+twenty pass, and the store ends up saying 1. None of these shows up on a laptop.
 
 ## The core idea
 
-Picture a railway booking counter on a busy morning. There is one rule, posted on the wall: each
-person may book at most four tickets per hour. Before the clerk serves you, they look at your ID,
-check a notebook to see how many tickets you booked in the last hour, and either serve you or tell
-you to come back at 10:40. The rule does not stop the queue from being long. It stops one person
-from booking two hundred tickets while everyone behind them waits.
-
-The analogy captures the three steps every rate limiter takes: identify the caller, look up their
-recent history, decide. It breaks in three places, which is exactly where the engineering lives.
-
-- The clerk sees a face. A server sees a key: an IP address thousands of phones may share, or an
-  API key one company spreads across a hundred machines. Choosing the key is a design decision.
-- There is one clerk with one notebook. A real service has dozens of servers that must agree on
-  your count within a millisecond.
-- The clerk can let you wait in line. An HTTP client usually prefers "no, try again in 2 seconds"
-  over a connection that hangs.
-
-Put precisely: **a rate limiter identifies each caller by a key, keeps a small amount of state per
-key that summarises its recent requests, and before doing any expensive work decides to accept,
-delay or reject each request, telling rejected callers when to come back.** The rest of this page
-is about what that state is, where it lives, and how to keep it correct when many servers share it.
-
-Follow the three clients through the limiter: two carry on to the API, and the buggy script is sent
-back.
-
-<Figure caption="A rate limiter identifies the caller, checks a shared count of its recent requests, and decides. Callers within their share pass to the API; the one over its share gets a 429 and a time to come back.">
-  <Overview />
-</Figure>
-
-The limiter sits before the API does any real work, because rejecting must cost almost nothing
-compared with serving. And the counter store underneath is shared, which is where most of the
-interesting problems come from.
-
-## How it works, piece by piece
-
-There are five classic algorithms, plus one variant, in two families:
-
-- **Buckets** (token bucket, leaky bucket, GCRA) think in *rates*: so many requests per second,
-  with some allowance for bursts.
-- **Windows** (fixed window, sliding log, sliding window counter) think in *counts*: no more than
-  N requests in any period of W seconds.
-
-Most examples below use the same limit, **10 requests per 10 seconds**; for a bucket, a capacity of
-10 refilling at 1 per second.
-
-### Token bucket
-
-**Intuition.** Each caller has a bucket that holds tokens. Every request must take one token to
-pass. Tokens drip back into the bucket at a steady rate, but the bucket has a maximum size, so a
-caller who stays quiet saves up a few tokens and can spend them all at once later. The bucket size
-sets how big a burst can be; the refill rate sets the long-run average.
-
-**How it works, step by step.** Each key's bucket stores two numbers: its tokens, and when we last
-looked. No timer drips tokens in the background. Instead, when a request arrives:
-
-1. Work out how long it has been since we last looked, and add `elapsed × rate` tokens.
-2. Cap the total at the bucket's capacity.
-3. If there is at least one token, take it and allow the request.
-4. Otherwise reject it, and tell the caller how long until the next token: `(1 − tokens) ÷ rate`.
-
-This "lazy refill" makes the token bucket cheap: a million idle callers cost only storage. The
-bucket below is a snapshot of one caller: seven tokens saved, room for three more, tokens arriving
-at five per second.
-
-<Figure caption="A token bucket holds at most 10 tokens and refills at 5 per second. Each request takes one token; a request that finds the bucket empty is rejected.">
-  <TokenBucketDiagram />
-</Figure>
-
-A full bucket is a caller that has been quiet and earned a burst. An empty one has used its burst
-and now gets exactly the refill rate. In the sim, background traffic stays under the rate, so
-everything passes, until you send a burst.
-
-<RateLimiterSim algorithm="token-bucket" />
-
-**A worked example.** Take a bucket of 10 tokens refilling at 5 per second. The caller has been
-idle, so the bucket is full. A burst of 40 requests arrives in the same instant: 10 pass and 30 are
-rejected. One second later 5 tokens have dripped back in, so a second burst of 40 gets 5 through.
-The runnable `limiters.py` prints exactly this:
-
-```text title="output"
-token bucket  C=10 r=5/s: burst of 40 -> 10 pass, one second later 5 more
-```
-
-The general rule is worth remembering: **over any stretch of T seconds, a token bucket lets through
-at most C + r × T requests**, where C is the capacity and r the refill rate. The C part is the
-burst; the r × T part is the steady flow.
-
-That formula holds a surprise. A bucket of 10 refilling at 1 per second sounds like "10 per 10
-seconds", but over 10 seconds it can let through 10 + 1 × 10 = 20 (our comparison script saw 19). A
-token bucket limits the *average rate* and the *burst size*, not "never more than N in any window".
-If you publish that promise in your API docs, the window algorithms below fit better.
-
-**Strengths:** two numbers of state, cheap, and it allows the natural burstiness of real clients.
-**Weaknesses:** short spikes do reach your backend, and the limit is not a hard count per window.
-
-**When to pick it:** most APIs. It is what Stripe, AWS API Gateway and Envoy use, and it extends
-naturally to **weighted requests**: an expensive call can take 5 tokens instead of 1. GitHub's
-points system and the token-per-minute limits on LLM APIs are this idea in practice.
-
-### Leaky bucket
-
-"Leaky bucket" is the most confusing name in this topic, because it describes two different
-mechanisms, and articles switch between them without saying so. Both picture a bucket leaking at a
-fixed rate; what differs is what sits in it.
-
-**As a queue (shaping).** Requests themselves go into the bucket, which is a first-in first-out
-queue of fixed size. A worker takes requests out at a fixed rate, one every 1 ÷ rate seconds, and
-forwards them. If the queue is full, new requests are rejected. Accepted requests are *delayed*,
-never sent faster than the leak rate. This is called **traffic shaping**: the output is perfectly
-smooth, whatever the input looks like.
-
-**As a meter (policing).** The bucket holds only a level. Each request adds 1, and the level drains
-at a fixed rate. If adding 1 would overflow, the request is rejected; otherwise it is answered at
-once. This is **traffic policing**: decide now, never delay. The meter is the token bucket upside
-down (it starts empty and fills), and they accept exactly the same requests.
-
-The top half of this diagram shows the queue, the bottom half the meter.
-
-<Figure caption="The same name, two mechanisms. As a queue, the leaky bucket delays requests so they leave at a fixed rate. As a meter, it answers at once and rejects only when the level is full.">
-  <LeakyBucketDiagram />
-</Figure>
-
-So the real question is not "token bucket or leaky bucket". It is **reject or delay**. A meter (or
-a token bucket) rejects excess requests and lets the client decide what to do. A queue holds them
-and adds latency. The sim below runs the queue version, so you can see that latency appear.
-
-<RateLimiterSim algorithm="leaky-bucket" />
-
-**A worked example.** A queue of 5 slots leaking 1 request per second receives a burst of 8. The
-first request goes straight through, the next four wait 1, 2, 3 and 4 seconds, and the last three
-find the queue full and are rejected:
-
-```text title="output"
-leaky queue   5 slots, 1/s: burst of 8 -> waits [0.0, 1.0, 2.0, 3.0, 4.0], 3 rejected
-```
-
-That 4 second wait is the price of a smooth output: worse than a fast rejection for a user tapping
-a button, exactly right for a worker sending emails through a provider that allows 10 per second.
-nginx's `limit_req` is a leaky bucket whose `burst` is the queue size; adding `nodelay` turns it
-into a meter. We will run a real nginx config later.
-
-**When to pick it:** the queue version when the thing you are protecting cannot handle bursts at
-all (a fragile legacy system, a partner API with a strict per-second contract) and the caller can
-tolerate waiting. The meter version whenever you would pick a token bucket.
-
-#### The one-number version: GCRA
-
-The **generic cell rate algorithm** (GCRA) comes from the telephone networks of the 1990s, where
-it policed traffic on ATM links. It is a leaky bucket meter stored as a single timestamp instead of
-a level and a time, which makes it attractive when you keep state for millions of keys.
-
-It stores the **theoretical arrival time** (TAT): the moment the bucket would be empty again if no
-more requests came. Each request pushes the TAT forward by one **emission interval**,
-1 ÷ rate. A request is allowed as long as the TAT is no more than `burst × interval` seconds in the
-future.
-
-With a rate of 5 per second the interval is 0.2 s, and with a burst of 10 the TAT may run up to 2 s
-ahead of now. Ten requests in an instant push the TAT 2 s ahead; the eleventh would push it to
-2.2 s, so it is rejected. Run on the same traffic, GCRA gives exactly the token bucket's answers:
-
-```text title="output"
-GCRA          burst=10 r=5/s: burst of 40 -> 10 pass, one second later 5 more
-```
-
-It gives you `retry_after` for free: how far the TAT is beyond the allowed point. The [redis-cell](https://github.com/brandur/redis-cell) module
-implements it as a single Redis command, `CL.THROTTLE`.
-
-### Fixed window counter
-
-**Intuition.** Divide time into fixed blocks, say 10 seconds each, starting at 0, 10, 20 and so on.
-Keep one counter per caller per block. Every request adds one; once the counter reaches the limit,
-reject until the next block starts with a fresh counter.
-
-**How it works.** The key includes the window number: `ratelimit:{user}:{floor(now ÷ window)}`. In
-Redis this is one `INCR` (which creates the key at 1 if it does not exist) and, on the first request
-of a window, one `EXPIRE` so the key deletes itself afterwards. It is the cheapest algorithm there
-is: one small integer per caller per window, one atomic increment per request.
-
-**Where it breaks** is the boundary between windows. The diagram shows the worst case.
-
-<Figure caption="Ten requests right before the boundary count against window 1 and ten right after count against window 2. Each counter says 10 of 10, so all twenty are accepted almost together.">
-  <FixedWindowDiagram />
-</Figure>
-
-Each window, looked at alone, kept its promise. But a client watching the clock can get **twice the
-limit** through in a moment, and over any 10 second span that straddles a boundary it can get up to
-2 × limit. Try it: press "Hit the window boundary" and watch the "most in any 10 s" counter.
-
-<RateLimiterSim algorithm="fixed-window" />
-
-Two more problems are less obvious. When every client's window resets at the same instant, every
-waiting client comes back at once, and your traffic graph grows a spike every 60 seconds. And a
-client that burns an hourly limit in the first second is locked out for 59 minutes; Brandur Leach
-describes being locked out of GitHub's API for about 51 minutes exactly like this.
-
-**When to pick it:** long quotas where "resets at midnight" is clear to humans (a daily free tier,
-monthly credits), login-attempt counters, and anywhere a little imprecision is fine.
-
-### Sliding window log
-
-**Intuition.** Do what the limit literally says. Remember the time of every accepted request; when
-a new one arrives, forget timestamps older than the window, count the rest, and allow the request
-only if the count is below the limit.
-
-**How it works.** In Redis, a sorted set per caller with the timestamp as the score. Each request
-runs `ZREMRANGEBYSCORE` to delete old entries, `ZCARD` to count, and `ZADD` to record the new one,
-all inside one atomic script. The shaded band in the diagram is "the last 10 seconds"; it slides
-right as time passes, and timestamps that fall off its left edge are deleted.
-
-<Figure caption="The sliding log keeps every timestamp. Only the ones inside the last 10 seconds count, so the limit holds over every possible 10 second span, wherever window boundaries fall.">
-  <SlidingLogDiagram />
-</Figure>
-
-Because the band always ends at "now", there are no boundaries to exploit. The same boundary attack
-that doubled the fixed window gets exactly 10 through here.
-
-<RateLimiterSim algorithm="sliding-log" />
-
-**The cost is memory.** The log stores up to `limit` timestamps per caller. For a limit of 1,000
-requests per hour and one million active callers, that is up to a billion timestamps. Even at a
-lean 16 bytes each (a rough figure; Redis sorted sets cost more per entry), that is 16 GB for one
-rate limit. Figma, writing about their own limiter in 2017, estimated about 20 MB for a much
-smaller case, 500 requests per day across 10,000 users, and rejected the log for that reason.
-
-**Strengths:** exact, with a precise Retry-After. **Weaknesses:** memory and work grow with the
-limit.
-
-**When to pick it:** low limits on high-value actions, such as 5 password resets per hour, 10
-payouts per minute, or signups per IP, where exactness matters and the per-key log is short.
-
-### Sliding window counter
-
-**Intuition.** Get most of the log's accuracy for the price of a fixed window. Keep two counters,
-previous window and current. Assume the previous window's requests were spread evenly, so it
-counts in proportion to how much of it the sliding window still overlaps.
-
-**How it works.**
-
-```text
-estimate = previous_count × (1 − elapsed_fraction_of_current_window) + current_count
-```
-
-Allow the request if `estimate + 1` stays within the limit. The worked example in the diagram uses
-a limit of 100 per minute. The previous minute had 80 requests, the current minute has 30 so far,
-and we are 40% of the way into it. The sliding window still covers 60% of the previous minute, so 80
-× 0.6 = 48 of those requests still count, and the estimate is 48 + 30 = 78.
-
-<Figure caption="The sliding window counter assumes the previous window's requests were evenly spread, and counts only the share that still overlaps the last 60 seconds: 80 × 0.6 + 30 = 78.">
-  <SlidingCounterDiagram />
-</Figure>
-
-The runnable example checks the same arithmetic:
-
-```text title="output"
-sliding counter: prev 80, curr 30, 40% in -> estimate 78.0
-```
-
-In the sim, watch the weight at the top fall from 1 towards 0 as the current window ages, and the
-filled part of the previous bar shrink with it.
-
-<RateLimiterSim algorithm="sliding-counter" />
-
-**How accurate is the guess?** Cloudflare, which uses this approach, measured it against the exact
-answer on 400 million requests from 270,000 sources in 2017: 0.003% of requests were wrongly
-allowed or limited, and the estimated rate was on average 6% off the real one. On real traffic, the
-"evenly spread" assumption is close enough.
-
-On adversarial traffic it is not. If the previous window's requests were bunched at its very end,
-the counter discounts them as if spread out. Our comparison script sends ten requests at 9.9 s
-followed by a steady stream, and the counter let 19 through in one 10 second span against a limit
-of 10. But the most in any single second was still 10: the error is spread out, which is why it
-rarely matters.
-
-**Strengths:** two integers per caller, smooth behaviour at boundaries, close to exact on real
-traffic. **Weaknesses:** an approximation that can be fooled by unusual traffic shapes.
-
-**When to pick it:** published per-minute or per-hour limits on high-volume APIs. The Redis guide to
-rate limiting recommends it as the default for most APIs.
-
-## Choosing between them
-
-Here are all six side by side. The "most in any 10 s" column is the worst result from running each,
-configured as 10 per 10 seconds, on three traffic patterns: a boundary attack, a bursty overload,
-and a late burst followed by steady traffic.
-
-| Algorithm | State per caller | Bursts | Most in any 10 s (worst we saw) | Adds latency? | Best for |
-|---|---|---|---|---|---|
-| Token bucket | 2 numbers | Allowed, up to the bucket size | 19 | No | Most APIs; weighted costs |
-| GCRA | 1 timestamp | Same as token bucket | 19 | No | Token bucket semantics, millions of keys |
-| Leaky bucket (queue) | Queue, or 1 timestamp | Smoothed into a steady stream | 10 | Yes, by design | Protecting fragile downstreams |
-| Fixed window | 1 counter per window | Up to 2× at boundaries | 20 | No | Daily or monthly quotas, login attempts |
-| Sliding log | 1 timestamp per request | None beyond the limit | 10 | No | Low limits on high-value actions |
-| Sliding window counter | 2 counters | Mostly smoothed | 19, spread out | No | Published per-minute limits at scale |
-
-The comparison script prints three tables, identical in Python and JavaScript. Here is one:
-
-```text title="compare.py / compare.mjs output (excerpt)"
-Late burst, then steady: 110 requests
-  algorithm              accepted  peak in 10 s  peak in 1 s
-  token bucket                 20            19           10
-  GCRA                         20            19           10
-  leaky bucket (queue)         20            10            1
-  fixed window                 20            20           19
-  sliding log                  10            10           10
-  sliding counter              19            19           10
-```
-
-Read the "peak in 1 s" column too. In the boundary attack, the fixed window is the only algorithm
-that lets 20 through within one second, which is what makes its boundary problem dangerous. The
-token bucket's 19 in 10 seconds is spread over time, which your backend handles far better.
-
-The compare sim feeds the same requests to all five. Hit the window boundary, then send a burst, and
-watch the rows diverge.
-
-<RateLimiterSim algorithm="compare" />
-
-**How to choose.** In practice I would start with a **token bucket per key**, because it is cheap,
-its two knobs map to the questions product people ask ("how fast on average, how much burst?"), and
-it handles weighted costs. Switch to a **sliding window counter** when you publish "N per minute"
-and customers will hold you to it. Use a **fixed window** for calendar quotas, a **sliding log** for
-small limits where exactness is worth the memory, and a **queue** only when delay is acceptable and
-the thing behind it truly cannot take a burst.
-
-:::tip[The algorithm matters less than the key]
-Teams spend days choosing between algorithms and minutes choosing the key. The key decides whether
-the limiter protects you at all. A perfect sliding log keyed on the load balancer's IP address
-rate limits everyone at once.
-:::
-
-## Build it yourself
-
-Four steps: a correct in-process limiter, a shared one in Redis, the HTTP side, and a client that
-behaves well when limited. Every file is in
-[examples/rate-limiting](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/rate-limiting),
-and every output on this page came from running them.
-
-### Step 1: a correct limiter in one process
-
-Here is the token bucket. The clock is passed in, so tests can move time by hand instead of
-sleeping.
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="limiters.py"
-# runnable version: examples/rate-limiting/python/limiters.py
-class TokenBucket:
-    """Bucket of `capacity` tokens, refilled at `rate` tokens per second. One request = one token.
-
-    The refill is computed lazily from elapsed time, so no background timer is needed and the
-    whole state is two numbers: tokens and the time we last looked.
-    """
-
-    def __init__(self, capacity: int, rate: float, clock: Clock = time.monotonic) -> None:
-        self.capacity = capacity
-        self.rate = rate
-        self.clock = clock
-        self.tokens = float(capacity)  # start full: a new client may burst immediately
-        self.updated = clock()
-
-    def try_acquire(self, cost: int = 1) -> Decision:
-        now = self.clock()
-        elapsed = max(0.0, now - self.updated)  # never refill backwards if the clock jumps
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-        self.updated = now
-        # A tiny tolerance: ten refills of 0.1 add up to 0.9999999999999999, not 1.0.
-        if self.tokens + 1e-9 >= cost:
-            self.tokens = max(0.0, self.tokens - cost)
-            return Decision(True, math.floor(self.tokens))
-        return Decision(False, 0, retry_after=(cost - self.tokens) / self.rate)
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="limiters.mjs"
-// runnable version: examples/rate-limiting/js/limiters.mjs
-/**
- * Bucket of `capacity` tokens, refilled at `rate` tokens per second. One request = one token.
- * The refill is computed lazily from elapsed time, so the state is two numbers.
- */
-export class TokenBucket {
-  constructor(capacity, rate, clock = monotonic) {
-    Object.assign(this, { capacity, rate, clock });
-    this.tokens = capacity; // start full: a new client may burst immediately
-    this.updated = clock();
-  }
-
-  tryAcquire(cost = 1) {
-    const now = this.clock();
-    const elapsed = Math.max(0, now - this.updated); // never refill backwards if the clock jumps
-    this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.rate);
-    this.updated = now;
-    // A tiny tolerance: ten refills of 0.1 add up to 0.9999999999999999, not 1.
-    if (this.tokens + EPS >= cost) {
-      this.tokens = Math.max(0, this.tokens - cost);
-      return decision(true, Math.floor(this.tokens));
-    }
-    return decision(false, 0, (cost - this.tokens) / this.rate);
-  }
-}
-```
-  </TabItem>
-</Tabs>
-
-That tolerance comment is there because of a real bug. The first version compared `tokens >= cost`
-exactly, ten refills of 0.1 added up to 0.9999999999999999, and the token bucket and GCRA, which
-must agree, came out 19 and 20. Floating-point time arithmetic deserves a small tolerance, in your
-code and in your Lua. The same file has the other five algorithms with the same `try_acquire`
-shape.
-
-### Step 2: share the count, atomically
-
-One process is not enough: every server must agree. The diagram shows the two common designs.
-
-<Figure caption="Counting alone with a share of the limit only works when traffic is spread evenly. One shared, atomic counter holds the limit however the load balancer spreads clients.">
+**A rate limiter maps each request to a key, keeps a small piece of state per key, and decides
+before any expensive work is done.** The algorithm chooses what that state is: two numbers for a
+token bucket, a counter per window, a list of timestamps. The architecture chooses where the state
+lives and who can see it. Almost every production failure of a limiter is one of four things: the
+wrong key, the state split across machines, the state seen late (a race or a sync delay), or the
+state unreachable (the store is down).
+
+<Figure caption="Counting alone with a share of the limit only adds up when the load balancer spreads every client evenly. One shared, atomic counter holds the limit however traffic is spread, at the price of a round trip and a dependency.">
   <FleetCounting />
 </Figure>
 
-**Each server counts alone** and enforces `limit ÷ number of servers`. It adds no latency and works
-when the load balancer spreads every client evenly. It breaks when it does not: long-lived
-connections pin a client to one server, and autoscaling changes the number of servers without
-anyone updating the division (the AWS Builders' Library article on fairness covers both).
+The top half has no dependency and no latency, and is right only if traffic splits evenly. The
+bottom half is exact, and every request now waits on a network call to a store that can be slow,
+contended or down. Real systems sit somewhere between the two, and most of this page is about
+where.
 
-**One shared counter** in a store such as Redis gives one true count, for a network round trip per
-request (usually well under a millisecond inside a data centre) and a new dependency. And it is only
-correct if the check and the update happen as one indivisible step. Step through the race to see
-why.
+## How it works, piece by piece
 
-<StepThrough
-  title="Two servers, one counter, one token left"
-  actors={[
-    { id: 'a', label: 'Server A', kind: 'server' },
-    { id: 'redis', label: 'Redis', kind: 'store' },
-    { id: 'b', label: 'Server B', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'a', to: 'redis', label: 'GET → 9', text: 'A request from one client reaches server A. A reads the counter: 9 of a limit of 10.' },
-    { from: 'b', to: 'redis', label: 'GET → 9', text: 'At the same moment, another request from the same client reaches server B. B also reads 9, because A has not written anything yet.', tone: 'warn' },
-    { from: 'a', to: 'a', label: 'allow', text: 'A checks: 9 is under 10, so the request is allowed.' },
-    { from: 'b', to: 'b', label: 'allow', text: 'B makes the same check with the same stale number and also allows its request.', tone: 'warn' },
-    { from: 'a', to: 'redis', label: 'SET 10', text: 'A writes back 9 + 1 = 10.' },
-    { from: 'b', to: 'redis', label: 'SET 10', text: 'B also writes 10. Two requests were allowed, the client is really at 11, and the counter says 10. Under real load this repeats hundreds of times a second.', tone: 'bad' },
-    { from: 'a', to: 'redis', label: 'EVAL bucket', text: 'The fix: send the whole read, check and write as one Lua script. Redis runs a script from start to finish with no other command in between.', tone: 'ok' },
-    { from: 'redis', to: 'a', label: '1: allowed', text: 'A gets the last token.', tone: 'ok', dashed: true },
-    { from: 'b', to: 'redis', label: 'EVAL bucket', text: 'B sends the same script a moment later. It runs only after A\'s script has finished, so it sees the bucket A left behind.' },
-    { from: 'redis', to: 'b', label: '0: rejected', text: 'The bucket is empty, so B\'s request is rejected with a retry time. The limit held.', tone: 'bad', dashed: true },
-  ]}
-  summary="Check-then-act across a network is a race: two servers can read the same count before either writes. Doing the read, the decision and the write inside one Lua script makes the whole thing atomic, in one round trip."
-/>
+### The state per key: five algorithms in one pass
 
-Why not Redis's other tools? `MULTI`/`EXEC` cannot read a value and decide based on it, and `WATCH`
-means constant retries under exactly the contention a rate limiter faces. A Lua script reads,
-branches and writes in one atomic step and one round trip. Here is the token bucket as a script,
-shared by the Python and JavaScript examples.
+All examples use one limit: **10 requests per 10 seconds**; for a bucket, a capacity of 10
+refilling at 1 per second.
+
+**Token bucket.** Each key has a bucket of up to C tokens that refills at r tokens a second; a
+request takes a token or is rejected. No timer drips tokens in: when a request arrives, add
+`elapsed × r`, cap at C, then try to take one. This **lazy refill** makes the state two numbers
+(tokens, last update) and a million idle keys cost only storage. The retry time for a rejected
+request falls out of the same arithmetic: `(1 − tokens) ÷ r`.
+
+<Figure caption="A token bucket of 10 tokens refilling at 5 per second. Each request takes a token; a request that finds the bucket empty is rejected, and is told when the next token arrives.">
+  <TokenBucketDiagram />
+</Figure>
+
+The bound worth remembering: **over any T seconds a token bucket admits at most C + r × T.** That
+holds a surprise. "Capacity 10, refill 1 per second" sounds like "10 per 10 seconds", but a full
+bucket followed by 10 seconds of refill admits up to 20 in 10 seconds (the comparison script below
+measured 19). A token bucket bounds the average rate and the burst size, not the count in every
+window. If your docs promise "at most 100 in any minute", a window algorithm fits the promise
+better.
+
+**GCRA** (generic cell rate algorithm, from ATM networks) is the same limit stored as one timestamp:
+the **theoretical arrival time** at which the bucket would be empty again. Each request pushes it
+forward by `1 ÷ rate`; a request is allowed while it is no more than `burst ÷ rate` seconds ahead of
+now. One number per key matters when you keep millions of keys, and
+[redis-cell](https://github.com/brandur/redis-cell) implements it as one Redis command.
+
+**Leaky bucket** names two different mechanisms, which is where most confusion in this topic comes
+from. As a **meter**, it is a level that drains at a fixed rate and rejects when full: the token
+bucket upside down, accepting exactly the same requests. As a **queue**, requests wait in a
+fixed-size FIFO and leave at a fixed rate: nothing is rejected until the queue is full, but
+accepted requests are *delayed*. A queue of 5 leaking 1 per second turns a burst of 8 into waits of
+0, 1, 2, 3 and 4 seconds and 3 rejections. So the real choice is **reject or delay**: delay is right
+for a worker sending email through a provider capped at 10 per second, wrong for a user tapping a
+button. nginx's `limit_req` is a leaky bucket whose `burst` is the queue; `nodelay` turns it into a
+meter.
+
+**Fixed window counter.** One counter per key per window number (`rl:{key}:{floor(now ÷ W)}`), one
+`INCR` per request, and an expiry so old windows delete themselves. It is the cheapest algorithm
+there is, and it has the famous boundary problem.
+
+<Figure caption="Ten requests right before a window boundary count against window 1, ten right after count against window 2. Each counter says 10 of 10, so all twenty are accepted within a fraction of a second.">
+  <FixedWindowDiagram />
+</Figure>
+
+The less famous problems hurt more. Every key's window resets at the same instant, so every client
+that was limited comes back at once and your traffic graph grows a spike at every boundary (the
+client section shows how Retry-After makes this worse). And a client that burns an hourly limit in
+its first second is locked out for 59 minutes.
+
+**Sliding window log.** Store the timestamp of every accepted request (a Redis sorted set: remove
+entries older than W, count, add) and allow while fewer than N are inside the last W seconds. It is
+exact over every span, and its memory is O(limit) per key: 1,000 per hour for a million active
+keys is up to a billion timestamps, and even at a lean 16 bytes each that is 16 GB for one limit.
+Use it for small limits on valuable actions: 5 password resets an hour, 10 payouts a minute.
+
+**Sliding window counter.** Keep two counters, the previous window and the current one, and assume
+the previous window's requests were spread evenly:
+
+```text
+estimate = previous × (1 − fraction of the current window elapsed) + current
+```
+
+<Figure caption="With a limit of 100 per minute, 80 requests last minute, 30 so far this minute, and 40% of the way in, the sliding window still covers 60% of the previous minute: 80 × 0.6 + 30 = 78.">
+  <SlidingCounterDiagram />
+</Figure>
+
+How wrong is "evenly spread"? Cloudflare compared it with exact counting on 400 million requests
+from 270,000 sources in 2017: 0.003% of requests were wrongly allowed or limited
+([Cloudflare](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/)). Adversarial
+traffic does worse: our comparison script puts ten requests at 9.9 s followed by a steady stream, and
+the counter admits 19 in one 10-second span. The error is spread over the window, though; the most
+in any single second stayed at 10.
+
+Here is the token bucket on its own, then all five on the same traffic. Press "Send a burst of 20"
+in the first; in the second, press "Hit the window boundary".
+
+<RateLimiterSim algorithm="token-bucket" />
+
+<RateLimiterSim algorithm="compare" />
+
+In the compare run, only the fixed window row lets the second group of ten through, which is the
+2× boundary effect with your own eyes. The token bucket lets a burst through at once and then
+trickles; the leaky bucket queue lets the same requests out one per second.
+
+### Many nodes, one limit
+
+Put that state on N gateway nodes and you have three designs.
+
+**Each node counts alone, with the full limit.** This is what you get by default from nginx's
+`limit_req`, Envoy's local rate limit filter, or a per-process library: the state is per instance
+(shared across the workers of one nginx or one Envoy, not across machines). A client spread over k
+nodes gets up to k times the limit.
+
+**Each node counts alone, with limit ÷ N.** Now the sum is right only if traffic splits evenly, and
+it rarely does. HTTP/2 and gRPC clients hold one long-lived connection, so a layer 4 balancer pins
+the whole client to one node (the [proxy and load balancer page](/traffic/proxy-lb-gateway/) shows
+why): a client paying for 100 a second gets 10. Autoscaling changes N without anyone changing the
+division, usually during the spike the limit was for. And randomness alone costs you: in the sim
+below, a client sending exactly 100 a second, spread evenly over 10 nodes that each allow 10, has
+about 12% of its requests rejected, because each node sees a random 10-ish per second, not exactly
+10.
+
+**One shared counter.** Every node asks the same store. The number is exact, and it costs a round
+trip per request (usually well under a millisecond inside one zone), a dependency in the request
+path, and a **hot key** when one large customer sends a big share of all traffic to one Redis key.
+
+**The middle ground: count locally, sync periodically.** Each node admits against its last view of
+the shared total plus what it admitted itself since, and every S milliseconds adds its local count
+to the shared counter and reads the total back. Kong's Rate Limiting Advanced plugin exposes
+exactly this knob as `sync_rate`: 0 means synchronous, -1 means local only, and a positive value is
+the sync interval in seconds, minimum 20 ms ([Kong docs](https://developer.konghq.com/plugins/rate-limiting-advanced/), as of
+October 2026). Its docs note the shared counters are accurate only when the sync is synchronous.
+
+The error of the middle ground has a shape you can reason about. Between syncs, each node is blind
+to what the others admitted, so after the shared total reaches the limit, up to about **client rate
+× S** more requests get through before every node learns about it. A client sending 300 a second
+with a 200 ms sync gets about 60 extra per window. Here are all four on the same traffic:
+
+<FleetSim />
+
+With the defaults, the four lanes average about 298, 100, 100 and 155 admitted per second (seed 42).
+Slide the sync interval: at 20 ms the synced lane admits about 107, at 100 ms about 128, at 500 ms
+about 232, close to the "client rate × S" estimate. Set the client to reach 1 node and the 100 ÷ N
+lane falls to 10 while the shared lane stays at 100. The shared lane is the only one that holds the
+promise in every setting, and the only one with a network call on every request.
+
+Two production designs sit on this spectrum on purpose. Envoy recommends running its **local**
+limit (a token bucket per Envoy process) in front of its **global** limit (a gRPC call to a rate
+limit service backed by Redis): the local bucket absorbs bursts cheaply and protects the global
+service, and the global one gives the fleet-wide answer
+([Envoy](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/global_rate_limiting)).
+Cloudflare does not share counters between data centres at all: anycast routing sends one client to
+one data centre, so each counts on its own, and once a client is over the threshold a "mitigate"
+flag is cached on every server so later requests check a local flag instead of a counter.
+
+:::note[From the trenches]
+Decide how wrong your limit may be before choosing the design. "Never more than 100 a second,
+ever" needs a shared atomic counter and its latency. "About 100 a second, a few percent over during
+bursts" is a synced counter, and costs a fraction of the round trips. Most public APIs are honestly
+the second; AWS's API Gateway docs call its throttling limits "targets rather than guaranteed
+request ceilings".
+:::
+
+### Check-then-act: the race that grows with load
+
+A shared counter is exact only if the check and the update happen as one step. The naive version
+does `GET count`, compares it with the limit in the app, then `SET count + 1`. Between the store
+answering the GET and the SET arriving, a full round trip passes, and every other request whose GET
+lands in that gap reads the same, already stale, count. Each SET then overwrites the others, so the
+increments are lost too: that is how line 4 above ended with 20 admitted and a stored count of 1.
+
+How much does it let through? Each write hides the requests that arrive during its round trip, so
+the admitted count is about **limit × (1 + rate × round trip)**. At 100 requests a second and a 1 ms
+round trip, that is 100 × 1.1, invisible. At 1,000 a second it is 2× the limit, and at 3,000 a
+second, 4×. The race is not a rare corner case; it is a multiplier that grows with exactly the load
+the limiter exists for.
+
+<RaceSim />
+
+The sim's defaults (1,000 req/s, 1 ms) admit about 198 a second in the two-step lane against 100 in
+the atomic lane; at 5 ms the two-step lane admits about 604. This is why a limiter can pass every
+test in staging, where one laptop sends 50 requests a second, and fail on the first busy day.
+
+**The fixes, in order of preference:**
+
+- For a **counter**, `INCR` is already atomic: it returns the new value, and you reject if it is
+  over the limit. No read-then-write exists. The only trap is setting the expiry: `INCR` then
+  `EXPIRE` as two commands leaves a counter with no expiry if the process dies between them, and
+  that key is over the limit forever. Use one script, or `SET key 0 EX 60 NX` before the `INCR`.
+- For **state with several fields** (a token bucket's tokens and timestamp), the read, the decision
+  and the write must run inside the store. A **Lua script** does that: Redis runs it from start to
+  finish with no other command in between, in one round trip. `MULTI`/`EXEC` cannot branch on a
+  value it read, and `WATCH` retries under exactly the contention a limiter sees
+  ([Redis tutorial](https://redis.io/tutorials/howtos/ratelimiting/)).
+
+Here is the token bucket as a Lua script, shared by the Python and JavaScript examples:
 
 ```lua title="token bucket script (inside redis_limiter.py and redis-limiter.mjs)"
 local key      = KEYS[1]
@@ -658,7 +346,7 @@ tokens = math.min(capacity, tokens + math.max(0, now - ts) * rate)
 
 local allowed, retry_after = 0, 0
 if tokens + 1e-9 >= cost then
-  tokens = math.max(0, tokens - cost)
+  tokens = math.min(capacity, math.max(0, tokens - cost))   -- a negative cost is a refund
   allowed = 1
 else
   retry_after = (cost - tokens) / rate
@@ -670,153 +358,280 @@ redis.call('PEXPIRE', key, math.ceil((capacity / rate) * 1000) + 1000)
 return { allowed, tostring(tokens), tostring(retry_after) }   -- Lua numbers become integers
 ```
 
-Three details in it matter more than they look:
+Four details matter more than they look. It reads **Redis's clock** with `TIME`: two app servers
+whose clocks differ by 300 ms would disagree about how many tokens had refilled. It sets an
+**expiry** on every key, so quiet clients disappear. It **returns strings**, because Redis converts
+Lua numbers to integers on the way out and 3.7 tokens would arrive as 3. And the `1e-9` is there
+because ten refills of 0.1 add up to 0.9999999999999999; without it the token bucket and GCRA in
+the examples disagreed, 19 against 20.
 
-- **It reads Redis's clock** with `TIME`. App servers' clocks drift apart; two that differ by
-  300 ms would disagree about how many tokens had refilled.
-- **It sets an expiry** on every key, so quiet callers disappear instead of piling up forever, the
-  same leak the naive version had.
-- **It returns strings.** Redis converts Lua numbers to integers on the way out, so 3.7 tokens would
-  arrive as 3.
+Two costs of Lua. A script blocks the whole Redis shard while it runs, so keep it to a handful of
+commands; a slow script stalls every client of that shard, not only the limiter. And in Redis
+Cluster all keys a script touches must live in the same slot, so a script reading two keys for one
+tenant needs a hash tag such as `rl:{tenant42}:minute` and `rl:{tenant42}:day`. Run against a real
+Redis, with twenty threads racing for ten tokens:
 
-The application loads the script once, then calls it by its hash. The important part is what
-happens when Redis is unreachable:
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="redis_limiter.py"
-# runnable version: examples/rate-limiting/python/redis_limiter.py
-class RedisTokenBucket:
-    def __init__(self, client: redis.Redis, capacity: int, rate: float) -> None:
-        self.capacity, self.rate = capacity, rate
-        self.script = client.register_script(TOKEN_BUCKET_LUA)  # sent once, then run by hash
-
-    def try_acquire(self, key: str, cost: int = 1) -> Result:
-        try:
-            allowed, tokens, retry = self.script(keys=[f"rl:{key}"], args=[self.capacity, self.rate, cost])
-        except redis.RedisError as err:
-            # Fail open: a broken limiter should not become a broken API. Alert on this log.
-            log.warning("rate limiter unavailable, allowing request: %s", err)
-            return Result(True, self.capacity, 0.0)
-        return Result(bool(allowed), float(tokens), float(retry))
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="redis-limiter.mjs"
-// runnable version: examples/rate-limiting/js/redis-limiter.mjs
-  /** @returns {Promise<{ allowed: boolean, tokens: number, retryAfter: number }>} */
-  async tryAcquire(key, cost = 1) {
-    try {
-      const [allowed, tokens, retry] = await this.#run(key, cost);
-      return { allowed: allowed === 1, tokens: Number(tokens), retryAfter: Number(retry) };
-    } catch (err) {
-      // Fail open: a broken limiter should not become a broken API. Alert on this log.
-      console.warn(`WARNING ratelimit: rate limiter unavailable, allowing request: ${err.message}`);
-      return { allowed: true, tokens: this.capacity, retryAfter: 0 };
-    }
-  }
-```
-  </TabItem>
-</Tabs>
-
-**Fail open** means that if the limiter cannot decide, the request goes through. For most APIs this
-is right: the limiter exists to protect availability, so it must never become the reason the API is
-down. Stripe and Envoy both fail open. The short timeouts matter as much as the `try`: a limiter
-that waits 30 seconds for a dead Redis has not failed open, it has failed slowly, so both examples
-set 100 ms timeouts. In Node, `disableOfflineQueue` also stops node-redis quietly queueing commands
-while it reconnects.
-
-The example runs against a real Redis (8.10.2 here) and prints:
-
-```text title="redis_limiter.py output"
-connected to Redis 8.10.2
-race, GET then SET: 19 of 20 accepted (limit 10)
+```text title="redis_limiter.py output (first lines)"
+connected to Redis 7.0.15
+race, GET then SET: 20 of 20 accepted (limit 10)
 race, Lua script:   10 of 20 accepted (limit 10)
-12 quick requests:  [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429, 429]
-the 429 said:       Retry-After: 1   RateLimit: "default";r=0;t=5
-                    RateLimit-Policy: "default";q=10;w=5
-WARNING ratelimit: rate limiter unavailable, allowing request: Timeout connecting to server
-Redis down:         allowed=True (failed open, see the warning above)
 ```
 
-The "GET then SET" line changes from run to run (anywhere from 15 to 20 across our runs); the Lua
-line said 10 every time. A number that wobbles against one that does not: that is what a race
-condition looks like in practice. The `RateLimit` headers come from a small `headers()` method in
-the same file.
+The GET-then-SET line can change from run to run, because it depends on thread timing; the Lua
+line says 10 every time. A number that wobbles next to one that does not is what a race looks like
+from the outside.
 
-### Step 3: speak HTTP clearly
+### When the store is slow or down
 
-A rejected client should learn that it was rate limited (not that the server broke), when to come
-back, and ideally how close it was to the limit.
+The shared counter is now a dependency of every request. When it stops answering, the limiter has
+three honest choices, and it must make one inside the request:
 
-- **Status 429**, not 503. A 503 sends clients and dashboards looking for an outage; a 429 means
-  "you, specifically, slow down". (nginx defaults to 503, hence `limit_req_status 429` below.)
-- **Retry-After** in whole seconds, the one header every HTTP client library knows about.
-- **RateLimit and RateLimit-Policy**, from the IETF draft `draft-ietf-httpapi-ratelimit-headers-11`
-  (as of October 2026 it is still a draft, version 11 of May 2026, not yet an RFC). `RateLimit-Policy:
-  "default";q=10;w=5` describes the policy: a quota of 10 per 5 second window. `RateLimit:
-  "default";r=0;t=5` reports the current state: 0 remaining, and 5 seconds of effective window.
-  The draft says that when both are present, Retry-After wins.
+- **Fail open**: allow the request. The API stays up and is unprotected. Stripe and Envoy both
+  default to this; Envoy's global limit only rejects on errors if you set `failure_mode_deny`.
+- **Fail closed**: reject. Right for limits that protect money or security: a login endpoint, OTP
+  SMS sends, payouts. Wrong for a product catalogue, where your limiter has now caused an outage.
+- **Fall back to a local share**: each node enforces `limit ÷ N` from memory until the store
+  returns. Kong's AI gateway documents the related behaviour of continuing to count locally when
+  Redis is lost, so the fleet can exceed the limit, but each node stays bounded.
 
-Before the draft, every API invented its own headers, and you will meet them for years:
-`X-RateLimit-Limit`, `-Remaining` and `-Reset` (GitHub, Discord and others). Read each API's docs:
-`X-RateLimit-Reset` is a Unix timestamp at GitHub and "seconds from now" elsewhere.
+The fleet sim above has a "Take the store down for 3 s" button. Press it: the shared lane, which
+fails open, jumps from 100 to whatever the client sends; the synced lane falls back to each node's
+local count and admits up to the full limit per node. With the client at 1,000 req/s, both admitted
+between 940 and 1,013 a second during the outage.
 
-The last piece of the HTTP layer is choosing the key, carefully:
+The example implements all three, logging the transition once instead of once per request (a
+limiter that logs every failed call during an outage adds a logging outage to the Redis one):
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
 ```python title="redis_limiter.py"
 # runnable version: examples/rate-limiting/python/redis_limiter.py
-TRUSTED_PROXIES = {"127.0.0.1"}  # the addresses of YOUR load balancers, nothing else
-
-
-def client_key(peer: str, api_key: str | None, forwarded_for: str | None) -> str:
-    """Who to count. An API key beats an IP. X-Forwarded-For is only believed when it was
-    added by our own proxy; anyone else can type whatever they like into that header."""
-    if api_key:
-        return f"key:{api_key}"
-    if forwarded_for and peer in TRUSTED_PROXIES:
-        return "ip:" + forwarded_for.split(",")[-1].strip()  # the address our proxy saw
-    return f"ip:{peer}"
+def try_acquire(self, key: str, cost: int = 1) -> Result:
+    try:
+        allowed, tokens, retry = self.script(keys=[f"rl:{key}"], args=[self.capacity, self.rate, cost])
+        self.down = False
+        return Result(bool(allowed), float(tokens), float(retry))
+    except redis.RedisError as err:
+        if not self.down:  # log the transition once, not once per request
+            log.warning("rate limiter store unavailable, failing %s: %s", self.when_down, err)
+            self.down = True
+    if self.when_down == "closed":
+        return Result(False, 0.0, 1.0)
+    if self.when_down == "local":
+        # This node's share of the limit. Assumes the load balancer spreads clients evenly.
+        bucket = self.local.setdefault(key, TokenBucket(self.capacity // self.nodes, self.rate / self.nodes))
+        d = bucket.try_acquire(cost)
+        return Result(d.allowed, float(d.remaining), d.retry_after)
+    return Result(True, float(self.capacity), 0.0)  # open: the API stays up, unprotected
 ```
   </TabItem>
   <TabItem label="JavaScript">
 ```js title="redis-limiter.mjs"
 // runnable version: examples/rate-limiting/js/redis-limiter.mjs
-const TRUSTED_PROXIES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']); // YOUR load balancers only
-
-/**
- * Who to count. An API key beats an IP. X-Forwarded-For is only believed when it was added
- * by our own proxy; anyone else can type whatever they like into that header.
- */
-export function clientKey(peer, apiKey, forwardedFor) {
-  if (apiKey) return `key:${apiKey}`;
-  if (forwardedFor && TRUSTED_PROXIES.has(peer)) return `ip:${forwardedFor.split(',').at(-1).trim()}`;
-  return `ip:${peer}`;
+async tryAcquire(key, cost = 1) {
+  try {
+    const [allowed, tokens, retry] = await this.#run(key, cost);
+    this.down = false;
+    return { allowed: allowed === 1, tokens: Number(tokens), retryAfter: Number(retry) };
+  } catch (err) {
+    if (!this.down) console.warn(`WARNING ratelimit: rate limiter store unavailable, failing ${this.whenDown}: ${err.message}`);
+    this.down = true; // log the transition once, not once per request
+  }
+  if (this.whenDown === 'closed') return { allowed: false, tokens: 0, retryAfter: 1 };
+  if (this.whenDown === 'local') {
+    // This node's share of the limit. Assumes the load balancer spreads clients evenly.
+    if (!this.local.has(key)) this.local.set(key, new TokenBucket(Math.floor(this.capacity / this.nodes), this.rate / this.nodes));
+    const d = this.local.get(key).tryAcquire(cost);
+    return { allowed: d.allowed, tokens: d.remaining, retryAfter: d.retryAfter };
+  }
+  return { allowed: true, tokens: this.capacity, retryAfter: 0 }; // open: the API stays up, unprotected
 }
 ```
   </TabItem>
 </Tabs>
 
-`X-Forwarded-For` is a header a proxy adds to say "I received this request from address X". Proxies
-append to it, so the rightmost entry is the one your own proxy wrote; everything to its left came
-from the client, who can write anything. Trusting the leftmost entry lets an attacker pick a fresh
-"IP address" for every request.
+That `try` is only half of failing open. The other half is how long the call takes to fail, and the
+client libraries' defaults are built for caches and queues, where waiting is better than an error.
+Here is the same limiter pointed at a Redis that is not running, first with the library's default
+client and then with retries off:
 
-:::danger[Never trust a forwarded header blindly]
-Read `X-Forwarded-For` only when the request came from your own proxy, and read the entry your
-proxy added. Trust it from anyone and attackers choose their own key. Trust it from no one and,
-behind a load balancer, every user shares the load balancer's address.
+```text title="redis_limiter.py output (Redis down)"
+Redis down, default client: allowed=True after 4.55 s
+Redis down, retries off:    allowed=True after 0.00 s
+Redis down, 12 quick requests from one key:
+  when_down=open    12 allowed
+  when_down=closed   0 allowed
+  when_down=local    5 allowed
+```
+
+The default redis-py 8.1 client, as installed for this page, retries a failed connection 10 times
+with exponential backoff capped at 1 s; across runs one call took 3.0 to 4.6 s to "fail open",
+despite 50 ms socket timeouts. The default node-redis client is worse in a different way: it
+reconnects forever and queues commands while it does, so the same call had no answer after 3 s.
+**A limiter that fails open after 4 seconds has not failed open; it has failed slowly**, holding a
+worker for every request while Redis is down. Both examples build the client with timeouts in tens
+of milliseconds, retries off (`Retry(NoBackoff(), 0)` in Python) and, in Node,
+`disableOfflineQueue` and no reconnect loop.
+
+:::danger[Test the failure, not only the limit]
+Stop Redis in staging under load and watch the API's latency, not only its error rate. The
+outage you are looking for is the one where every request waits for the limiter's client to give
+up.
 :::
 
-### Step 4: the other side of the wire
+### Who is the key?
 
-Most of the damage in the opening story was done by the client side, so the last example is a
-client. It sends 30 requests to a small API limited to a burst of 5 and 5 per second, three ways:
-retrying at once; waiting the Retry-After plus a random **jitter** that grows with each attempt;
-and pacing itself with a `Pacer`, a client-side token bucket that waits for a token instead of
-failing. Here are the retry loop, polite or not, and the pacer:
+The algorithm matters less than the key. A perfect sliding log keyed on the wrong thing protects
+nothing, or limits everyone at once. Each layer of a request's path knows a different key, and the
+right limit lives where its key is known:
+
+<Figure caption="A request can be rate limited at every layer it passes through, and each layer keys on what it knows: the edge sees IP addresses, the gateway sees API keys, the service sees users and routes.">
+  <Layers />
+</Figure>
+
+Behind any proxy, the socket address the app sees is the proxy's. The client's address arrives in
+`X-Forwarded-For`, which each proxy appends to, and which the client can also write. So the header
+is a list in which only the entries your own proxies appended are true:
+
+<Figure caption="Each hop appends the address it saw. The leftmost entry is whatever the client typed. Read from the right, skip addresses that belong to your own proxies, and the first one left is the real client.">
+  <ForwardedChain />
+</Figure>
+
+Trusting the leftmost entry lets an attacker choose a fresh key for every request. Trusting the
+header from a connection that did not come from your proxy does the same. Trusting nothing means
+every user shares the load balancer's address:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="redis_limiter.py"
+# runnable version: examples/rate-limiting/python/redis_limiter.py
+# YOUR load balancers and CDN, nothing else. Real CDNs publish address ranges; check ranges then.
+TRUSTED_PROXIES = {"127.0.0.1", "10.0.0.5", "198.51.100.2"}
+
+
+def client_key(peer: str, api_key: str | None, forwarded_for: str | None) -> str:
+    """Who to count. An API key beats an IP. X-Forwarded-For is only believed when the
+    connection came from our own proxy, and only the entries our proxies appended."""
+    if api_key:
+        return f"key:{api_key}"
+    if peer not in TRUSTED_PROXIES or not forwarded_for:
+        return f"ip:{peer}"  # a direct connection: the socket address is the only truth
+    hops = [hop.strip() for hop in forwarded_for.split(",")]
+    for hop in reversed(hops):  # right to left: the newest entries were added by our proxies
+        if hop not in TRUSTED_PROXIES:
+            return f"ip:{hop}"  # the first address that is not one of ours
+    return f"ip:{hops[0]}"
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="redis-limiter.mjs"
+// runnable version: examples/rate-limiting/js/redis-limiter.mjs
+// YOUR load balancers and CDN, nothing else. Real CDNs publish address ranges; check ranges then.
+const TRUSTED_PROXIES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', '10.0.0.5', '198.51.100.2']);
+
+/**
+ * Who to count. An API key beats an IP. X-Forwarded-For is only believed when the connection
+ * came from our own proxy, and only the entries our proxies appended.
+ */
+export function clientKey(peer, apiKey, forwardedFor) {
+  if (apiKey) return `key:${apiKey}`;
+  if (!TRUSTED_PROXIES.has(peer) || !forwardedFor) return `ip:${peer}`; // direct: the socket is the truth
+  const hops = forwardedFor.split(',').map((hop) => hop.trim());
+  // Right to left: the newest entries were added by our proxies. Take the first that is not ours.
+  return `ip:${hops.findLast((hop) => !TRUSTED_PROXIES.has(hop)) ?? hops[0]}`;
+}
+```
+  </TabItem>
+</Tabs>
+
+```text title="output"
+key via LB:         ip:203.0.113.7
+key, direct caller: ip:203.0.113.9
+```
+
+:::danger[A real outage: the limiter that saw one client]
+On 24 October 2025, PostHog added an IP-based rate limit to its feature-flag endpoint. The
+middleware did not read `X-Forwarded-For` by default, so it saw every request as coming from the
+load balancer, and for 72 minutes about 97% of flag requests worldwide got a 429. It had been
+tested directly against the service, not behind the production load balancer, and nothing alerted
+on the 429 rate: detection took 62 minutes and came from customers
+([PostHog postmortem](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages)).
+:::
+
+Even a correctly read IP is a weak key. **Carrier-grade NAT** puts thousands of mobile users behind
+one IPv4 address, so a per-IP limit punishes all of them for one bad phone. IPv6 has the opposite
+problem: one attacker controls billions of addresses, so per-address IPv6 limits are usually applied
+to the whole /64. An API key is better, with its own trap: one customer running 200 legitimate
+servers on one key looks exactly like one abuser. Key on what you bill, and use IP limits only at
+the edge, against floods, where nothing else is known yet.
+
+### Count cost, not requests
+
+A 1 ms cache read and a 30-second report export are both "one request". When their costs differ by
+four orders of magnitude, a request count is a poor limit. Two answers exist.
+
+**Weighted tokens.** Charge each request what it costs: the Lua script's `cost` argument. GitHub's
+REST API does this in its secondary limits: 900 points a minute, where most reads cost 1 point and
+most writes cost 5, alongside a cap of 100 concurrent requests
+([GitHub docs](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), as
+of October 2026).
+
+**Concurrency limits** for long requests: count what is in flight, not what started. Stripe runs one
+next to its rate limiter, 50 concurrent requests in live mode as of October 2026, because a few slow
+endpoints exhaust workers long before they exhaust a per-second budget
+([Stripe](https://docs.stripe.com/rate-limits)).
+
+Cost limits have a problem request counts never had: **you often do not know the cost until the
+request is done.** A language model's reply length is unknown when the request arrives. Azure
+OpenAI, for example, documents that its tokens-per-minute limit is charged at arrival with an
+estimate built from the prompt and `max_tokens`, not from the tokens later billed
+([Microsoft Learn](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota), as of October
+2026). So set `max_tokens` close to what you need, or your limit fills with tokens you never use.
+
+The general pattern is **reserve, then refund**: debit the worst case up front, then return the
+unused part when the real cost is known. The Lua script accepts a negative cost as a refund, capped
+at the bucket's capacity:
+
+```text title="redis_limiter.py output (cost)"
+cost: reserve 4,000 of 10,000  -> 6,000 left
+cost: a 7,000 call now         -> 429, retry in 6.0 s
+cost: refund the unused 2,400  -> 8,400 left, the 7,000 call is allowed
+```
+
+A request that reserved 4,000 tokens (1,000 of prompt plus `max_tokens` of 3,000) and used 600 of
+its 3,000 blocks a 7,000-token call until it refunds. Without the refund, the next call waits six
+seconds for tokens nobody used. With a fleet of nodes, the refund is one more round trip, and a node
+that crashes between reserve and refund leaks the reservation until the bucket refills.
+
+### 429, Retry-After and the client on the other side
+
+The limiter's answer is a message to a program, and the program's reaction decides whether the
+limit calms traffic or multiplies it.
+
+**Say 429, not 503.** A 503 sends clients and dashboards looking for an outage and makes many
+clients retry harder; a 429 means "you, specifically". nginx answers 503 by default, so set
+`limit_req_status 429`. Stripe adds a `Stripe-Rate-Limited-Reason` header naming the limit that was
+hit, worth copying. For state, the IETF draft `draft-ietf-httpapi-ratelimit-headers-11` defines
+`RateLimit-Policy: "default";q=10;w=5` (quota and window) and `RateLimit: "default";r=0;t=5`
+(remaining and seconds to reset); as of October 2026 it is still a draft, and before it every API
+invented `X-RateLimit-*` headers with different meanings (`X-RateLimit-Reset` is a Unix timestamp
+at GitHub and "seconds from now" elsewhere).
+
+**Retry-After synchronises clients.** With a fixed window, every client limited during a window is
+told to come back at the same boundary, so they all return in the same millisecond, and most are
+limited again. The fix belongs on both sides: servers that use windows can add a little random
+spread to Retry-After, and clients add **jitter**: wait at least Retry-After, plus a random extra
+that grows with each attempt
+([AWS Architecture Blog](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)).
+
+**Do rejected requests count?** If a 429 consumes nothing, a client in a tight retry loop keeps
+getting a slice through and never notices. If rejected requests count, a hammering client stays
+locked out until it stops, which teaches it. Discord goes further: 10,000 invalid requests in 10
+minutes earns a temporary IP ban (as of October 2026). Pick one deliberately.
+
+The example client sends 30 requests to an API limited to a burst of 5 and 5 a second, three ways:
+retrying at once, honouring Retry-After with jitter, and pacing itself with a client-side token
+bucket a little under the limit.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -850,7 +665,6 @@ class Pacer:
   <TabItem label="JavaScript">
 ```js title="client.mjs"
 // runnable version: examples/rate-limiting/js/client.mjs
-/** @returns {Promise<{ succeeded: boolean, attempts: number }>} */
 async function getWithRetry(url, polite, attempts = 6) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const { status, retryAfter } = await get(url);
@@ -882,61 +696,92 @@ class Pacer {
 </Tabs>
 
 ```text title="client.py output"
-1. retry at once              6/30 ok  145 rejected  151 requests sent   0.5 s
-2. Retry-After + jitter      30/30 ok    5 rejected   35 requests sent   6.4 s
+1. retry at once              5/30 ok  150 rejected  155 requests sent   0.2 s
+2. Retry-After + jitter      30/30 ok    5 rejected   35 requests sent   6.3 s
 3. client-side bucket 4.5/s  30/30 ok    0 rejected   30 requests sent   5.6 s
 ```
 
-The impatient client sent five times as many requests and still lost most of its work (the exact
-numbers depend on your machine; the shape does not). The polite client got everything through. The
-paced client got everything through with zero rejections, and finished first. Pacing a little under
-the limit leaves room for clock differences and jitter, and it is what Stripe's documentation
-recommends for heavy integrations. Here is the same contract as a sequence:
+The impatient client sent five times the requests and finished a sixth of its work: every 429 it
+received cost the server a request anyway. The paced client got everything through with no
+rejections and finished first, which is why Stripe's docs recommend a client-side token bucket for
+heavy integrations. Google's SRE book describes a client-side version for whole services:
+**adaptive throttling**, where a client tracks its requests and the server's accepts over two
+minutes and starts dropping requests locally once requests exceed twice the accepts, so a rejected
+request often never reaches the server at all
+([Google SRE book](https://sre.google/sre-book/handling-overload/)).
 
-<StepThrough
-  title="A well-behaved client meets a limit"
-  actors={[
-    { id: 'client', label: 'Client', kind: 'client' },
-    { id: 'api', label: 'API', kind: 'server' },
-  ]}
-  steps={[
-    { from: 'client', to: 'api', label: 'GET /orders', text: 'The client has been sending steadily and, without knowing it, has used up its share.' },
-    { from: 'api', to: 'client', label: '429', text: 'The API rejects the request cheaply and says when to return: Retry-After: 2, with RateLimit: "default";r=0;t=2.', tone: 'bad', dashed: true },
-    { from: 'client', to: 'client', label: 'wait 2 s + jitter', text: 'The client waits at least the 2 seconds it was given, plus a random extra, so that a thousand clients limited at the same moment do not all return in the same millisecond.', tone: 'warn' },
-    { from: 'client', to: 'api', label: 'GET /orders', text: 'It tries again once.' },
-    { from: 'api', to: 'client', label: '200', text: 'Success, with RateLimit: "default";r=4;t=1, so the client can see how much room it has left.', tone: 'ok', dashed: true },
-    { from: 'client', to: 'client', label: 'pace to 4.5/s', text: 'From now on it paces itself with its own token bucket, a little under the limit, so it stops hitting 429s at all.', tone: 'ok' },
-  ]}
-  summary="The server rejects cheaply and says when to come back. The client waits at least that long, adds jitter, and then paces itself so it stays under the limit instead of bouncing off it."
-/>
+## Choosing between them
+
+The algorithm, configured as 10 per 10 seconds, on three traffic patterns (the "most in any 10 s"
+column is the worst we measured):
+
+| Algorithm | State per key | Bursts | Most in any 10 s | Adds latency? | Best for |
+|---|---|---|---|---|---|
+| Token bucket | 2 numbers | Up to the bucket size | 19 | No | Most APIs; weighted costs |
+| GCRA | 1 timestamp | Same as token bucket | 19 | No | Token bucket semantics, millions of keys |
+| Leaky bucket (queue) | Queue or 1 timestamp | Smoothed into a stream | 10 | Yes, by design | Protecting fragile downstreams |
+| Fixed window | 1 counter per window | Up to 2× at boundaries | 20 | No | Daily quotas, login attempts |
+| Sliding log | 1 timestamp per request | None beyond the limit | 10 | No | Small limits on valuable actions |
+| Sliding window counter | 2 counters | Mostly smoothed | 19, spread out | No | Published per-minute limits at scale |
+
+And where the state lives, which matters more:
+
+| Design | Accuracy | Cost per request | When the store is down | Pick it when |
+|---|---|---|---|---|
+| Local, full limit | Up to k× over | None | Not affected | Edge flood protection, per instance |
+| Local, limit ÷ N | Under when traffic is uneven | None | Not affected | Evenly spread, short-lived connections |
+| Shared, atomic | Exact | One round trip | Your choice: open, closed, local | The limit is a contract or protects money |
+| Local, synced every S | Over by about rate × S | One write per S per node | Keeps counting locally | High volume, a few percent over is fine |
+
+In practice I would start with a **token bucket per API key in Redis, behind one Lua script**,
+because its two knobs map to the questions product people ask ("how fast on average, how much
+burst?") and it takes weighted costs. Put a **local bucket at full limit in front of it** at every
+node, sized as a safety net rather than the real limit, so a Redis outage degrades to "per node"
+instead of "unlimited". Move to a synced counter when the round trips themselves become the cost.
+
+## Build it yourself
+
+Every file is in
+[examples/rate-limiting](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/rate-limiting),
+in Python and JavaScript, and every output on this page came from running them:
+
+- `naive_limiter` reproduces the four failures from the start of the page.
+- `limiters` has all six algorithms with an injectable clock, and `compare` runs them on the same
+  traffic.
+- `redis_limiter` is the production-shaped version: the Lua script, the GET-then-SET race next to
+  it, the key from `X-Forwarded-For`, 429 with `Retry-After` and the draft `RateLimit` fields, the
+  reserve-and-refund demo, and the three behaviours when Redis is down. It needs Redis and the
+  `redis` client library.
+- `client` is the three clients.
+
+The part of `redis_limiter` this page has not shown is the HTTP layer, and its output is the
+contract a client sees:
+
+```text title="redis_limiter.py output (HTTP)"
+12 quick requests:  [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429, 429]
+the 429 said:       Retry-After: 1   RateLimit: "default";r=0;t=5
+                    RateLimit-Policy: "default";q=10;w=5
+```
 
 ## How real systems do it
 
-The algorithms are simple. What separates real systems is the layering, the keys, and how they
-talk to clients. Numbers here change over time, so each is marked with when we checked.
+**Stripe** described four layers in 2017: a request rate limiter (a token bucket per user in
+Redis), a concurrent requests limiter, and two load shedders acting on fleet health, one reserving
+capacity for critical traffic. The rollout advice is the part to copy: launch each limiter in
+observation mode, fail open, and keep a switch to turn it off
+([Stripe blog](https://stripe.com/blog/rate-limiters)). As of October 2026 its API allows 100
+requests a second in live mode and 25 for most endpoints.
 
-**Stripe.** In a 2017 engineering post, Paul Tarjan described four layers: a **request rate
-limiter** (a token bucket per user, in Redis), a **concurrent requests limiter** for expensive
-endpoints, and two **load shedders** acting on the health of the whole fleet, one reserving 20% of
-capacity for critical requests. The rollout advice is the most useful part: launch every limiter in
-observation mode first, fail open, and keep a switch to turn it off. As of October 2026, Stripe
-allows 100 requests per second in live mode, 25 per second for most endpoints, and 50 concurrent
-requests. Each 429 carries a `Stripe-Rate-Limited-Reason` header naming the limit you hit, a good
-pattern to copy.
+**GitHub** moved its API limiter from Memcached, where unrelated cache data could evict live
+counters, to sharded Redis with Lua scripts and one primary per shard for writes
+([GitHub blog, 2021](https://github.blog/engineering/infrastructure/how-we-scaled-github-api-sharded-replicated-rate-limiter-redis/)).
+The post also describes a reset header that wobbled by a second between requests, because the
+script returned a relative TTL and the app added it to its own clock; storing the absolute reset
+time fixed it. The lesson generalises: compute times the client sees from one clock.
 
-**GitHub.** As of October 2026, GitHub's REST API allows 60 requests per hour unauthenticated (per
-IP) and 5,000 per hour for an authenticated user. On top sit **secondary limits**, the more
-interesting design: at most 100 concurrent requests, and 900 **points** per minute where most reads
-cost 1 point and most writes cost 5. That is weighted rate limiting: the cost of a request, not
-only its existence, gets counted.
-
-**Cloudflare.** Its 2017 post is where the sliding window counter's accuracy numbers come from. The
-architecture is as instructive: counters are not shared between data centres at all. Anycast
-routing sends a given client to the same data centre, so each counts on its own. Once a client
-crosses the threshold, a "mitigate this client" flag is cached on every server, so later requests
-check a local flag instead of a counter.
-
-**nginx.** `limit_req` is a leaky bucket per key. A working edge config:
+**nginx** `limit_req` is a leaky bucket per key in a shared memory zone, shared by the workers of
+one nginx, not across nginx instances, so a fleet of nginx boxes is the "local, full limit" design.
+A working edge config:
 
 ```nginx title="nginx.conf"
 # runnable version: examples/rate-limiting/nginx/nginx.conf (run it with test-nginx.sh)
@@ -959,10 +804,7 @@ http {
 }
 ```
 
-Run against nginx 1.30.6, a burst of 20 parallel requests gets exactly 11 through (one at the
-rate, plus the burst of 10) and 9 rejections, and a second later the bucket has refilled 5:
-
-```text title="test-nginx.sh output"
+```text title="test-nginx.sh output (nginx 1.24.0)"
 burst of 20:
   11 200
   9 429
@@ -970,218 +812,182 @@ one second later, 5 more:
   5 200
 ```
 
-Two nginx details catch people out. `limit_req_dry_run on` logs what would have been rejected
-without rejecting anything, which is how to switch on any new limit. And a location that answers
-with `return` is never rate limited, because `return` runs in an earlier phase than `limit_req`. We
-tested it: at 1 per second, five parallel requests to a file got four rejections; the same location
-with `return 200` let all five through.
+A burst of 20 gets 11 through (one at the rate plus the burst of 10), and a second later 5 more
+have refilled. Two details catch people: `limit_req_dry_run on` logs what would be rejected
+without rejecting, which is how to switch on any new limit; and a location that answers with
+`return` is never rate limited, because `return` runs in an earlier phase than `limit_req`.
 
-**Envoy**, the proxy under most service meshes, offers **local** rate limiting (a token bucket in
-each Envoy process, no network call) and **global** rate limiting (a call to an external rate limit
-service over gRPC, the reference one built on Redis). Its docs recommend both: local limits absorb
-bursts cheaply and protect the global service, which gives the precise fleet-wide answer. Unless you
-set `failure_mode_deny`, it fails open.
-
-**AWS API Gateway** throttles with layered token buckets: per client, per method, per account, and
-per region. Its documentation honestly calls the limits "targets rather than guaranteed request
-ceilings". A distributed limiter is always somewhat approximate, and saying so beats pretending.
+**Envoy** and **Kong** were covered above: local in front of global, and a sync interval as a
+dial between accuracy and round trips. **AWS API Gateway** layers token buckets per client, per
+method, per account and per Region, and is candid that the result is best effort
+([AWS docs](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html)).
 
 ## Gotchas and war stories
 
-:::danger[A real outage: the limiter that saw one client]
-On 24 October 2025, PostHog added IP-based rate limiting to its feature-flag endpoint, as a
-protective measure after an incident a few days earlier. Its Rust rate limiting middleware did not
-trust `X-Forwarded-For` by default, so it saw every request as coming from the load balancer's IP
-address. For 72 minutes about 97% of flag evaluation requests worldwide got a 429. The change had
-been tested directly against the service, not behind the production load balancer, and there was
-no alert on the 429 rate, so it took 62 minutes and customer reports to detect.
-([PostHog's postmortem](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages))
+**Launch every limit in observation mode.** A new limit is a guess about real traffic. Run it in
+dry-run (nginx `limit_req_dry_run`, Envoy's shadow mode, a "would reject" log line) for a week,
+look at who would have been limited, then enforce. The PostHog outage is what skipping this step
+looks like.
+
+**Alert on the 429 rate you send, per key and in total.** A sudden rise in total 429s is your bug,
+not your customers'. A steady 429 rate for one key is a client that ignores Retry-After.
+
+**Local shares drift with autoscaling.** `limit ÷ N` written into config at N = 10 is a 2× looser
+limit at N = 20 and a 2× tighter one if a zone fails and N drops to 5. Compute N at runtime from the
+service registry, or do not split.
+
+**Hot keys.** One customer's key can draw a large share of all limiter calls onto one Redis shard.
+The AWS Builders' Library article on fairness suggests enforcing the very highest-volume keys
+locally, where they cannot overload a shared tracker
+([AWS Builders' Library](https://builder.aws.com/content/3Eupj3d2bo4fEvlzYbICMZNhQ3B/fairness-in-multi-tenant-systems)).
+
+:::caution[The limiter's cost is not free either]
+Rejecting a request still costs a TLS handshake, parsing, a key lookup and a round trip to the
+store. For cheap endpoints, a flood of rejected requests costs almost as much as serving them,
+which is why the edge, not the application, absorbs floods.
 :::
-
-The lessons: know what your key really is in production, test the limiter behind the real network
-path, roll it out in observation mode first, and alert on the rate of 429s you send.
-
-**A counter with no expiry locks someone out forever.** If you run `INCR` and then `EXPIRE` as two
-separate commands, a crash or timeout between them leaves a counter with no expiry. That client is
-now over the limit permanently. Put both in one script, or use `SET key 0 EX 60 NX` followed by
-`INCR`.
-
-**Fail open or fail closed, on purpose.** For a public read API, fail open. For a login endpoint or
-anything that sends SMS or moves money, a broken limiter can mean unlimited password guessing or a
-huge bill, so failing closed (or falling back to a strict local limit) may be safer. Decide per
-limit, write it down, and test it by stopping Redis in staging.
-
-**Per-server shares drift.** A limit enforced as `limit ÷ servers` quietly doubles when the fleet
-autoscales to twice the servers, usually during the very spike the limit was for.
-
-:::caution[IP addresses are a weak key]
-Carrier-grade NAT can put thousands of mobile users behind one public IPv4 address, so a per-IP
-limit punishes all of them for one bad phone. IPv6 has the opposite problem: one attacker can
-control billions of addresses, so per-address limits on IPv6 are usually applied to the
-whole /64 network instead. Prefer an API key or a user ID whenever the request carries one.
-:::
-
-**Decide whether rejected requests count.** If they count, a client stuck in a retry loop stays
-locked out until it stops, which is often what you want. If not, a hammering client keeps getting a
-fraction through. Discord goes further: 10,000 invalid requests in 10 minutes earns a temporary IP
-ban (as of October 2026).
-
-**Hot keys.** One huge customer means one Redis key receiving a large share of all limiter calls.
-The AWS fairness article suggests enforcing the highest-volume keys locally instead.
 
 ## Trade-offs and when not to use it
 
-A rate limiter adds a step, often a network call, to every request, and a dependency that can fail.
-Every key choice is unfair to someone: per IP punishes shared networks, per API key punishes the
-customer running a hundred legitimate servers on one key. And a 1 ms cache lookup and a 30 s report
-both count as "one request" unless you weight them.
+Every limiter adds a step, often a network call, to every request, and a dependency with failure
+modes of its own. Every key is unfair to someone: per IP punishes shared networks, per API key
+punishes the customer with many servers. Every fleet design trades accuracy for round trips, and
+the exact one is also the one that can take your API down with it.
 
-It also does not solve several problems it is often expected to solve:
+It does not solve the problems it is often expected to solve. It is not **overload protection**:
+ten thousand clients each under their limit still overwhelm you, which is load shedding's job. It
+is not **DDoS protection**: an attack from a million addresses sends a few requests from each and
+must be absorbed at the network edge. And it does not choose the numbers: teams usually start from
+observed traffic (what does the 99th-percentile customer send?) and add headroom.
 
-- **It is not overload protection.** Ten thousand clients each politely under their limit can
-  still overwhelm you. That is load shedding's job.
-- **It is not DDoS protection.** An attack from a million addresses sends a few requests from each;
-  it has to be absorbed at the network edge.
-- **It does not make limits right.** Choosing numbers is a product decision. Teams usually start
-  from observed traffic (what does the 99th percentile customer send?) and add headroom.
-
-**When not to use it:** inside a pipeline where you control both ends, such as a worker pulling
-from your own queue, backpressure and bounded queues are better: the consumer pulls at its own
-pace. For an internal service with one caller, a concurrency limit plus load shedding needs less
-machinery.
-
-:::note[From the trenches]
-The limits that cause trouble are rarely the ones that are too low. They are the ones nobody knew
-existed: a default left on in a gateway, a per-IP rule added in a hurry, a limit that made sense
-for last year's traffic. Treat every limit as configuration with an owner, a dashboard and a
-documented reason.
-:::
+**When not to use it:** inside a pipeline where you control both ends, such as a worker pulling from
+your own queue, backpressure and bounded queues are better, because the
+consumer pulls at its own pace and nothing is rejected. For an internal service with one or two
+callers, a concurrency limit plus load shedding needs less machinery.
 
 ## Interview corner
 
-"Design a rate limiter" is one of the most common system design interview questions: small enough
-for 45 minutes, yet it touches algorithms, distributed state, failure handling and API design. A
-strong answer is less about naming five algorithms and more about asking the right questions first.
+"Design a rate limiter" is common because it fits 45 minutes and touches algorithms, distributed
+state, failure handling and API design. Strong answers ask about the requirements first and spend
+their time on the distributed part.
 
-1. **"Design a rate limiter for our public API."** Start with requirements: the key, the limits,
-   how exact, the latency budget, behaviour when it is down. Then place it (gateway or middleware),
-   pick an algorithm with a reason, and keep state in a shared store with atomic updates.
-2. **"Which algorithm would you choose, and why?"** Compare at least token bucket and sliding window
-   counter on bursts, memory and precision, and pick one for this case. Mention the fixed window's
-   2× boundary problem.
-3. **"We have 50 servers. How do they share the limit?"** Local shares vs a central store, the
-   check-then-act race, and Lua for atomicity. Strong candidates mention the hybrid: a local bucket
-   absorbing bursts in front of a global one.
-4. **"What happens when Redis is down?"** Fail open vs fail closed per endpoint, millisecond
-   timeouts, and alerts on both the 429 rate and limiter errors.
-5. **"How much memory for 10 million users?"** A token bucket with key overhead is perhaps 100 bytes
-   per user, about 1 GB: one Redis instance. A sliding log at 1,000 entries per user does not fit.
+**"Design a rate limiter for our public API, running on 50 gateway nodes."** Clarify the key, the
+limit, how exact it must be and the latency budget. Then: token bucket or sliding window counter
+per key in Redis, one Lua script per decision, Redis's clock, keys with expiry. Strong candidates
+name the accuracy spectrum (local, shared, synced) and say which one the requirements pick.
 
-Interviewers also listen for the client side (429, Retry-After, jitter) and for knowing that rate
-limiting is not load shedding.
+**"Why not GET the counter, check it and SET it back?"** The race: every request that arrives
+during one round trip reads the same count, so admissions grow as limit × (1 + rate × round trip).
+`INCR` fixes a counter; a Lua script fixes multi-field state.
+
+**"Redis is down. What happens?"** Fail open, closed or to a local share, chosen per limit by what
+an unlimited minute would cost. Then the part most candidates miss: millisecond timeouts and no
+client retries, or "fail open" means seconds of latency.
+
+**"How much memory for 10 million keys?"** A token bucket in a Redis hash with key overhead is
+perhaps 100 bytes per key, about 1 GB: one instance. A sliding log at 1,000 entries per key does
+not fit. The sliding window counter is two integers.
 
 ## Check yourself
 
 <details>
-<summary>1. A token bucket holds 10 tokens and refills at 5 per second. The client has been idle for ten minutes, then sends 40 requests spread evenly over one second. About how many pass?</summary>
+<summary>1. Ten gateway nodes each allow 10 req/s for a key whose limit is 100. A gRPC client sends 80 req/s over one HTTP/2 connection. How many get through, and why?</summary>
 
-About 15. The bucket starts full, so the first 10 pass at once, and the 5 tokens that drip in during
-that second are taken as they arrive. The idle ten minutes only fill the bucket to its cap of 10.
-This is C + r × T with C = 10, r = 5, T = 1.
-
-</details>
-
-<details>
-<summary>2. A fixed window limit is 100 requests per minute, with windows starting on the minute. What is the most requests a client can get through in any 60 second span, and how?</summary>
-
-200. Send 100 in the last moments of one window (say 12:00:59) and 100 in the first moments of the
-next (12:01:00). Each window's counter reads 100, so all 200 pass, within about a second, and any 60
-second span covering that second contains all 200.
+About 10 a second. A layer 4 balancer assigns the single long-lived connection to one node, and
+that node allows its share of 10. The client is under its limit and still loses 87% of its
+requests. A shared counter, or per-request balancing at layer 7, fixes it.
 
 </details>
 
 <details>
-<summary>3. A sliding window counter has a limit of 100 per minute. The previous minute had 60 requests, the current minute has 50 so far, and we are 25% of the way into it. Is the next request allowed?</summary>
+<summary>2. A limiter uses GET, check, SET against Redis with a 2 ms round trip, limit 100 per second. A client sends 2,000 req/s. Roughly how many are admitted per second?</summary>
 
-The sliding window still covers 75% of the previous minute, so the estimate is 60 × 0.75 + 50 = 95.
-Adding this request makes 96, which is within 100, so it is allowed. Four more would be allowed
-right now, and more as the previous minute slides out.
-
-</details>
-
-<details>
-<summary>4. Your limit is 1,000 requests per minute per customer. You run 4 servers and each enforces 250 locally. Your load balancer keeps long-lived connections pinned to one server. What goes wrong?</summary>
-
-A customer whose traffic all lands on one server gets at most 250 per minute, a quarter of what
-they paid for. Local shares only add up when traffic is spread evenly, and they change whenever the
-number of servers changes. A shared counter, or local buckets in front of a shared store, fixes
-both.
+About 100 × (1 + 2,000 × 0.002) = 500, five times the limit. Every request arriving during one
+write's round trip reads the same count. With `INCR` or a Lua script it would be 100.
 
 </details>
 
 <details>
-<summary>5. Your limiter's Redis goes down. Should you fail open or fail closed for (a) a public product catalogue API, and (b) a login endpoint?</summary>
+<summary>3. Nodes count locally and sync to Redis every 500 ms. A client sends 300 req/s spread over all nodes against a limit of 100. Why does it get well over 100, and what are your two levers?</summary>
 
-(a) Fail open: the catalogue limiter exists to protect availability, so it must not cause an
-outage. Alert loudly and fix Redis. (b) Probably fail closed, or fall back to a strict per-server
-limit, because an unlimited login endpoint invites password guessing. The general rule: decide per
-limit, based on what an unlimited minute would cost.
+After the shared total reaches 100, every node keeps admitting until its next sync shows it the
+others' counts, which can be up to 500 ms of the client's traffic. The sim measured about 232 a
+second. Shorten the interval (more writes to Redis) or lower each node's local allowance between
+syncs.
+
+</details>
+
+<details>
+<summary>4. Your limiter fails open and Redis goes down. Latency on the whole API jumps to 4 seconds. Error rates are fine. What happened?</summary>
+
+The Redis client retried each failed call with backoff before raising, so every request waited
+seconds for the limiter to give up before failing open. Configure the limiter's client with
+timeouts in tens of milliseconds and no retries, and test it by stopping Redis under load.
+
+</details>
+
+<details>
+<summary>5. A language model API limits tokens per minute. Your requests use about 500 output tokens, but you send max_tokens of 8,000. What happens to your throughput, and why?</summary>
+
+If the limit is charged at arrival from the prompt plus `max_tokens`, as Azure OpenAI documents,
+each request reserves about 16 times what it uses, so you hit the limit after a sixteenth of the
+real usage. Set `max_tokens` near what you need. On your own limiter, reserve and then refund.
 
 </details>
 
 ## Recap
 
-- A rate limiter caps requests **per caller per period**, for fairness. It is not load shedding,
-  which protects the server's own health, and you usually need both.
-- **Choose the key carefully.** API key or user ID beats IP. Behind a proxy, read `X-Forwarded-For`
-  only from your own proxy, or you rate limit the proxy.
-- **Token bucket:** at most C + r × T in any T seconds; cheap, allows bursts, supports weighted
-  costs. GCRA is the same in one timestamp. The **leaky bucket queue** delays instead of rejecting.
-- **Fixed window** lets up to **2× the limit** through at a boundary. The **sliding log** is exact
-  but stores every timestamp. The **sliding window counter** is close to exact for two counters.
-- Across servers, **check-then-act is a race**: make it one atomic Lua script, on Redis's clock.
-  **Fail open** with millisecond timeouts for most APIs; decide per limit for sensitive ones.
-- Answer **429 with Retry-After**, not 503; clients wait at least that long, add jitter and pace
-  themselves. Roll out new limits in **observation mode** and **alert on the 429 rate**.
+- A limit is a promise about a **key**, kept by many machines that each see part of the traffic.
+  The algorithm is the small part.
+- **Local counters** admit up to k× the limit; **limit ÷ N** under-admits whenever traffic is uneven;
+  a **shared atomic counter** is exact for a round trip; **syncing every S** overshoots by about
+  rate × S.
+- **GET then SET** admits about limit × (1 + rate × round trip). Use `INCR` for counters and one
+  **Lua script** for bucket state, on Redis's clock, with an expiry.
+- Choose **fail open, closed or local share** per limit, and make the client fail in milliseconds:
+  default client retries turn "fail open" into seconds of latency.
+- **Key on what you bill.** Read `X-Forwarded-For` from the right, only from your own proxies.
+- Count **cost** when requests differ, **reserve then refund** when the cost is unknown, answer
+  **429 with Retry-After**, and expect clients to synchronise unless someone adds jitter.
 
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'proxy-lb-gateway', why: 'Where a gateway sits in front of your services, and why a per-IP limiter behind a load balancer suddenly limits everyone at once.' },
-  { slug: 'load-shedding', why: 'What to do when the whole system is overloaded, not one client: rejecting work by priority to stay alive.' },
-  { slug: 'circuit-breakers', why: 'The mirror image of a rate limiter: protecting yourself from a dependency that is failing, instead of protecting yourself from a caller.' },
-  { slug: 'backpressure', why: 'When you control both ends of a pipeline, slowing the producer is better than rejecting its work.' },
-  { slug: 'rate-limiter-service', why: 'The full case study: designing a rate limiter as a shared service for many teams, with rules, storage and failover.' },
-  { slug: 'llm-rate-limits', why: 'Rate limits measured in tokens per minute rather than requests: the weighted bucket idea applied to AI APIs.' },
-  { slug: 'irctc-tatkal-booking', why: 'A case study where per-client limits are not enough: lakhs of users at 10:00:00, a waiting room, and seats that must never sell twice.' },
+  { slug: 'load-shedding', why: 'When the whole system is overloaded, not one client: rejecting work by priority to stay alive.' },
+  { slug: 'circuit-breakers', why: 'The mirror image of a limiter: protecting yourself from a dependency that is failing, such as the limiter\'s own store.' },
+  { slug: 'backpressure', why: 'When you control both ends of a pipeline, slowing the producer beats rejecting its work.' },
+  { slug: 'rate-limiter-service', why: 'The full case study: a rate limiter as a shared service for many teams, with rules, storage and failover.' },
+  { slug: 'llm-rate-limits', why: 'Limits in tokens per minute, estimated at arrival: reserve and refund applied to AI APIs.' },
+  { slug: 'proxy-lb-gateway', why: 'Where the gateway sits, why long-lived connections pin clients to one node, and what X-Forwarded-For you can trust.' },
 ]} />
 
 ## Further reading
 
 **Specs & official docs**
 
-- [RFC 6585 §4, 429 Too Many Requests](https://www.rfc-editor.org/rfc/rfc6585#section-4) — the status code itself, and the rule that a 429 must not be cached.
+- [RFC 6585 §4, 429 Too Many Requests](https://www.rfc-editor.org/rfc/rfc6585#section-4) — the status code, and the rule that a 429 must not be cached.
 - [RFC 9110 §10.2.3, Retry-After](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3) — the two formats the header can take.
-- [IETF draft: RateLimit header fields for HTTP](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) — the `RateLimit` and `RateLimit-Policy` fields (version 11, May 2026).
+- [IETF draft: RateLimit header fields for HTTP](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/) — `RateLimit` and `RateLimit-Policy` (version 11, May 2026).
 - [nginx `ngx_http_limit_req_module`](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html) — `burst`, `nodelay`, `dry_run` and the 503 default.
-- [Envoy local rate limit filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/local_rate_limit_filter) and [global rate limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/global_rate_limiting) — the two-stage local plus global design.
-- [AWS API Gateway request throttling](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html) — layered token buckets, and an honest note on best effort.
-- [GitHub REST API rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api) — primary limits, points-based secondary limits, and the headers.
-- [Stripe rate limits](https://docs.stripe.com/rate-limits) — current numbers, the reason header, and the advice to pace clients with a token bucket.
-- [Discord rate limits](https://docs.discord.com/developers/topics/rate-limits) — per-route buckets and the invalid request ban.
-- [Redis: build 5 rate limiters with Redis](https://redis.io/tutorials/howtos/ratelimiting/) — every algorithm as a Lua script, and why Lua beats `MULTI` and `WATCH`.
+- [Envoy global rate limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/global_rate_limiting) and [local rate limit filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/local_rate_limit_filter) — local in front of global, and `failure_mode_deny`.
+- [Kong Rate Limiting Advanced](https://developer.konghq.com/plugins/rate-limiting-advanced/) — `sync_rate`, the accuracy-for-round-trips dial.
+- [Redis: build 5 rate limiters with Redis](https://redis.io/tutorials/howtos/ratelimiting/) — each algorithm as a Lua script, and why Lua beats `MULTI` and `WATCH`.
+- [redis-py retry helpers](https://redis.readthedocs.io/en/latest/retry.html) — the client's retry and backoff configuration.
+- [AWS API Gateway throttling](https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-request-throttling.html) — layered token buckets, best effort.
+- [GitHub REST API rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), [Stripe rate limits](https://docs.stripe.com/rate-limits) and [Discord rate limits](https://docs.discord.com/developers/topics/rate-limits) — points, concurrency limits, and invalid-request bans in practice.
+- [Azure OpenAI quotas](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota) — tokens per minute charged from an estimate at arrival.
 
 **Engineering blogs**
 
-- [Stripe: Scaling your API with rate limiters](https://stripe.com/blog/rate-limiters) (2017) — four layers of limiting and shedding, and how to roll them out safely.
-- [Cloudflare: How we built rate limiting capable of scaling to millions of domains](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/) (2017) — the sliding window counter and its measured accuracy.
-- [Figma: An alternative approach to rate limiting](https://www.figma.com/blog/an-alternative-approach-to-rate-limiting) (2017) — why they rejected three algorithms, with memory estimates.
-- [AWS Builders' Library: Fairness in multi-tenant systems](https://builder.aws.com/content/3Eupj3d2bo4fEvlzYbICMZNhQ3B/fairness-in-multi-tenant-systems) (2020) — quotas per tenant, distributed counting, and chaining buckets.
-- [Google SRE book: Handling overload](https://sre.google/sre-book/handling-overload/) — client-side adaptive throttling and retry budgets.
-- [PostHog: feature flags recurring outages postmortem](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages) (2025) — the rate limiter keyed on the load balancer.
+- [Stripe: Scaling your API with rate limiters (2017)](https://stripe.com/blog/rate-limiters) — four layers of limiting and shedding, and how to roll them out.
+- [Cloudflare: Counting things, a lot of different things (2017)](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/) — the sliding window counter, its measured error, and per-data-centre counting.
+- [GitHub: A sharded, replicated rate limiter in Redis (2021)](https://github.blog/engineering/infrastructure/how-we-scaled-github-api-sharded-replicated-rate-limiter-redis/) — moving off Memcached, and the wobbling reset header.
+- [AWS Builders' Library: Fairness in multi-tenant systems](https://builder.aws.com/content/3Eupj3d2bo4fEvlzYbICMZNhQ3B/fairness-in-multi-tenant-systems) — three ways to share a limit across a fleet, and hot keys.
+- [AWS Architecture Blog: Exponential backoff and jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) — why synchronised retries need randomness.
+- [Google SRE book: Handling overload](https://sre.google/sre-book/handling-overload/) — client-side adaptive throttling and the cost of rejecting.
+- [PostHog: feature flags outage postmortem (2025)](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages) — the limiter keyed on the load balancer.
 
-**Explainers & tools**
+**Explainers**
 
-- [Brandur Leach: Rate limiting, cells, and GCRA](https://brandur.org/rate-limiting) (2015) — a clear walk through GCRA and why fixed windows frustrate users.
-- [redis-cell](https://github.com/brandur/redis-cell) — GCRA as a single Redis command.
-- [smudge.ai: Rate limiting algorithms](https://smudge.ai/blog/ratelimit-algorithms) — interactive demos of fixed windows, sliding windows and token buckets.
+- [Brandur Leach: Rate limiting, cells, and GCRA](https://brandur.org/rate-limiting) — GCRA explained, and why fixed windows frustrate users.
+- [smudge.ai: Rate limiting algorithms](https://smudge.ai/blog/ratelimit-algorithms) — interactive demos of windows and buckets.
