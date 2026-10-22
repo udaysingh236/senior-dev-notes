@@ -1,0 +1,56 @@
+---
+// Segment-wise berth inventory: one row per berth, one column per segment between stations.
+// See inventory-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+
+type Mode = 'pack' | 'spread' | 'compare';
+
+interface Props {
+  mode: Mode;
+  watchFor?: string;
+}
+
+const COPY: Record<Mode, { title: string; description: string; watchFor: string; viewBox: string }> = {
+  pack: {
+    title: 'Eight berths, seven segments, one bitmask per berth',
+    description:
+      'A grid with eight berths as rows and the seven segments between eight stations, New Delhi to Nagpur, as columns. Each booking is a bar across the segments of its journey on one berth. Short journeys arrive first, then end-to-end ones. The newest booking is blue; a journey that fits on no berth is drawn as a dashed red outline under the grid. The log shows the bitmask check for each request.',
+    watchFor:
+      'Each berth is reused by several short journeys, end to end, so a coach with eight berths carries more than eight passengers. Then watch the long journeys at the end: some are turned away even though plenty of cells are still empty, because no single berth is free across the whole route. Press "Cancel a random booking" and see which journeys the freed cells can serve.',
+    viewBox: '0 0 400 252',
+  },
+  spread: {
+    title: 'The same inventory, with bookings spread over any berth that fits',
+    description: 'The same grid and journeys as before, but each journey goes to a random berth that fits.',
+    watchFor: 'More end-to-end passengers are turned away, while more cells stay empty.',
+    viewBox: '0 0 400 252',
+  },
+  compare: {
+    title: 'Pack versus spread, on the same journeys',
+    description:
+      'Two grids on the same requests. Top: each journey goes to the berth where it leaves the smallest free gap. Bottom: each journey goes to any berth that fits, at random. Under each grid, a count of end-to-end passengers booked and turned away.',
+    watchFor:
+      'Both grids accept every short journey. When the end-to-end requests arrive, the spread grid turns more of them away, because its free cells are scattered in short pieces across many berths. Drag "Short journeys first" up and down: the gap between the two grows with load.',
+    viewBox: '0 0 400 556',
+  },
+};
+
+const { mode, watchFor } = Astro.props;
+const copy = COPY[mode];
+---
+
+<SimShell
+  name="berth-inventory"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox={copy.viewBox}
+  config={{ mode }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createInventoryModel } from './inventory-model';
+
+  mountAll('berth-inventory', createInventoryModel);
+</script>

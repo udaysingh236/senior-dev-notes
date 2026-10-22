@@ -1,0 +1,19 @@
+---
+// Booking transactions racing for one coach, written four ways. See lock-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="lock-race"
+  title="Twelve transactions, eight berths, four ways to write the transaction"
+  description="Four lanes run the same burst of booking requests against one coach of eight berths. Each lane shows the eight berths: empty, amber and dashed while locked, green with a tick when sold once, red with a count when sold more than once. Under each lane: how many requests are still waiting, the slowest request so far, and for the conditional update, how many retries it needed."
+  watchFor="The first lane sells berth 1 to almost everyone, because every request read it as free before anyone wrote. The coach lock never oversells, but requests finish one after another, so the slowest one waits for all the others; raise the work slider and watch it grow. The last two lanes are both correct and both fast: the conditional update pays in retries, SKIP LOCKED in nothing, until every row is locked."
+  viewBox="0 0 400 400"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createLockModel } from './lock-model';
+
+  mountAll('lock-race', createLockModel);
+</script>
