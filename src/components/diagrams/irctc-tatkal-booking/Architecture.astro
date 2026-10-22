@@ -1,0 +1,85 @@
+---
+// Hero diagram: the path of a Tatkal booking. Users reach an edge that filters bots, a waiting
+// room admits them to the booking servers, which hold seats in the shared reservation system and
+// hand off to the payment gateway. Counters book from the same inventory. Dashed boxes are our
+// design, not something IRCTC has published.
+---
+
+<svg viewBox="0 0 400 470" width="100%" role="img" aria-labelledby="tk-arch-t tk-arch-d">
+  <title id="tk-arch-t">The parts of a Tatkal booking system</title>
+  <desc id="tk-arch-d">
+    Users on phones and browsers at the top send requests to an edge layer that filters bots. The
+    edge passes them to a waiting room, drawn dashed because it is our design, which lets users
+    through to the booking servers in the middle. The booking servers hold and confirm seats in the
+    seat inventory, a store shared with station counters, and send users to a payment gateway and
+    their banks. After payment, the booking servers send the ticket by SMS and email.
+  </desc>
+  <defs>
+    <marker id="tk-arch-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="tk-arch-store" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-store)" />
+    </marker>
+  </defs>
+
+  <g font-size="19" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">
+    <!-- Users -->
+    <rect x="110" y="8" width="180" height="52" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="200" y="40">Users</text>
+
+    <!-- Edge -->
+    <rect x="8" y="104" width="176" height="64" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="96" y="132">Edge</text>
+    <text x="96" y="156" font-size="16" font-weight="400">CDN, bot checks</text>
+
+    <!-- Waiting room (our design) -->
+    <rect x="216" y="104" width="176" height="64" rx="6" stroke-dasharray="7 5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" stroke-width="2" />
+    <text x="304" y="132">Waiting room</text>
+    <text x="304" y="156" font-size="16" font-weight="400">admits N per second</text>
+
+    <!-- Booking servers -->
+    <rect x="110" y="212" width="180" height="64" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="200" y="240">Booking servers</text>
+    <text x="200" y="264" font-size="16" font-weight="400">search, hold, confirm</text>
+
+    <!-- Seat inventory -->
+    <path d="M18 330 a78 11 0 0 1 156 0 v58 a78 11 0 0 1 -156 0 z" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="2" />
+    <path d="M18 330 a78 11 0 0 0 156 0" fill="none" style="stroke: var(--viz-store)" stroke-width="2" />
+    <text x="96" y="368">Seat inventory</text>
+    <text x="96" y="390" font-size="16" font-weight="400">one quota, shared</text>
+
+    <!-- Payment gateway -->
+    <rect x="216" y="320" width="176" height="64" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="304" y="348">Payment gateway</text>
+    <text x="304" y="372" font-size="16" font-weight="400">UPI, cards, banks</text>
+
+    <!-- Counters -->
+    <rect x="18" y="418" width="156" height="44" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="2" />
+    <text x="96" y="446">Station counters</text>
+
+    <!-- Notifications -->
+    <rect x="216" y="418" width="176" height="44" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="2" />
+    <text x="304" y="446">SMS and email</text>
+  </g>
+
+  <g stroke-width="2" fill="none" style="stroke: var(--viz-flow)" marker-end="url(#tk-arch-flow)">
+    <!-- users -> edge -->
+    <path d="M150 61 L110 101" />
+    <!-- edge -> room -->
+    <line x1="185" y1="136" x2="213" y2="136" />
+    <!-- room -> booking -->
+    <path d="M280 169 L250 209" />
+    <!-- booking -> payment -->
+    <path d="M270 277 L300 317" />
+    <!-- booking -> notifications (down the right edge) -->
+    <path d="M196 278 L196 428 Q196 440 213 440" />
+  </g>
+
+  <!-- booking <-> inventory -->
+  <path d="M140 277 L110 315" stroke-width="2" fill="none" style="stroke: var(--viz-store)" marker-start="url(#tk-arch-store)" marker-end="url(#tk-arch-store)" />
+  <!-- counters -> inventory -->
+  <line x1="96" y1="416" x2="96" y2="402" stroke-width="2" style="stroke: var(--viz-store)" marker-end="url(#tk-arch-store)" />
+
+  <text x="392" y="82" text-anchor="end" font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">dashed = our design</text>
+</svg>

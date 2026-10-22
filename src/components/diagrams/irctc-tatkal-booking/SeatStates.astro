@@ -1,0 +1,60 @@
+---
+// The life of a seat in our design: free, held while the user pays, booked. A hold that runs out
+// puts the seat back; a cancellation frees it for the waitlist.
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="tk-ss-t tk-ss-d">
+  <title id="tk-ss-t">States of one seat</title>
+  <desc id="tk-ss-d">
+    Three states. Free, at the top left. A booking moves the seat to Held, at the top right, with
+    a 15 minute timer. A confirmed payment moves it to Booked, at the bottom. If the timer runs
+    out or the payment fails, a dashed amber arrow returns the seat from Held to Free. A
+    cancellation returns a booked seat to Free, where the waitlist gets it first.
+  </desc>
+  <defs>
+    <marker id="tk-ss-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="tk-ss-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+    <marker id="tk-ss-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+    <marker id="tk-ss-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <g font-size="20" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+    <rect x="8" y="30" width="130" height="60" rx="30" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" stroke-width="2" />
+    <text x="73" y="67">Free</text>
+
+    <rect x="262" y="30" width="130" height="60" rx="30" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" stroke-width="2" />
+    <text x="327" y="60">Held</text>
+    <text x="327" y="82" font-size="16" font-weight="400">15 min timer</text>
+
+    <rect x="135" y="232" width="130" height="60" rx="30" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" stroke-width="2" />
+    <text x="200" y="269">Booked</text>
+  </g>
+
+  <!-- Free -> Held -->
+  <line x1="140" y1="48" x2="259" y2="48" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tk-ss-flow)" />
+  <text x="200" y="38" font-size="16" text-anchor="middle" style="fill: var(--viz-flow)">book</text>
+
+  <!-- Held -> Free (expired) -->
+  <line x1="259" y1="74" x2="140" y2="74" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-warn)" marker-end="url(#tk-ss-warn)" />
+  <text x="200" y="102" font-size="16" text-anchor="middle" style="fill: var(--viz-warn)">timer runs out,</text>
+  <text x="200" y="122" font-size="16" text-anchor="middle" style="fill: var(--viz-warn)">payment fails</text>
+
+  <!-- Held -> Booked -->
+  <path d="M327 92 C 327 170, 300 220, 268 250" fill="none" stroke-width="2" style="stroke: var(--viz-ok)" marker-end="url(#tk-ss-ok)" />
+  <text x="340" y="180" font-size="16" style="fill: var(--viz-ok)">paid</text>
+
+  <!-- Booked -> Free (cancelled) -->
+  <path d="M135 258 C 80 240, 60 170, 68 95" fill="none" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-muted)" marker-end="url(#tk-ss-muted)" />
+  <text x="8" y="190" font-size="16" style="fill: var(--viz-muted)">cancelled:</text>
+  <text x="8" y="210" font-size="16" style="fill: var(--viz-muted)">waitlist first</text>
+
+  <text x="200" y="318" font-size="16" font-style="italic" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--note-font-display)">every arrow is one atomic update</text>
+</svg>

@@ -1,0 +1,58 @@
+---
+// The first minute of a Tatkal window, with or without a waiting room. See model.ts.
+import SimShell from '../../sim/SimShell.astro';
+
+type Mode = 'no-queue' | 'waiting-room' | 'compare';
+
+interface Props {
+  mode: Mode;
+  /** Overrides the default "What to watch for" text for this mode. */
+  watchFor?: string;
+}
+
+const COPY: Record<Mode, { title: string; description: string; watchFor: string; viewBox: string }> = {
+  'no-queue': {
+    title: '10:00:00, with every user talking to the booking servers at once',
+    description:
+      'A clock at the top, and under it a coach of seats that turn green as they are sold. A bar shows every user: green with a ticket, blue in the middle of booking, red looking at an error page, grey told the quota is gone. A second bar shows how the servers spent the last second: green on useful requests, amber on requests whose user had already given up, red on turning people away. A line chart at the bottom shows seats sold over the minute.',
+    watchFor:
+      'Within a second the red part of the user bar swallows almost everyone, and most of the server bar goes to turning people away rather than booking. Seats still sell, slowly, to whoever happens to refresh at the right moment. Now drag the users slider to 15,000: requests wait so long that users give up on them (amber), the servers finish them for nobody, and the seats stop selling at all.',
+    viewBox: '0 0 400 368',
+  },
+  'waiting-room': {
+    title: '10:00:00, with a waiting room in front of the booking servers',
+    description:
+      'The same picture as before, with an amber part of the user bar (queue) for people in the waiting room. The room lets users through in arrival order, at a rate the servers can handle.',
+    watchFor:
+      'The server bar stays green: every request it serves is one somebody is waiting for. The seats go in a few seconds, and the people still in the room are told at once instead of refreshing for a minute.',
+    viewBox: '0 0 400 368',
+  },
+  compare: {
+    title: 'The same rush, with and without a waiting room',
+    description:
+      'Two lanes on the same arrivals. Each lane shows the user bar (green ticket, blue booking, amber waiting room, red error page, grey told the quota is gone), the server work bar, and a count of error pages. A chart at the bottom plots seats sold over the minute: red dashed without a waiting room, green with one.',
+    watchFor:
+      'The waiting room sells out several times faster, with no error pages at all, and its winners are the people who arrived first. Without it, the servers spend most of their effort on requests nobody is waiting for, and who wins is closer to a lottery. Set the users slider to 2,000 and the capacity to 2,000: with no overload, the room only adds a little delay.',
+    viewBox: '0 0 400 446',
+  },
+};
+
+const { mode, watchFor } = Astro.props;
+const copy = COPY[mode];
+---
+
+<SimShell
+  name="tatkal-rush"
+  title={copy.title}
+  description={copy.description}
+  watchFor={watchFor ?? copy.watchFor}
+  viewBox={copy.viewBox}
+  config={{ mode }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createTatkalModel } from './model';
+
+  mountAll('tatkal-rush', createTatkalModel);
+</script>

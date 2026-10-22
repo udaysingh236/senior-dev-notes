@@ -1,0 +1,57 @@
+---
+// Two clocks that do not share a transaction: the seat hold on the railway side and the payment
+// on the bank side. When the bank's "paid" arrives after the hold has expired, money has moved
+// and the seat has not.
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="tk-pg-t tk-pg-d">
+  <title id="tk-pg-t">The gap between a seat hold and a payment</title>
+  <desc id="tk-pg-d">
+    Two timelines from 10:00 to 10:20. The top one, the railway, shows a seat hold from 10:00 to
+    10:15, after which the seat goes to someone else. The bottom one, the bank, shows the money
+    debited at 10:02, then a long gap while the bank's confirmation is delayed, and the
+    confirmation arriving at 10:16, after the hold ended. A red arrow from the confirmation up to the resold seat marks the gap: money gone,
+    no ticket. A reconciliation step at the end turns it into a refund.
+  </desc>
+  <defs>
+    <marker id="tk-pg-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  <g font-size="17" font-weight="700" style="fill: var(--viz-ink)">
+    <text x="8" y="26">Railway</text>
+    <text x="8" y="150">Bank</text>
+  </g>
+
+  <!-- Railway lane: hold 10:00 to 10:15 (x 20 to 290 for 0 to 15 min, 18 units per minute) -->
+  <rect x="20" y="40" width="270" height="34" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" stroke-width="2" />
+  <text x="155" y="63" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">seat held for you</text>
+  <rect x="290" y="40" width="100" height="34" rx="4" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" stroke-width="2" />
+  <text x="340" y="63" font-size="17" text-anchor="middle" style="fill: var(--viz-muted)">resold</text>
+
+  <!-- Bank lane -->
+  <line x1="20" y1="181" x2="390" y2="181" stroke-width="2" style="stroke: var(--viz-stroke)" />
+  <circle cx="56" cy="181" r="7" style="fill: var(--viz-flow)" />
+  <text x="56" y="210" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">debited</text>
+  <circle cx="308" cy="181" r="7" style="fill: var(--viz-ok)" />
+  <text x="308" y="210" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">"paid" sent</text>
+
+  <!-- The gap -->
+  <line x1="290" y1="78" x2="290" y2="236" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-warn)" />
+  <path d="M308 172 L 308 80" fill="none" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-bad)" marker-end="url(#tk-pg-bad)" />
+  <text x="268" y="122" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-bad)">too late:</text>
+  <text x="268" y="142" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-bad)">money gone, no seat</text>
+
+  <!-- Time axis -->
+  <line x1="20" y1="236" x2="390" y2="236" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="20" y="258" text-anchor="start">10:00</text>
+    <text x="200" y="258">10:10</text>
+    <text x="290" y="258">10:15</text>
+    <text x="390" y="258" text-anchor="end">10:20</text>
+  </g>
+
+  <text x="200" y="296" font-size="17" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">Reconciliation finds it, refunds it</text>
+  <text x="200" y="318" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">or re-books it if seats are still free</text>
+</svg>

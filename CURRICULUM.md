@@ -229,6 +229,7 @@ Each case study ties many concepts together and links back to their pages.
 | 6 | Design a payment system | payment-system | new | planned |
 | 7 | Design a distributed cache | distributed-cache | new | planned |
 | 8 | Design a web crawler | web-crawler | new | planned |
+| 9 | How IRCTC Tatkal booking works | irctc-tatkal-booking | new | published (2026-10-22) |
 
 ## Inbox
 
@@ -237,4 +238,3 @@ one into its track's table when the page is written. Bullets, not a table: the s
 only the track tables above.
 
 - 2026-10-21 · Reverse proxy vs load balancer vs API gateway · `traffic/proxy-lb-gateway` · compare
-- 2026-10-21 · How IRCTC Tatkal booking works: the 10 AM rush, seat locks, payments · `case-studies/irctc-tatkal-booking` · case-study
