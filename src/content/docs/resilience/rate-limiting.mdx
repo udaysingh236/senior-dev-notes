@@ -812,12 +812,50 @@ behind a load balancer, every user shares the load balancer's address.
 
 ### Step 4: the other side of the wire
 
-Most of the damage in the opening story was done by the client side, so the last example,
-[`client.py`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/rate-limiting/python/client.py),
-is a client. It sends 30 requests to a small API limited to a burst of 5 and 5 per second, three
-ways: retrying at once; waiting the Retry-After plus a random **jitter** that grows with each
-attempt, so limited clients do not all return in the same millisecond; and pacing itself with a
-client-side token bucket that waits for a token instead of failing.
+Most of the damage in the opening story was done by the client side, so the last example is a
+client. It sends 30 requests to a small API limited to a burst of 5 and 5 per second, three ways:
+retrying at once; waiting the Retry-After plus a random **jitter** that grows with each attempt;
+and pacing itself with a client-side token bucket that waits for a token instead of failing. Here
+is the retry loop, polite or not:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="client.py"
+# runnable version: examples/rate-limiting/python/client.py
+def get_with_retry(url: str, polite: bool, attempts: int = 6) -> tuple[bool, int]:
+    """Returns (succeeded, number of requests sent)."""
+    for attempt in range(1, attempts + 1):
+        status, retry_after = get(url)
+        if status != 429:
+            return status == 200, attempt
+        if polite:
+            backoff = min(8.0, 0.25 * 2**attempt)  # grows each time: 0.5, 1, 2, 4, 8 s
+            # Retry-After is the earliest the server wants us back; jitter spreads clients out
+            # so they don't all return in the same millisecond.
+            time.sleep((retry_after or 0) + jitter.uniform(0, backoff))
+    return False, attempts
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="client.mjs"
+// runnable version: examples/rate-limiting/js/client.mjs
+/** @returns {Promise<{ succeeded: boolean, attempts: number }>} */
+async function getWithRetry(url, polite, attempts = 6) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const { status, retryAfter } = await get(url);
+    if (status !== 429) return { succeeded: status === 200, attempts: attempt };
+    if (polite) {
+      const backoff = Math.min(8, 0.25 * 2 ** attempt); // grows each time: 0.5, 1, 2, 4, 8 s
+      // Retry-After is the earliest the server wants us back; jitter spreads clients out
+      // so they don't all return in the same millisecond.
+      await sleep(((retryAfter ?? 0) + Math.random() * backoff) * 1000);
+    }
+  }
+  return { succeeded: false, attempts };
+}
+```
+  </TabItem>
+</Tabs>
 
 ```text title="client.py output"
 1. retry at once              6/30 ok  145 rejected  151 requests sent   0.5 s
