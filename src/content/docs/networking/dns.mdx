@@ -34,8 +34,7 @@ differently, and which numbers decide it?
 
 The answer is that a DNS answer is a **lease**: a copy that a cache may keep for a fixed time, that
 you cannot revoke, and that every layer between you and the user may shorten, stretch or ignore.
-The [foundations page](/foundations/how-the-web-works/#step-1-find-the-server-dns) covers the
-lookup walk from the root down. This page starts where it stops: what happens to those leases
+This page assumes the lookup walk from the root down and starts where it stops: what happens to those leases
 during migrations, outages and load balancing.
 
 ## Why this problem exists
@@ -308,9 +307,10 @@ DNSSEC validation failure), [RFC 9520](https://www.rfc-editor.org/rfc/rfc9520.ht
 2023) now requires it to remember the failure for at least 1 second and at most 5 minutes, and not
 to ask again meanwhile. The reason is load: without it, every user lookup turns into fresh queries
 to servers that are already down. The IMC 2018 study above saw retries raise traffic to the
-authoritative servers up to eight times during an attack, and the
-[foundations page](/foundations/how-the-web-works/) describes resolvers carrying about 30 times
-their usual load while Facebook's names were gone in 2021.
+authoritative servers up to eight times during an attack, and Cloudflare
+reported about 30 times the usual queries for Facebook's names on its 1.1.1.1 resolver while they
+were gone in October 2021
+([Cloudflare, 2021](https://blog.cloudflare.com/october-2021-facebook-outage/)).
 
 :::caution[Never test a name before it exists]
 Opening a link, running a health check or letting a deploy pipeline poll a hostname before you
@@ -871,4 +871,4 @@ behind each address.
 **Explainers**
 
 - [Julia Evans: How updating DNS works](https://jvns.ca/blog/how-updating-dns-works/) — `dig` experiments showing propagation as caches expiring.
-- [What happens when you type a URL](/foundations/how-the-web-works/) — the basic lookup walk and the Facebook, Slack and 1.1.1.1 incidents.
+- [Cloudflare: the October 2021 Facebook outage](https://blog.cloudflare.com/october-2021-facebook-outage/) — how a withdrawn route became a DNS failure, and the resolver load that followed.

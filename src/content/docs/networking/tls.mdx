@@ -451,9 +451,9 @@ the impostor case too.
 Paths can also have more than one answer. CAs **cross-sign**: an intermediate may be signed by both
 a new root and an old one, so old devices that lack the new root still find a path. When the old
 root expires, a client that picks the expired path fails even though a valid one exists. That is
-what happened to older OpenSSL versions when Let's Encrypt's old root expired in September 2021;
-the [foundations page](/foundations/how-the-web-works/) tells that story. Check chains with the
-clients you actually ship, not with a browser.
+what happened to older OpenSSL versions when Let's Encrypt's old root expired in September 2021
+([Let's Encrypt](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/)). Check
+chains with the clients you actually ship, not with a browser.
 
 ### Revocation, which mostly does not work
 
@@ -949,4 +949,4 @@ cannot avoid expiry: the team must fix renewals within hours, or the lifetime is
 
 - [The Illustrated TLS 1.3 Connection](https://tls13.xargs.org/) — every byte of a real handshake, annotated.
 - [crt.sh](https://crt.sh/) and [badssl.com](https://badssl.com/) — search Transparency logs, and test clients against broken certificates.
-- [What happens when you type a URL](/foundations/how-the-web-works/) — the handshake as one step of a page load, and the 2021 root expiry.
+- [Let's Encrypt: DST Root CA X3 expiration (September 2021)](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/) — the root expiry and which clients broke.
