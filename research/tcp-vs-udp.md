@@ -200,3 +200,10 @@ Node http/net docs, Kubernetes NodeLocal DNSCache, WireGuard known limitations.
 Engineering: GitHub DDoS report 2018, Cloudflare ephemeral ports 2022, Netflix/Red Hat SACK Panic,
 Uber QUIC 2019, Google QUIC SIGCOMM 2017, BBR ACM Queue 2016, Discord voice 2018.
 Explainers: HPBN TCP and UDP chapters, Gaffer on Games UDP vs TCP.
+
+## Re-check, 2026-10-21 (page trimmed to the reading budget)
+
+- BBR: still an Internet-Draft; latest is draft-ietf-ccwg-bbr-06 (July 2026), Experimental track.
+  https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/
+- AWS NLB: TCP idle timeout default 350 s (60–6,000 configurable), UDP 120 s; unchanged.
+  https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-nlb-tcp-configurable-idle-timeout/

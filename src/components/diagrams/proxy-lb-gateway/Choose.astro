@@ -1,0 +1,51 @@
+---
+// A decision flow from the reader's situation. Each question that gets a "yes" adds one role;
+// a "no" moves on to the next question. Most small systems stop after the first one or two.
+const steps = [
+  { q: ['More than one copy', 'of your app?'], no: 'one proxy, or nothing yet', add: ['load balancing,', 'in the same proxy'] },
+  { q: ['Many services, or', 'outside API callers?'], no: 'keep auth in the app', add: ['an API gateway', 'behind the balancer'] },
+  { q: ['Non-HTTP traffic, fixed', 'IPs, or huge volume?'], no: 'one L7 tier is fine', add: ['an L4 balancer', 'in front of it all'] },
+];
+const ROW = 118;
+---
+
+<svg viewBox={`0 0 400 ${steps.length * ROW + 58}`} width="100%" role="img" aria-labelledby="plg-ch-t plg-ch-d">
+  <title id="plg-ch-t">Which roles to add, and when</title>
+  <desc id="plg-ch-d">
+    Start with one app behind one reverse proxy, or with nothing in front at all. First question:
+    more than one copy of your app? If yes, add load balancing in the same proxy. Second: many
+    services or outside API callers? If yes, add an API gateway behind the balancer. Third:
+    non-HTTP traffic, fixed IP addresses or a huge volume? If yes, add a layer 4 balancer in front
+    of everything. A no to any question means you do not need that role yet.
+  </desc>
+  <defs>
+    <marker id="plg-ch-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="200" height="40" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="104" y="30" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">start: one app</text>
+
+  {
+    steps.map((s, i) => {
+      const y = 62 + i * ROW;
+      return (
+        <g>
+          <line x1="104" y1={y - 17} x2="104" y2={y - 3} stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#plg-ch-a)" />
+          <rect x="4" y={y} width="200" height="64" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+          <text x="104" y={y + 27} font-size="16" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">{s.q[0]}</text>
+          <text x="104" y={y + 49} font-size="16" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">{s.q[1]}</text>
+
+          <line x1="205" y1={y + 32} x2="242" y2={y + 32} stroke-width="2" style="stroke: var(--viz-ok)" />
+          <text x="223" y={y + 25} font-size="14" font-weight="700" text-anchor="middle" style="fill: var(--viz-ok)">yes</text>
+          <rect x="244" y={y} width="152" height="64" rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+          <text x="320" y={y + 27} font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">{s.add[0]}</text>
+          <text x="320" y={y + 49} font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">{s.add[1]}</text>
+
+          <text x="112" y={y + 86} font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">no: {s.no}</text>
+        </g>
+      );
+    })
+  }
+</svg>

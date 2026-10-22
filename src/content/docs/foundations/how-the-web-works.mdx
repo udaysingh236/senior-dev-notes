@@ -6,7 +6,7 @@ difficulty: beginner
 track: foundations
 prerequisites: []
 next: [dns, tcp-vs-udp, tls, http-evolution, cdn-and-edge-caching, latency-vs-throughput]
-lastReviewed: 2026-10-18
+lastReviewed: 2026-10-21
 sidebar:
   order: 1
 ---
@@ -50,11 +50,10 @@ this journey zoomed in. This page is the whole journey at once.
 ## Why this problem exists
 
 The web was not designed as one system. It is a stack of separate agreements, built by different
-people in different decades, that happen to work together. DNS, which turns names into addresses,
-took its current form in 1987. TCP, which delivers bytes reliably, is older still. The encryption
-layer, SSL and then TLS, has been redesigned six times since the 1990s. HTTP, the language browsers and servers speak, is on its third major
-version. Each one solves its own problem well, and each one needs its own little conversation
-before it can do its job.
+people in different decades. DNS, which turns names into addresses, took its current form in 1987.
+TCP, which delivers bytes reliably, is older still. The encryption layer, SSL and then TLS, has
+been redesigned six times since the 1990s, and HTTP is on its third major version. Each solves its
+own problem well, and each needs its own little conversation before it can do its job.
 
 A few terms will come up on every line of this page:
 
@@ -81,15 +80,14 @@ adds a little, so as of October 2026 the measured round trip between the AWS reg
 North Virginia is about 187 ms ([cloudping.co](https://www.cloudping.co/)). On a busy mobile
 network it is often worse.
 
-No amount of money makes light faster. You can buy more bandwidth; you cannot buy lower latency,
-only shorter distances. And a page load is not one round trip. It is a chain of conversations, and
-most of them must finish before the next can start. If a page needs 15 round trips and each costs
+You can buy more bandwidth; you cannot buy lower latency, only shorter distances. And a page load
+is not one round trip. It is a chain of conversations, most of which must finish before the next
+can start. If a page needs 15 round trips and each costs
 190 ms, that is nearly 3 seconds, even if the server answers in no time at all.
 
-That is our customer in Lucknow. The cost lands on users who are far away or on slow networks,
-which in practice means most of the world's internet users. It lands on the business too: people
-leave slow pages, and teams spend money on bigger servers that do not help, because the server was
-never the slow part.
+That is our customer in Lucknow. The cost lands on users who are far away or on slow networks, and
+on the business: people leave slow pages, and teams buy bigger servers that do not help, because
+the server was never the slow part.
 
 ## The obvious picture, and why it breaks
 
@@ -139,17 +137,16 @@ The one-arrow picture breaks in two ways, and the output shows both.
    how long that unanswered connection takes to give up when nobody sets a timeout: 21 s on
    Windows 11, 135 s on Linux with its default settings, and 10.8 s with Node's built-in `fetch`,
    which has a 10 s connect limit of its own. Your users will not wait that long, and neither
-   should your code.
+   should your code: set a connect timeout and a total timeout on every outgoing call.
 
-Before we open the box, it helps to separate some words that beginners often treat as the same
-thing.
+Before we open the box, a few words that beginners often treat as the same thing:
 
 | These are often confused | The difference |
 |---|---|
 | **The internet** vs **the web** | The internet is the global network that moves packets between addresses. The web is one thing that runs on it: pages and APIs spoken over HTTP. Email and video calls use the internet without being the web. |
 | **URL** vs **domain** vs **IP address** | `https://shop.example.in/cart` is a URL: the full address of one thing. `shop.example.in` is the domain name inside it. `104.20.23.154` is the IP address that name currently points to. Names are for people; addresses are for routers. |
-| **HTTP** vs **HTTPS** vs **TLS** vs **SSL** | HTTP is the request and response language. TLS is the encryption layer underneath it. HTTPS is HTTP sent through TLS. SSL is TLS's old name; every SSL version is broken and retired, but the name survives in phrases like "SSL certificate". |
-| **DNS** vs **hosting** | DNS only tells browsers where your site lives. Hosting is the machines that actually serve it. They are often bought from different companies, and they fail separately. |
+| **HTTP** vs **HTTPS** vs **TLS** vs **SSL** | HTTP is the request and response language. TLS is the encryption layer underneath it. HTTPS is HTTP sent through TLS. SSL is TLS's old, retired name, surviving in phrases like "SSL certificate". |
+| **DNS** vs **hosting** | DNS only tells browsers where your site lives. Hosting is the machines that serve it. They are often bought from different companies, and they fail separately. |
 | **Latency** vs **bandwidth** | Latency is how long a message takes to arrive; bandwidth is how many bytes per second fit in the pipe. A 1 Gbit/s connection to a server 190 ms away still waits 190 ms for every round trip. |
 
 ## The core idea
@@ -166,13 +163,12 @@ before it.
 
 The analogy breaks in three places, and they matter.
 
-- A phone call has one conversation. A web page needs a median of about 75 to 80 separate files
-  (HTML, stylesheets, scripts, images, fonts), often from several different servers, and the
-  browser runs many of these conversations at the same time.
-- Looking up a phone number takes the same time every time. DNS answers are cached at several
-  levels, so the first lookup can take hundreds of milliseconds and the next one almost nothing.
+- A phone call is one conversation. A web page needs a median of about 75 to 80 separate files,
+  often from several servers, and the browser runs many conversations at the same time.
+- Looking up a phone number takes the same time every time. DNS answers are cached, so the first
+  lookup can take hundreds of milliseconds and the next one almost nothing.
 - On a phone call, picking up is quick. On the internet, every "hello, are you there?" costs a full
-  round trip at the speed of light, so the distance to the server multiplies every step.
+  round trip, so the distance to the server multiplies every step.
 
 Put precisely: **loading a page means finding the server's address, opening a connection, securing
 it, sending a request, waiting while the servers behind that address build the answer, and turning
@@ -187,49 +183,45 @@ the outside world, then one step that happens entirely inside the browser.
   <Overview />
 </Figure>
 
-Notice that the right-hand box is not one server. Behind one address there is usually a CDN, a
-load balancer, several copies of your app and a database. Notice also that only step 4 involves
-your code. Steps 1, 2 and 3 happen before your server knows anyone is there, which is why your logs
-showed 50 ms while the customer waited seconds.
+The right-hand box is not one server: behind one address there is usually a CDN, a load balancer,
+several copies of your app and a database. And only step 4 involves your code. Steps 1, 2 and 3
+happen before your server knows anyone is there, which is why your logs showed 50 ms while the
+customer waited seconds.
 
 ## How it works, step by step
 
-We will follow one request, for `https://shop.example.in/cart`, all the way through. For real
-numbers we will use a customer in India and a server in North Virginia, a round trip of about
-190 ms, and a server that takes 50 ms to build the page. Where we measured something ourselves,
-with the scripts in the "Build it yourself" section, we will say so.
+We will follow one request, for `https://shop.example.in/cart`, from a customer in India to a
+server in North Virginia: a round trip of about 190 ms, and 50 ms for the server to build the page.
+Where we measured something ourselves, we will say so.
 
 ### Step 0: the address bar works out what you meant
 
 Before any network traffic, the browser has to decide what you typed. The address bar is also a
-search box, so "cheap flights" becomes a search and `shop.example.in/cart` becomes an address.
-Chrome's own description of this calls it the first job of the browser's UI thread.
-
-If it is an address, the browser splits it into parts. Each part has a different job, and one of
-them never leaves your machine.
+search box, so "cheap flights" becomes a search and `shop.example.in/cart` becomes an address,
+which the browser splits into parts. Each part has a different job, and one of them never leaves
+your machine.
 
 <Figure caption="A URL is six parts. The host is what DNS looks up, the port picks the door, the path and query say what you want, and the fragment after # stays in the browser: the server never sees it.">
   <UrlAnatomy />
 </Figure>
 
 The fragment is the surprise for most people. `#pay` tells the browser where to scroll, or tells a
-single-page app which view to show, but it is never sent to the server. That is part of the URL
-standard itself ([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.5)). Two more things
-happen to the host before it is used: names with non-English letters are converted to an ASCII
-form called punycode, and the browser checks whether it must use HTTPS.
+single-page app which view to show, but it is never sent to the server
+([RFC 3986](https://www.rfc-editor.org/rfc/rfc3986#section-3.5)). Before using the host, the
+browser also checks whether it must use HTTPS.
 
 That last check matters for both speed and safety. A site can send a header,
 `Strict-Transport-Security`, that tells the browser "only ever talk to me over HTTPS", which is
-called **HSTS** ([RFC 6797](https://www.rfc-editor.org/rfc/rfc6797)). Browsers also ship with a
-built-in **preload list** of sites that are HTTPS-only from the very first visit. As of October
-2026 the [preload list's own site](https://hstspreload.org/) notes that Chrome and Safari already
-upgrade plain HTTP navigations to HTTPS by default, and Google has announced that Chrome 154,
-scheduled for October 2026, will ask before opening any public site that has no HTTPS at all.
+called **HSTS** ([RFC 6797](https://www.rfc-editor.org/rfc/rfc6797)), and browsers ship a built-in
+**preload list** of sites that are HTTPS-only from the very first visit. As of October 2026 Chrome
+and Safari also upgrade plain HTTP navigations to HTTPS by default
+([hstspreload.org](https://hstspreload.org/)), and Google has announced that Chrome 154, scheduled
+for October 2026, will ask before opening any public site with no HTTPS at all
+([Google](https://blog.google/security/https-by-defau/)).
 
-Finally, before going to the network, the browser checks whether it already has the answer: a
-cached copy of the page in its HTTP cache, or a **service worker** (a script the site installed
-earlier) that can answer from its own storage. If either can answer, every step below is skipped.
-That is the fastest page load there is.
+Finally, the browser checks whether it already has the answer: a cached copy in its HTTP cache, or
+a **service worker** (a script the site installed earlier) that can answer from its own storage.
+If either can, every step below is skipped. That is the fastest page load there is.
 
 ### Step 1: find the server (DNS)
 
@@ -252,17 +244,20 @@ Here is the full walk, step by step, for a name nobody nearby has asked about re
    or a public one such as Cloudflare's 1.1.1.1 or Google's 8.8.8.8. This is the server that does
    the hard work.
 3. If the resolver has no cached answer, it asks a **root server**. There are 13 root server
-   identities, named A to M and run by 12 independent organisations, but each identity is served
-   from many places at once. As of October 2026 there are 2,047 root server instances worldwide
-   ([root-servers.org](https://root-servers.org/)). The root does not know the address. It replies
-   with a **referral**: "I don't know, but here are the servers for `.com`."
+   identities, named A to M and run by 12 organisations, and as of October 2026 they are served from
+   2,047 instances worldwide ([root-servers.org](https://root-servers.org/)). The root does not
+   know the address. It replies with a **referral**: "I don't know, but here are the servers for
+   `.com`."
 4. The resolver asks a `.com` server, a **top-level domain** (TLD) server, which refers it to the
    domain's own **authoritative** servers, the ones that hold the real records.
 5. The authoritative server answers with the address, and a **TTL** (time to live): how many
    seconds anyone may cache the answer.
 
-We ran this walk ourselves, from a network in India, with a script that builds raw DNS packets
-(it is in "Build it yourself" below). For `example.com`:
+We ran this walk ourselves, from a network in India, with a script that builds raw DNS question
+packets in the [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) format, sends them over UDP to a
+root server and follows the referrals
+([`dns_walk.py`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/how-the-web-works/python/dns_walk.py)).
+For `example.com`:
 
 ```text title="dns_walk.py output"
 1. asked a.root-servers.net (198.41.0.4) about example.com: 126 ms
@@ -278,9 +273,10 @@ example.com is at 104.20.23.154, found in 265 ms from a cold start
 Read the TTLs. The referral to the `.com` servers may be cached for 172,800 seconds, two days, so
 a busy resolver almost never asks the root. The address itself may be cached for 300 seconds. So
 the 265 ms walk is rare; the same lookup through the operating system's resolver, which had it
-cached, took 15 to 40 ms in our runs. Big public resolvers are faster still for popular names:
-in its write-up of the Facebook outage, Cloudflare noted that most queries to 1.1.1.1 were answered
-in under 10 ms, because the answers were already in its cache.
+cached, took 15 to 40 ms in our runs. Aliases make a walk longer: `www.wikipedia.org` is a
+**CNAME** (an alias) for `dyna.wikimedia.org`, so the script had to start again for the real name,
+and the cold walk took 810 ms. Real resolvers also remember which name servers answer fastest; our
+script always asks the first one in the list.
 
 **A worked example of the trade-off.** Say your site's address has a TTL of 86,400 seconds (one
 day) and you move to a new server. Resolvers that cached the old address an hour ago will keep
@@ -290,10 +286,9 @@ usually lower the TTL to a few minutes a day or two *before* a planned move, the
 afterwards.
 
 DNS uses UDP (a protocol that sends single packets with no connection set-up) on port 53, so a
-lookup is one round trip to the resolver. If DNS fails, nothing else on this page can even start.
-That is why DNS appears in so many of the outage stories further down. The [DNS](/networking/dns/)
-page goes inside this step: record types, how caches treat TTLs and "no such name", and how to
-change records without an outage.
+lookup is one round trip to the resolver. If DNS fails, nothing else on this page can even start,
+which is why DNS appears in so many outage stories. The [DNS](/networking/dns/) page goes inside
+this step: record types, how caches treat TTLs, and how to change records without an outage.
 
 ### Step 2: open a connection (TCP)
 
@@ -318,35 +313,34 @@ that is 190 ms in which nothing useful has happened yet.
 Two details here show up in real debugging:
 
 - **Ports.** The server listens on port 443. The browser picks a temporary port of its own, such
-  as 51234, so that one laptop can hold hundreds of connections at once. A connection is
-  identified by all four numbers together: two addresses and two ports.
+  as 51234, so one laptop can hold hundreds of connections. A connection is identified by all four
+  numbers: two addresses and two ports.
 - **IPv6 and IPv4 race.** Our lookup of `example.com` returned both IPv6 and IPv4 addresses. If
-  the IPv6 path is broken somewhere, trying it first and waiting for a timeout would make the page
-  hang. So browsers use **Happy Eyeballs** ([RFC 8305](https://www.rfc-editor.org/rfc/rfc8305)):
-  try IPv6 first, and if it has not connected within about 250 ms, start an IPv4 attempt in
-  parallel and keep whichever finishes first.
+  the IPv6 path is broken, waiting for a timeout would make the page hang. So browsers use
+  **Happy Eyeballs** ([RFC 8305](https://www.rfc-editor.org/rfc/rfc8305)): try IPv6 first, and if
+  it has not connected within about 250 ms, start IPv4 in parallel and keep whichever wins. The
+  catch: broken IPv6 then shows up only as a page that is 250 ms slow, and can go unnoticed for
+  months, so test both address families on purpose.
 
-There is one more TCP behaviour that affects page loads directly. A new connection does not know
-how fast the path is, so it starts cautiously. Under [RFC 6928](https://www.rfc-editor.org/rfc/rfc6928)
-the first flight of data is at most 10 packets, about 14.6 KB, and the amount roughly doubles with
+One more TCP behaviour affects page loads directly. A new connection does not know how fast the
+path is, so it starts cautiously. Under [RFC 6928](https://www.rfc-editor.org/rfc/rfc6928) the
+first flight of data is at most 10 packets, about 14.6 KB, and the amount roughly doubles with
 each round trip that goes well. This is called **slow start**. A 100 KB HTML page therefore takes
 about three round trips to arrive in full (14.6, then 29.2, then 58.4 KB), which is where the
-well-known advice "fit what the first screen needs into the first 14 KB" comes from. The
-[TCP vs UDP](/networking/tcp-vs-udp/) page goes inside this step: how TCP repairs losses, why a lost
-packet stalls everything behind it, and when UDP is the better choice.
+advice "fit what the first screen needs into the first 14 KB" comes from. The
+[TCP vs UDP](/networking/tcp-vs-udp/) page goes inside this step.
 
 ### Step 3: make it private (TLS)
 
-The connection works, but anything sent on it can be read, and changed, by every router on the
-path: the café Wi-Fi, the mobile network, any of a dozen networks in between. **TLS** (Transport
-Layer Security) fixes three things at once. It *encrypts* the data so nobody on the path can read
+The connection works, but anything sent on it can be read, and changed, by every network on the
+path, from the café Wi-Fi onwards. **TLS** (Transport Layer Security) fixes three things at once. It *encrypts* the data so nobody on the path can read
 it, it *protects* it so nobody can change it unnoticed, and it *authenticates* the server so you
 know you are talking to `shop.example.in` and not an impostor. The [TLS](/networking/tls/) page
 builds each of those three promises up from first principles.
 
 The current version, TLS 1.3, needs one round trip to set all of this up. Its specification was
-revised in July 2026 as [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html), a minor update that
-keeps the same version number and also formally retires the TLS 1.2 document. Step through it:
+revised in July 2026 as [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846.html), a minor update
+that keeps the version number. Step through it:
 
 <StepThrough
   title="A TLS 1.3 handshake"
@@ -364,21 +358,22 @@ keeps the same version number and also formally retires the TLS 1.2 document. St
   summary="TLS 1.3 agrees on keys, proves the server's identity with a certificate, and starts encrypting in one round trip. TLS 1.2 needed two, which is one reason old servers feel slower from far away."
 />
 
-**SNI** (server name indication) deserves a second look, because it explains a lot of real-world
-behaviour. One IP address often serves thousands of websites, especially behind a CDN, so the
-server needs to know which certificate to present before encryption starts. The browser therefore
-sends the site name in the ClientHello, readable by anyone on the path. A newer extension,
-**Encrypted Client Hello** ([RFC 9849](https://www.rfc-editor.org/info/rfc9849), published in 2026),
+**SNI** (server name indication) explains a lot of real-world behaviour. One IP address often
+serves thousands of websites, especially behind a CDN, so the server needs the site name before
+encryption starts, and the browser sends it in the ClientHello, readable by anyone on the path.
+A newer extension, **Encrypted Client Hello** ([RFC 9849](https://www.rfc-editor.org/info/rfc9849)),
 hides it.
 
-Certificates are also getting shorter lives, which matters if you ever run a server. In April
-2025 the CA/Browser Forum, the body of certificate authorities and browser makers that sets the
-rules, [voted](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/)
+Certificates are also getting shorter lives. In April 2025 the CA/Browser Forum, the body of
+certificate authorities and browser makers that sets the rules,
+[voted](https://cabforum.org/2025/04/11/ballot-sc081v3-introduce-schedule-of-reducing-validity-and-data-reuse-periods/)
 to cut the maximum lifetime of a public TLS certificate from 398 days to 200 days from March 2026,
 100 days from March 2027, and 47 days from March 2029. As of October 2026 Let's Encrypt still
 issues 90-day certificates by default, offers 6-day ones, and plans to reach 45 days by February
-2028 ([Let's Encrypt](https://letsencrypt.org/docs/cert-lifetimes/)). The practical consequence:
-renewing certificates by hand is over. Automate it, or you will have an outage.
+2028 ([Let's Encrypt](https://letsencrypt.org/docs/cert-lifetimes/)). It issues them through
+**ACME**, a protocol that lets a server prove it controls a domain and renew automatically. The
+practical consequence: renewing certificates by hand is over. Automate it, or you will have an
+outage.
 
 Now put steps 1 to 3 together and watch the round trips add up. The defaults are our worked
 example: a 190 ms round trip, a 40 ms DNS lookup and 50 ms of server work. The simulation runs five
@@ -404,13 +399,10 @@ its own headers, a blank line, and the body.
 </Figure>
 
 A handful of headers do most of the work. `Host` says which site you want, since one server hosts
-many. `Cookie` carries your session, which is how the server knows it is you. `Content-Type` says
-what the body is. And `Cache-Control: max-age=60` says the browser, and any cache in between, may
-reuse this response for 60 seconds without asking again. That one header is behind most of the
-speed of a second visit.
-
-Status codes come in five families, and knowing which family you are looking at tells you who to
-blame:
+many. `Cookie` carries your session. `Content-Type` says what the body is. And
+`Cache-Control: max-age=60` says the browser, and any cache in between, may reuse this response
+for 60 seconds without asking again; that one header is behind most of the speed of a second
+visit. Status codes come in five families, and the family tells you who to blame:
 
 | Code | Family | Means | Typical examples |
 |---|---|---|---|
@@ -430,8 +422,10 @@ interleaves many requests on one connection. HTTP/3 ([RFC 9114](https://www.rfc-
 runs on **QUIC** ([RFC 9000](https://www.rfc-editor.org/rfc/rfc9000)), a newer transport over UDP
 that merges the TCP and TLS handshakes into one round trip. The browser learns that a server
 speaks HTTP/3 from a response header; `example.com` sent us `alt-svc: h3=":443"`, which means "you
-can reach me over HTTP/3 on port 443 next time". A later page in the Networking track, HTTP/1.1 to
-HTTP/3, covers all three in depth. For now, watch what QUIC does to our round trips:
+can reach me over HTTP/3 on port 443 next time". As of 2025, Cloudflare saw HTTP/3 carry about 21%
+of the requests to its network ([Cloudflare Radar](https://blog.cloudflare.com/radar-2025-year-in-review)),
+and every browser falls back to HTTP/2 over TCP when UDP is blocked. Watch what QUIC does to our
+round trips:
 
 <RoundTripSim protocol="quic" />
 
@@ -487,9 +481,9 @@ the work on the server side, so it is where the server's share of the delay show
 ### Step 6: turn bytes into pixels
 
 The first bytes of HTML arrive, and the browser starts work before the rest has finished
-downloading. Browsers are complex programs: Chrome, for example, splits the work between a browser
-process that handles the network and a separate **renderer** process per site, which turns the
-page into pixels. What happens inside the renderer is called the **critical rendering path**.
+downloading. Chrome, for example, splits the work between a browser process that handles the
+network and a separate **renderer** process per site, which turns the page into pixels. What
+happens inside the renderer is called the **critical rendering path**.
 
 <Figure caption="HTML becomes the DOM and CSS becomes the CSSOM; together they make the render tree, which is laid out, painted and composited onto the screen. Every image, script and font the HTML mentions starts a new trip through the network steps.">
   <RenderPipeline />
@@ -507,23 +501,23 @@ page into pixels. What happens inside the renderer is called the **critical rend
 The part that matters most for speed is the loop at the bottom. Every `<link>`, `<script>`, `<img>`
 and font the HTML mentions is a new request, and each one goes through steps 1 to 4 again: a DNS
 lookup if it is on a new host, a handshake if there is no open connection, and a round trip for the
-request itself. Browsers help: a **preload scanner** reads ahead in the HTML and starts these
-downloads early, and connections to the same host are reused. But some requests can only start
-once an earlier one finishes. The HTML names a stylesheet, the stylesheet names a font, a script
-calls an API. Each link in that chain is at least one more round trip.
+request itself. That is why every extra host a page uses (fonts from one, analytics from another)
+costs time. Browsers help: a **preload scanner** reads ahead in the HTML and starts downloads
+early, and connections to the same host are reused. But some requests can only start once an
+earlier one finishes. The HTML names a stylesheet, the stylesheet names a font, a script calls an
+API. Each link in that chain is at least one more round trip.
 
 A plain `<script>` tag also stops the HTML parser until the script has downloaded and run, because
-scripts can change the page. Adding `defer` or `async` to the tag lets parsing continue. How much
-there is to fetch is not small: in the HTTP Archive's 2025 Web Almanac, the median home page was
-about 2.6 MB on mobile and 2.9 MB on desktop, made of roughly 75 to 80 requests, with around
-630 to 700 KB of JavaScript
+scripts can change the page; `defer` or `async` on the tag lets parsing continue. And there is a
+lot to fetch: in the HTTP Archive's 2025 Web Almanac, the median home page was about 2.6 MB on
+mobile, made of roughly 75 to 80 requests
 ([Web Almanac 2025](https://almanac.httparchive.org/en/2025/page-weight)).
 
-This is the rest of the three seconds in our opening story. The HTML arrived at about 660 ms. Then the CSS
-and the main script, fetched on the same connection, took one more round trip each. The script
-called an API, one more. The images were on a separate domain, so that meant a new DNS lookup and
-a new handshake. A chain of five or six dependent round trips at 190 to 300 ms each on a mobile
-network adds up to the three seconds, while the server did 50 ms of work for each request.
+This is the rest of the three seconds in our opening story. The HTML arrived at about 660 ms. The
+CSS and the main script took one more round trip each, and the script called an API, one more.
+The images were on a separate domain: a new DNS lookup and a new handshake. Five or six dependent
+round trips at 190 to 300 ms each on a mobile network add up to three seconds, while the server
+did 50 ms of work for each request.
 
 ### The second visit is different
 
@@ -558,23 +552,19 @@ the ones you will use when something is broken: what users see, and where to loo
 | 5. Servers | inside step 4 | inside step 4 | `502` or `504` from a proxy that gave up | app logs, database, health checks |
 | 6. Rendering | 1 or more per file the page needs | mostly cached | blank or unstyled page, layout jumps | DevTools Performance panel |
 
-Two lessons hide in the table. First, on a cold first visit, steps 1 to 3 alone cost three round
-trips before your code runs, so the further away the user, the more the set-up dominates. Second,
-almost every row's "repeat visit" column is a cache or a reused connection, which is why caching
+Almost every row's "repeat visit" column is a cache or a reused connection, which is why caching
 and keeping connections open are the two biggest speed tools there are.
 
-Now compare the connection set-ups on the same input. The rows below share one time axis, the
-same DNS time and the same server work. The only difference is how many round trips each one
-needs before the request can go.
+Now compare the connection set-ups on the same input. The rows below share one time axis, DNS time
+and server work; the only difference is how many round trips each needs before the request can go.
 
 <RoundTripSim protocol="compare" />
 
 **How to use this.** When a page is slow, find out first whether the time is in round trips or in
-server work: a waterfall in the browser's developer tools shows it in seconds. If it is round trips,
-the fixes are about distance and reuse: a CDN, fewer separate domains, HTTP/2 or HTTP/3, fewer
-redirects, and fewer dependent requests. If it is server work, it is your code, your queries, or
-the services you call. In practice I would always measure before changing anything. Teams lose
-weeks tuning a database that was never the slow part.
+server work. If it is round trips, the fixes are about distance and reuse: a CDN, fewer separate
+domains, HTTP/2 or HTTP/3, fewer redirects, and fewer dependent requests. If it is server work, it
+is your code, your queries, or the services you call. Teams lose weeks tuning a database that was
+never the slow part.
 
 :::tip[Read the waterfall, not the total]
 Every browser's developer tools have a Network tab with a timing breakdown per request: queueing,
@@ -584,18 +574,19 @@ same breakdown as the table above, measured on your real page. Open it before yo
 
 ## Build it yourself
 
-We will build three tools, each closer to what production systems use: a client that does every
-step by hand and times it, a resolver that walks DNS from the root, and a probe that puts a timeout
-on every step and reports which one failed. All of them use only the standard library. Every file
-is in [examples/how-the-web-works](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/how-the-web-works),
+The naive fetch gave us one number and no diagnosis. We will build two tools, each closer to what
+production systems use: a client that does every step by hand and times it, and a probe that puts
+a timeout on every step and reports which one failed. Both use only the standard library. Every
+file, including the DNS walker from step 1, is in
+[examples/how-the-web-works](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/how-the-web-works),
 and every output on this page came from running them, on a network in India in October 2026. Your
 numbers will differ, because your distances do.
 
 ### Step 1: every step by hand, with a stopwatch
 
 Instead of one `fetch`, we look up the address, open the TCP connection, wrap it in TLS, and write
-the HTTP request ourselves, timing each step. Reading the response is a little long, because it
-must handle chunked bodies, so it lives in the full file.
+the HTTP request ourselves, timing each step. Printing and reading the response (which must handle
+chunked bodies) live in the full file.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -606,8 +597,6 @@ must handle chunked bodies, so it lives in the full file.
     t = time.perf_counter()
     infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     dns = time.perf_counter() - t
-    addresses = list(dict.fromkeys(info[4][0] for info in infos))  # unique, in order
-    print(f"1. DNS lookup    {ms(dns)}   {host} -> {', '.join(addresses[:3])}")
 
     # 2. TCP: one round trip (SYN, SYN-ACK; our ACK rides along with the next packet).
     family, _, _, _, sockaddr = infos[0]
@@ -616,7 +605,6 @@ must handle chunked bodies, so it lives in the full file.
     raw.settimeout(5)  # never wait for ever on any one step
     raw.connect(sockaddr)
     tcp = time.perf_counter() - t
-    print(f"2. TCP connect   {ms(tcp)}   to {sockaddr[0]} port 443 (about one round trip)")
 
     # 3. TLS: agree on keys, check the certificate, and pick HTTP/1.1 via ALPN.
     context = ssl.create_default_context()
@@ -624,7 +612,6 @@ must handle chunked bodies, so it lives in the full file.
     t = time.perf_counter()
     tls = context.wrap_socket(raw, server_hostname=host)  # server_hostname = SNI + cert check
     handshake = time.perf_counter() - t
-    # ... printing the TLS version, cipher and certificate is in the full file
 
     # 4. HTTP: the request is plain text inside the encrypted tunnel.
     request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: by-hand/1.0\r\nConnection: keep-alive\r\n\r\n"
@@ -642,7 +629,6 @@ must handle chunked bodies, so it lives in the full file.
   let t = now();
   const addresses = await lookup(host, { all: true, order: 'ipv6first' });
   const dns = now() - t;
-  console.log(`1. DNS lookup    ${ms(dns)}   ${host} -> ${addresses.slice(0, 3).map((a) => a.address).join(', ')}`);
 
   // 2. TCP: one round trip (SYN, SYN-ACK; our ACK rides along with the next packet).
   const { address } = addresses[0];
@@ -651,14 +637,12 @@ must handle chunked bodies, so it lives in the full file.
   raw.on('timeout', () => raw.destroy(new Error('connect timed out')));
   await once(raw, 'connect');
   const tcp = now() - t;
-  console.log(`2. TCP connect   ${ms(tcp)}   to ${address} port 443 (about one round trip)`);
 
   // 3. TLS: agree on keys, check the certificate, and pick HTTP/1.1 via ALPN.
   t = now();
   const sock = tls.connect({ socket: raw, servername: host, ALPNProtocols: ['http/1.1'] }); // servername = SNI
   await once(sock, 'secureConnect');
   const handshake = now() - t;
-  // ... printing the TLS version, cipher and certificate is in the full file
 
   // 4. HTTP: the request is plain text inside the encrypted tunnel.
   const request = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nUser-Agent: by-hand/1.0\r\nConnection: keep-alive\r\n\r\n`;
@@ -692,112 +676,19 @@ Second request, same connection:      16.7 ms   (HTTP/1.1 200 OK)
 There is a lot to read in that output:
 
 - The lookup returned **IPv6 addresses first**, and we connected over IPv6.
-- The **TCP connect took 14 ms**: that is our round trip to Cloudflare's Mumbai edge. When we ran
-  the probe below against `badssl.com`, a test site hosted much further away, the same step took
-  about 230 ms. Same code, same laptop, sixteen times slower, purely because of distance.
-- **TLS 1.3** was negotiated, and ALPN settled on HTTP/1.1 because that is all we offered. A browser
-  would offer `h2` too.
+- The **TCP connect took 14 ms**: our round trip to Cloudflare's Mumbai edge. Against `badssl.com`,
+  a test site hosted much further away, the same step took about 230 ms. Same code, same laptop,
+  sixteen times slower, purely because of distance.
+- **TLS 1.3** was negotiated, and ALPN settled on HTTP/1.1 because that is all we offered.
 - The **first request took 151 ms** in total; the **second, on the same connection, 17 ms**.
-- The `server`, `cf-ray` and `age` headers show the answer came from a CDN cache, not from
-  `example.com`'s origin.
+- The `server`, `cf-ray` and `age` headers show the answer came from a CDN cache.
 
-### Step 2: walk DNS the way a resolver does
-
-Your laptop never walks DNS from the root; its resolver does. To see what the resolver does on a
-miss, this script builds raw DNS question packets (the format is in
-[RFC 1035](https://www.rfc-editor.org/rfc/rfc1035)), sends them over UDP to a root server, and
-follows the referrals. Here is the walk itself; building and parsing packets is in the full file.
-
-<Tabs syncKey="lang">
-  <TabItem label="Python">
-```python title="dns_walk.py"
-# runnable version: examples/how-the-web-works/python/dns_walk.py
-def walk(name: str, depth: int = 0) -> str:
-    server_name, server_ip = ROOT
-    indent = "    " * depth
-    for hop in range(1, 10):
-        reply, rtt = ask(server_ip, name)
-        print(f"{indent}{hop}. asked {server_name} ({server_ip}) about {name}: {rtt:.0f} ms")
-        for owner, rtype, ttl, value in reply["answer"]:
-            print(f"{indent}   answer: {owner} {rtype} {value}  (cache for {ttl} s)")
-            if rtype == "A":
-                return value
-            if rtype == "CNAME":  # an alias: start again for the real name
-                return walk(value, depth)
-        referral = [r for r in reply["authority"] if r[1] == "NS"]
-        if not referral:
-            raise LookupError(f"{name}: no answer and no referral")
-        zone, ttl = referral[0][0], referral[0][2]
-        names = [r[3] for r in referral]
-        print(f"{indent}   referral: ask the {zone} servers, e.g. {', '.join(names[:2])}  (cache for {ttl} s)")
-        glue = {owner: value for owner, rtype, _, value in reply["additional"] if rtype == "A"}
-        server_name = next((n for n in names if n in glue), names[0])
-        # "Glue" is the address of a name server, sent along so we don't have to look it up.
-        # Without it, we must resolve the name server's own name first.
-        server_ip = glue.get(server_name) or walk(server_name, depth + 1)
-    raise LookupError("too many hops")
-```
-  </TabItem>
-  <TabItem label="JavaScript">
-```js title="dns-walk.mjs"
-// runnable version: examples/how-the-web-works/js/dns-walk.mjs
-async function walk(name, depth = 0) {
-  let [serverName, serverIp] = ROOT;
-  const indent = '    '.repeat(depth);
-  for (let hop = 1; hop < 10; hop++) {
-    const [reply, rtt] = await ask(serverIp, name);
-    console.log(`${indent}${hop}. asked ${serverName} (${serverIp}) about ${name}: ${rtt.toFixed(0)} ms`);
-    for (const [owner, rtype, ttl, value] of reply.answer) {
-      console.log(`${indent}   answer: ${owner} ${rtype} ${value}  (cache for ${ttl} s)`);
-      if (rtype === 'A') return value;
-      if (rtype === 'CNAME') return walk(value, depth); // an alias: start again for the real name
-    }
-    const referral = reply.authority.filter((r) => r[1] === 'NS');
-    if (!referral.length) throw new Error(`${name}: no answer and no referral`);
-    const [zone, , ttl] = referral[0];
-    const names = referral.map((r) => r[3]);
-    console.log(`${indent}   referral: ask the ${zone} servers, e.g. ${names.slice(0, 2).join(', ')}  (cache for ${ttl} s)`);
-    const glue = Object.fromEntries(reply.additional.filter((r) => r[1] === 'A').map((r) => [r[0], r[3]]));
-    serverName = names.find((n) => n in glue) ?? names[0];
-    // "Glue" is the address of a name server, sent along so we don't have to look it up.
-    // Without it, we must resolve the name server's own name first.
-    serverIp = glue[serverName] ?? (await walk(serverName, depth + 1));
-  }
-  throw new Error('too many hops');
-}
-```
-  </TabItem>
-</Tabs>
-
-You saw its output for `example.com` in step 1 above. `www.wikipedia.org` is more interesting,
-because the answer is an alias, a **CNAME**, and the walk has to start again for the real name:
-
-```text title="dns_walk.py www.wikipedia.org (output)"
-1. asked a.root-servers.net (198.41.0.4) about www.wikipedia.org: 125 ms
-   referral: ask the org. servers, e.g. a2.org.afilias-nst.info., b2.org.afilias-nst.org.  (cache for 172800 s)
-2. asked a2.org.afilias-nst.info. (199.249.112.1) about www.wikipedia.org: 10 ms
-   referral: ask the wikipedia.org. servers, e.g. ns0.wikimedia.org., ns1.wikimedia.org.  (cache for 3600 s)
-3. asked ns0.wikimedia.org. (208.80.154.238) about www.wikipedia.org: 254 ms
-   answer: www.wikipedia.org. CNAME dyna.wikimedia.org.  (cache for 86400 s)
-1. asked a.root-servers.net (198.41.0.4) about dyna.wikimedia.org.: 133 ms
-   ...
-3. asked ns0.wikimedia.org. (208.80.154.238) about dyna.wikimedia.org.: 270 ms
-   answer: dyna.wikimedia.org. A 103.102.166.224  (cache for 180 s)
-
-www.wikipedia.org is at 103.102.166.224, found in 810 ms from a cold start
-```
-
-Two things to notice. The walk took 810 ms, because of the alias and because our script always
-asked the first name server in the list, which happened to be far away. Real resolvers remember
-how fast each server answered and prefer the quick ones. And the TTLs differ wildly: two days for
-the `.org` referral, one day for the alias, three minutes for the address. Each one is a decision
-someone made about how quickly they might need to change it.
-
-### Step 3: a probe that says which step failed
+### Step 2: a probe that says which step failed
 
 The production-shaped version is the kind of check uptime monitors run: a timeout on every step,
 every address tried in turn, and when something fails, the name of the step and what a browser
-would have shown. Here is the core:
+would have shown. Here is the connect step; the DNS, TLS and response steps in the full file follow
+the same pattern, and the TLS step maps certificate errors to the browser's names for them:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -821,17 +712,6 @@ def connect(infos: list[tuple]) -> socket.socket:
             last = StepFailed("connect", f"{sockaddr[0]} refused", "ERR_CONNECTION_REFUSED")
         sock.close()
     raise last
-
-
-def handshake(sock: socket.socket, host: str) -> ssl.SSLSocket:
-    sock.settimeout(TIMEOUTS["tls"])
-    try:
-        return ssl.create_default_context().wrap_socket(sock, server_hostname=host)
-    except ssl.SSLCertVerificationError as err:
-        browser = {10: "NET::ERR_CERT_DATE_INVALID", 62: "NET::ERR_CERT_COMMON_NAME_INVALID"}
-        raise StepFailed("tls", err.verify_message, browser.get(err.verify_code, "NET::ERR_CERT_INVALID"))
-    except TimeoutError:
-        raise StepFailed("tls", "handshake timed out", "ERR_TIMED_OUT")
 ```
   </TabItem>
   <TabItem label="JavaScript">
@@ -856,26 +736,12 @@ async function connect(addresses, port) {
   }
   throw last;
 }
-
-async function handshake(socket, host) {
-  const sock = tls.connect({ socket, servername: host });
-  const browser = { CERT_HAS_EXPIRED: 'NET::ERR_CERT_DATE_INVALID', ERR_TLS_CERT_ALTNAME_INVALID: 'NET::ERR_CERT_COMMON_NAME_INVALID' };
-  try {
-    await within(TIMEOUTS.tls, new Promise((ok, fail) => sock.once('secureConnect', ok).once('error', fail)),
-      () => new StepFailed('tls', 'handshake timed out', 'ERR_TIMED_OUT'));
-    return sock;
-  } catch (err) {
-    sock.destroy();
-    if (err instanceof StepFailed) throw err;
-    throw new StepFailed('tls', err.reason ?? err.message, browser[err.code] ?? 'NET::ERR_CERT_INVALID');
-  }
-}
 ```
   </TabItem>
 </Tabs>
 
 Run with no arguments, it probes one healthy site and five broken ones, each broken at a different
-step. `.invalid` is a top-level domain reserved so that it never resolves
+step; the healthy site and four of the broken ones are shown here. `.invalid` is a top-level domain reserved so that it never resolves
 ([RFC 6761](https://www.rfc-editor.org/rfc/rfc6761)), and `badssl.com` is a public site that exists
 to serve broken certificates for testing.
 
@@ -899,23 +765,14 @@ https://127.0.0.1:9/
 https://expired.badssl.com/
   dns 14  connect 233  tls 349  (total 596 ms)
   FAILED at tls: certificate has expired  -> a browser shows NET::ERR_CERT_DATE_INVALID
-
-https://wrong.host.badssl.com/
-  dns 19  connect 237  tls 308  (total 565 ms)
-  FAILED at tls: Hostname mismatch, certificate is not valid for 'wrong.host.badssl.com'.  -> a browser shows NET::ERR_CERT_COMMON_NAME_INVALID
 ```
 
 Each failure looks different, and the difference is the diagnosis. A **timeout** means nothing
 answered: a firewall dropping packets, a wrong address, a machine that is down. A **refusal** means
 a machine answered but nothing is listening on that port: the server process crashed, or it
 listens on a different port. A **certificate error** means the network is fine and the
-configuration is wrong. The refused connection took 2 s in this Python run on Windows, where the
-operating system tried again before reporting it; the JavaScript version on the same machine saw
-the refusal in 6 ms, and Python on Linux in 17 ms.
-
-The last line holds a small lesson of its own. The certificate on `wrong.host.badssl.com` covers
-`*.badssl.com`, and a wildcard covers exactly one level of name, so `wrong.host.badssl.com`, two
-levels deep, is not covered.
+configuration is wrong. (The refusal took 2 s here because Windows retried before reporting it;
+on Linux it took 17 ms.)
 
 ### The tool you already have: curl
 
@@ -947,183 +804,126 @@ curl --silent --output /dev/null --write-out '
 
 Each number is "seconds since curl started", so a step's own cost is the gap from the line above.
 Here DNS took 22 ms, TCP 16 ms, TLS 115 ms and the server about 20 ms. curl offered HTTP/2 and the
-server accepted it. Notice also that `example.com` resolved to a different address than in the
-Python run: CDNs hand out different addresses to spread load, so the same name can point to
-different machines minutes apart.
+server accepted it.
 
 ## How real systems do it
 
 The steps are standard; what differs between real systems is how hard they work to skip them.
-Facts in this section change over time, so each is marked with when we checked.
 
 **Browsers race and guess ahead.** Chrome starts finding or launching the renderer process for a
 site while the network request is still in flight, because it already knows which site it is
 going to. It reads ahead in HTML with the preload scanner, races IPv6 against IPv4, and keeps
 connections open to reuse them. Pages can help it further: `<link rel="preconnect">` tells the
 browser to do the DNS lookup and handshake for a host before it is needed, and the `103 Early Hints`
-status lets a server name critical files while it is still building the page. Google's
-announcement that Chrome 154 (scheduled for October 2026) will turn on "Always Use Secure
-Connections" by default, asking before any first visit to a public HTTP site, reported that in
-their experiment fewer than 3% of navigations would see the warning
-([Google](https://blog.google/security/https-by-defau/)).
+status lets a server name critical files while it is still building the page.
 
 **CDNs move the far end closer.** Large CDNs use **anycast**: the same IP address is announced from
 hundreds of data centres, and the internet's routing sends each user to the nearest one. That is
 why our `example.com` requests from India were answered in Mumbai, with a TCP round trip of about
-14 ms. The CDN also keeps long-lived connections back to the
-origin, so even uncacheable requests skip a long handshake.
+14 ms. The DNS root servers use the same trick, which is how 13 identities become over 2,000
+instances. The CDN also keeps long-lived connections back to the origin, so even uncacheable
+requests skip a long handshake.
 
-**The DNS root is everywhere.** The root servers handle the top of every lookup, yet a resolver
-rarely needs them, because the `.com` referral is cached for two days. The 13 identities are served
-from 2,047 instances, again by anycast, so a root server is never very far away (as of October
-2026, [root-servers.org](https://root-servers.org/)). TTLs at the bottom of the tree are short by
-comparison: we saw 300 seconds for `example.com`'s address and 60 seconds for `github.com`'s.
-
-**New protocols spread slowly.** Cloudflare's 2025 Year in Review, covering requests to its
-network, found HTTP/2 carrying 50% of requests, HTTP/1.x 29% and HTTP/3 21%, all largely unchanged
-from 2024. IPv6 carried 29% of requests from clients that could use both. Post-quantum key agreement,
-a change to the TLS handshake designed to resist future quantum computers, grew from 29% to 52% of
-its human traffic during 2025
-([Cloudflare Radar](https://blog.cloudflare.com/radar-2025-year-in-review)). Old clients, old
-servers and network devices that block UDP, such as some corporate firewalls, keep older protocols
-alive for years, so every browser falls
-back gracefully: if HTTP/3 does not work, it uses HTTP/2 over TCP.
-
-**Certificates are automated.** Let's Encrypt issues free certificates through **ACME**, a protocol
-that lets a server prove it controls a domain and renew automatically. With public certificates
-heading to 47 days by 2029, every serious setup renews this way, usually a few weeks before expiry.
+**Everything degrades gracefully.** Old clients, old servers and network devices that block UDP,
+such as some corporate firewalls, keep older protocols alive for years. So every browser falls
+back: if HTTP/3 does not work it uses HTTP/2 over TCP, if IPv6 is slow it uses IPv4, and if a
+session cannot be resumed it does a full handshake. The fast path is an optimisation, never a
+requirement.
 
 ## Gotchas and war stories
 
 :::danger[A real outage: the day DNS could not find Facebook]
 On 4 October 2021, a command meant to check Facebook's backbone capacity took the whole backbone
-down. Facebook's DNS servers are designed to stop advertising their addresses to the internet when
-they lose contact with the data centres, as a safety measure, and that is what they did. The
-servers were still running, but nobody could reach them, so `facebook.com`, Instagram and WhatsApp
-stopped resolving anywhere in the world. Cloudflare's resolver saw the names fail from 15:50 to
-21:20 UTC, about five and a half hours, and resolvers everywhere handled around 30 times their
-usual load as apps and people retried. Recovery was slow partly because the same failure broke the
-internal tools engineers needed, and they had to go to data centres in person.
+down. Facebook's DNS servers are designed to stop advertising their addresses when they lose
+contact with the data centres, and that is what they did. The servers were still running, but
+nobody could reach them, so `facebook.com`, Instagram and WhatsApp stopped resolving everywhere for
+about five and a half hours, while resolvers handled around 30 times their usual load from
+retries. Recovery was slow partly because the same failure broke the engineers' internal tools.
 ([Facebook's write-up](https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/),
 [Cloudflare's view](https://blog.cloudflare.com/october-2021-facebook-outage/))
 :::
 
-The lesson for the rest of us: step 1 is a single point of failure for everything after it. If
-your DNS is unreachable, a perfectly healthy server is invisible.
+The lesson: if your DNS is unreachable, a perfectly healthy server is invisible.
 
 **You cannot take back a cached answer.** On 30 September 2021, Slack enabled DNSSEC (a system that
 signs DNS answers so they cannot be forged) and some users began seeing `ERR_NAME_NOT_RESOLVED`. The
 team rolled the change back, which made things worse: resolvers had cached a record from the `.com`
-zone saying "slack.com is signed", with a 24-hour TTL that Slack had no control over, and
-answers without signatures now looked forged, so validating resolvers refused them. Fewer than
-1% of users were affected, but the incident lasted about 24 hours, until the caches expired
+zone saying "slack.com is signed", with a 24-hour TTL Slack did not control, so unsigned answers
+now looked forged. Fewer than 1% of users were affected, but it lasted about 24 hours
 ([Slack's write-up](https://slack.engineering/what-happened-during-slacks-dnssec-rollout/)). Plan
 every DNS change around the longest TTL involved, including ones set by someone else.
 
-**One resolver is one point of failure.** On 14 July 2025, a configuration error that had sat
-unnoticed since June withdrew the routes to Cloudflare's 1.1.1.1 resolver worldwide for 62 minutes.
-For users whose devices used only 1.1.1.1, almost every site appeared to be down, though nothing
-was wrong with the sites. DNS over HTTPS, which uses a different address, mostly kept working
+**One resolver is one point of failure.** On 14 July 2025, a configuration error withdrew the
+routes to Cloudflare's 1.1.1.1 resolver worldwide for 62 minutes. For users whose devices used only
+1.1.1.1, almost every site appeared to be down, though nothing was wrong with the sites
 ([Cloudflare's postmortem](https://blog.cloudflare.com/cloudflare-1-1-1-1-incident-on-july-14-2025/)).
 Devices and servers should be configured with resolvers from more than one provider.
 
-**Old devices and trust that expires.** On 30 September 2021, an old root certificate that
-Let's Encrypt had relied on for compatibility expired. Modern devices were fine, but older ones
-that did not trust Let's Encrypt's newer root, and some API clients on old OpenSSL versions, began
-failing every TLS handshake to sites using its certificates
-([Let's Encrypt](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/)). If you
-run servers that old devices or embedded systems talk to, know which roots those clients trust.
-
 :::caution[Always set a timeout on every step]
-We measured how long an unanswered connection waits when nobody sets a timeout: 21 s on Windows,
-135 s on Linux, 10.8 s for Node's `fetch`. A service that calls another service without timeouts
-can have every one of its threads stuck waiting, and stop serving everyone. Set a connect timeout
-and a total timeout on every outgoing call. The Timeouts page in the Resilience track is about
+The naive fetch near the top of this page waited 21 to 135 s for a server that never answered. A
+service that calls another service without timeouts can have every one of its threads stuck
+waiting like that, and stop serving everyone. The Timeouts page in the Resilience track is about
 exactly this.
 :::
 
-**A 301 can be forever.** Browsers cache permanent redirects, often with no expiry. A mistaken
-`301` from `/shop` to the wrong place keeps sending existing visitors to the wrong place after you
-fix the server. Use `302` or `307` while you are testing a redirect, and `301` only once you are
-sure.
-
-**A wrong clock breaks every certificate.** Certificate checks compare validity dates with the
-device's own clock. A phone whose clock is set months wrong sees every site's certificate as
-"not yet valid" or "expired", and reports it as a security error. When one user sees certificate
-errors everywhere and nobody else does, check their clock first.
+**A 301 can be forever.** Browsers cache permanent redirects, often with no expiry, so a mistaken
+`301` keeps sending visitors to the wrong place after you fix the server. Use `302` or `307` while
+testing a redirect.
 
 **"It works on my machine" is often a cache.** Your laptop may have an old DNS answer, a hosts file
 entry from a previous project, a VPN with its own DNS, an HSTS entry, or a cached `301`. When you
 cannot reproduce a user's problem, try a private window, a different network (your phone's mobile
 data is a good one), and `curl -v`, which bypasses the browser's caches entirely.
 
-**Many domains, many handshakes.** Every separate host a page uses (fonts from one, analytics from
-another, images from a third) can cost its own DNS lookup and handshake. Much of the usual
-advice about speed comes down to "use fewer hosts" and "preconnect to the ones you must use".
-
-**Broken IPv6 hides behind Happy Eyeballs.** If your server's IPv6 address is configured but does
-not work, most browsers quietly fall back to IPv4 after about 250 ms. Users see a page that is a
-little slow, nobody sees an error, and the problem can go unnoticed for months. Test both address
-families on purpose.
-
 ## Trade-offs and limits of the model
 
 Every step of this journey is a trade-off someone made, and you will make the same ones.
 
-- **Layers cost round trips, and buy independence.** DNS, TCP, TLS and HTTP were each designed
-  separately, so each can be replaced without the others: TLS moved from 1.2 to 1.3 without
-  changing HTTP. The price is that each layer needs its own set-up. QUIC trades some of that
-  independence for speed by merging two layers.
+- **Layers cost round trips, and buy independence.** Each layer can be replaced without the
+  others: TLS moved from 1.2 to 1.3 without changing HTTP. The price is that each needs its own
+  set-up. QUIC trades some of that independence for speed by merging two layers.
 - **Caching trades freshness for speed.** Long DNS TTLs and long `Cache-Control` lifetimes make
   repeat visits fast and reduce load, and make every change slow to reach users. Short ones do the
   opposite. There is no right answer, only a right answer for each record and each file.
 - **Encryption is no longer the expensive part.** TLS 1.3 costs one round trip, often zero on a
-  reused or resumed connection, and the computing cost is small on modern hardware. Arguments that
-  HTTPS is "too slow" date from a time that is over.
+  reused connection, and the computing cost is small on modern hardware.
 - **Moving closer costs money and complexity.** A CDN or servers in several regions remove round
   trips for distant users, but add a bill, a cache to invalidate, and more places for things to go
   wrong. For an internal tool used in one office, they are not worth it.
 
-This page's model also has limits. It describes one page load in a browser. A mobile app skips the
-address bar and rendering steps but makes exactly the same network trips. A chat or a live
-dashboard opens one long-lived connection, a WebSocket for example, and
-then the per-request cost is close to one-way latency. Server-to-server calls inside one data
-centre have round trips of well under a millisecond, so there the server work dominates and
-everything in this page's latency arithmetic flips around.
+This page's model also has limits. A mobile app skips the address bar and rendering but makes the
+same network trips. A chat or a live dashboard opens one long-lived connection, such as a
+WebSocket, and then pays close to one-way latency per message. Server-to-server calls inside one
+data centre have round trips of well under a millisecond, so there the server work dominates and
+this page's latency arithmetic flips around.
 
 :::note[From the trenches]
-When a page is slow, people reach for the part of the stack they know best. Back-end engineers tune
-queries; front-end engineers shrink bundles. Most of the time, the first useful question is simpler:
-how many round trips does this page need, and how long is each one? Answer that, with a waterfall
-in front of you, before anyone changes a line of code.
+When a page is slow, people reach for the part of the stack they know best: back-end engineers tune
+queries, front-end engineers shrink bundles. The first useful question is simpler: how many round
+trips does this page need, and how long is each one?
 :::
 
 ## Interview corner
 
 "What happens when you type a URL into a browser and press Enter?" is one of the oldest interview
-questions in the industry, asked of new grads and senior engineers alike. It has no single right
-answer, because it can go as deep as the interviewer likes. What it tests is whether you have the
-whole map, can explain each step clearly, and know where the time and the failures are.
+questions in the industry, asked of new grads and senior engineers alike. It can go as deep as the
+interviewer likes; what it tests is whether you have the whole map and know where the time and the
+failures are.
 
 Typical questions, and what a strong answer covers:
 
 1. **"Walk me through what happens when I type example.com and press Enter."** Give the outline
-   first, in order: URL parsing and HSTS, cache checks, DNS, TCP, TLS, HTTP request, the servers
-   behind the address, rendering, and further requests. Then offer to go deep on whichever step they
-   pick. Mentioning that most steps are skipped on a repeat visit, and why, is a strong signal.
+   first, in order: URL parsing and HSTS, cache checks, DNS, TCP, TLS, HTTP, the servers behind the
+   address, rendering, and further requests. Then offer to go deep on any step. Mentioning what a
+   repeat visit skips, and why, is a strong signal.
 2. **"How does DNS resolution work?"** Browser and OS caches, the recursive resolver, root, TLD and
-   authoritative servers, referrals, and TTLs. Bonus points for knowing that the root is rarely
-   asked because referrals are cached for days, and that changes are slow because of TTLs.
-3. **"Why is HTTPS not slow any more?"** TLS 1.3 needs one round trip instead of two; session
-   resumption and 0-RTT can remove it on repeat connections; QUIC merges it with the transport
-   handshake; and modern hardware makes the encryption itself cheap.
-4. **"A page loads slowly for users in another country. How would you investigate and fix it?"**
-   Measure first: a waterfall or `curl -w` timing from a machine in that country. Separate round
-   trips from server time. Then: a CDN, fewer hosts and redirects, connection reuse, HTTP/2 or
-   HTTP/3, caching headers, and only after that the server code.
-5. **"A user gets `ERR_CONNECTION_REFUSED` and another gets `ERR_CONNECTION_TIMED_OUT`. What is
+   authoritative servers, referrals, and TTLs, and why the root is rarely asked.
+3. **"A page loads slowly for users in another country. How would you investigate and fix it?"**
+   Measure first, from that country, and separate round trips from server time. Then: a CDN, fewer
+   hosts and redirects, connection reuse, HTTP/2 or HTTP/3, caching headers, then the server code.
+4. **"A user gets `ERR_CONNECTION_REFUSED` and another gets `ERR_CONNECTION_TIMED_OUT`. What is
    different?"** Refused means a machine answered and nothing listens on that port; timed out means
-   nothing answered at all, often a firewall or a wrong address. Then name how you would check each.
+   nothing answered at all, often a firewall or a wrong address.
 
 Interviewers also listen for the server side. Saying "and then the server responds" misses the
 load balancer, the app servers and the database, which is where most of your actual job will be.
@@ -1169,48 +969,25 @@ certificate does.
 
 </details>
 
-<details>
-<summary>5. The site loads for you, but a colleague in another office sees DNS_PROBE_FINISHED_NXDOMAIN. Which step failed, and what would you check?</summary>
-
-Step 1: their resolver says the name does not exist. Since it works for you, the name itself
-probably exists, so look at what is different about their lookup: their office's resolver (a
-corporate DNS that does not know an internal or new name, or has a cached "does not exist" answer),
-a typo in what they typed, or a recently created record that their resolver cached as missing
-before it existed. Compare `nslookup` results from both machines, and try a public resolver from
-theirs.
-
-</details>
-
-<details>
-<summary>6. A page makes 75 requests. Why does it not take 75 times as long as one request?</summary>
-
-Most requests skip most of the set-up. DNS is looked up once per host and cached. Connections are
-reused, and HTTP/2 or HTTP/3 carry many requests at the same time on one connection. Browsers
-download in parallel, and the preload scanner starts downloads early. What does add up is a chain
-of requests that each depend on the one before, such as HTML, then CSS, then a font, because each
-link must wait at least one round trip.
-
-</details>
-
 ## Recap
 
 - A page load is **find (DNS), connect (TCP), secure (TLS), ask (HTTP), serve (servers behind the
   address), draw (render)**, then the same again for every file the page needs.
-- The cost is counted in **round trips**. On a first visit over TCP and TLS 1.3, the first byte
-  needs three, plus DNS and server work. HTTP/3 needs two. A reused connection needs one.
-- **Distance sets the price** of each round trip: light in fibre covers about 200 km per ms, so
-  India to the US East Coast is about 190 ms. Bandwidth does not fix latency; closeness does.
+- The cost is counted in **round trips**, and **distance sets their price**: light in fibre covers
+  about 200 km per ms, so India to the US East Coast is about 190 ms. On a first visit over TCP and
+  TLS 1.3, the first byte needs three round trips plus DNS and server work; HTTP/3 needs two; a
+  reused connection needs one.
 - **DNS is a cached tree**: browser, OS, resolver, then root, TLD and authoritative servers. TTLs
   make lookups fast and changes slow.
-- **TLS** encrypts, protects and authenticates in one round trip (TLS 1.3). Certificates must match
-  the name, be in date and chain to a trusted root, and their lifetimes are shrinking towards 47
-  days by 2029, so automate renewal.
+- **TLS 1.3** encrypts, protects and authenticates in one round trip. Certificates must match the
+  name, be in date and chain to a trusted root, and their lifetimes are shrinking towards 47 days,
+  so automate renewal.
 - Behind one address sit a **CDN edge, a load balancer, app servers and a database**. A CDN helps
   distant users even for pages it cannot cache, because handshakes happen close to them.
-- The browser's **critical rendering path** (DOM, CSSOM, render tree, layout, paint) waits on CSS
-  and plain scripts, and **chains of dependent requests** are what make pages slow.
-- Every step fails in its own way, with its own error. **Measure each step** with the browser's
-  waterfall or `curl -w`, and **put a timeout on every step** of every outgoing call.
+- The **critical rendering path** waits on CSS and plain scripts, and **chains of dependent
+  requests** are what make pages slow.
+- Every step fails with its own error. **Measure each step** with the waterfall or `curl -w`, and
+  **put a timeout on every step** of every outgoing call.
 
 ## Where to go next
 
@@ -1219,6 +996,7 @@ link must wait at least one round trip.
   { slug: 'tcp-vs-udp', why: 'Step 2 in depth: how TCP makes an unreliable network reliable, what it costs, and when UDP is the better choice.' },
   { slug: 'tls', why: 'Step 3 in depth: certificates, chains of trust, key exchange, and what can go wrong with each.' },
   { slug: 'http-evolution', why: 'Step 4 in depth: why HTTP/2 and HTTP/3 were needed, and what changes for your servers.' },
+  { slug: 'proxy-lb-gateway', why: 'The first box your request reaches after DNS: reverse proxy, load balancer or API gateway, and what each one does.' },
   { slug: 'cdn-and-edge-caching', why: 'The biggest single fix for distant users: how CDNs cache, route and keep connections close.' },
   { slug: 'latency-vs-throughput', why: 'The two numbers behind every speed problem on this page, and how to reason about each.' },
 ]} />
@@ -1248,7 +1026,6 @@ link must wait at least one round trip.
 - [Cloudflare: Understanding how Facebook disappeared from the internet](https://blog.cloudflare.com/october-2021-facebook-outage/) (2021) — the same outage seen from a resolver, with the timeline.
 - [Slack: What happened during Slack's DNSSEC rollout](https://slack.engineering/what-happened-during-slacks-dnssec-rollout/) (2021) — TTLs you do not control, and why rollbacks can make DNS worse.
 - [Cloudflare: The 1.1.1.1 incident on July 14, 2025](https://blog.cloudflare.com/cloudflare-1-1-1-1-incident-on-july-14-2025/) — a resolver outage, and why one resolver is a single point of failure.
-- [Let's Encrypt: DST Root CA X3 expiration](https://letsencrypt.org/docs/dst-root-ca-x3-expiration-september-2021/) (2021) — which clients broke when an old root expired.
 - [Cloudflare: A detailed look at RFC 8446 (TLS 1.3)](https://blog.cloudflare.com/rfc-8446-aka-tls-1-3/) (2018) — one round trip instead of two, and the 0-RTT replay trade-off.
 - [Cloudflare Radar 2025 Year in Review](https://blog.cloudflare.com/radar-2025-year-in-review) — HTTP version shares, IPv6 and post-quantum adoption.
 - [HTTP Archive Web Almanac 2025: Page weight](https://almanac.httparchive.org/en/2025/page-weight) — how big real pages are and how many requests they make.

@@ -21,25 +21,26 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
 
 {/*
   Section order is fixed. Heading wording can be adapted to the topic.
-  Word counts are guides, not rules. Delete every comment before publishing.
+  Word counts add up to the 40–45 minute budget in style-guide.md ("Length"): about
+  7,000–8,000 words of prose and at most ~150 lines of code. Delete every comment before publishing.
 */}
 
-{/* 1. THE STORY (300–600 words)
+{/* 1. THE STORY (200–350 words)
     A realistic, clearly illustrative production moment that makes the reader feel the problem.
     End with the question this page answers. */}
 ## A bad night for the API
 
-{/* 2. THE PROBLEM, PROPERLY (400–900 words)
+{/* 2. THE PROBLEM, PROPERLY (400–600 words)
     Why this problem exists at all. The forces that create it. Who gets hurt and what it costs.
     Define the key terms here. */}
 ## Why this problem exists
 
-{/* 3. WHAT PEOPLE TRY FIRST (300–700 words)
+{/* 3. WHAT PEOPLE TRY FIRST (300–450 words)
     The naive fix, shown in a short snippet or diagram, and exactly how and why it breaks.
     Also: the neighbouring concepts this gets confused with, and the difference. */}
 ## The obvious fix, and why it breaks
 
-{/* 4. THE CORE IDEA (200–500 words)
+{/* 4. THE CORE IDEA (200–350 words)
     One everyday analogy, where the analogy stops working, then the precise idea in one paragraph.
     The hero diagram goes here. */}
 ## The core idea
@@ -48,7 +49,7 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
   <Overview />
 </Figure>
 
-{/* 5. HOW IT WORKS (the longest section)
+{/* 5. HOW IT WORKS (the longest section, 2,500–3,000 words across all H3s)
     One H3 per mechanism, algorithm or variant. For each:
     intuition → mechanics step by step → diagram, sim or step-through → worked example with numbers
     → strengths and weaknesses → when to pick it.
@@ -68,14 +69,15 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
 ### Sliding window counter
 
 {/* 6. SIDE BY SIDE
-    A comparison table of the variants across 4–6 dimensions (accuracy, memory, burst handling,
+    (200–350 words) A comparison table of the variants across 4–6 dimensions (accuracy, memory, burst handling,
     complexity, distributed-friendliness…), then a short "how to choose" paragraph.
     If there is a compare mode in the sim, show it here. */}
 ## Choosing between them
 
 {/* 7. BUILD IT
-    Naive → correct → production-shaped. Python and JavaScript in synced tabs.
-    Each snippet under ~60 lines, runnable twin in examples/<slug>/, link to it. */}
+    (200–400 words) Naive → correct → production-shaped. Python and JavaScript in synced tabs.
+    At most ~150 lines on the page across all snippets in one language; the rest stays in
+    examples/<slug>/, linked. Runnable twin for every snippet. */}
 ## Build it yourself
 
 <Tabs syncKey="lang">
@@ -92,25 +94,25 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
 </Tabs>
 
 {/* 8. IN THE REAL WORLD
-    How 3–5 real systems, companies or tools do it (docs, engineering blogs, open-source code).
+    (400–600 words) How 3 real systems, companies or tools do it (docs, engineering blogs, open-source code).
     Config snippets where useful. Facts that can change get "as of <Month YYYY>". */}
 ## How real systems do it
 
 {/* 9. FROM THE TRENCHES
-    Gotchas, failure modes, sourced real incidents, debugging tips.
+    (400–600 words) The 4–5 gotchas that hurt most: failure modes, sourced real incidents, debugging tips.
     :::caution for mistakes, :::danger for outage or security risks. */}
 ## Gotchas and war stories
 
 {/* 10. TRADE-OFFS
-    What it costs, what it doesn't solve, and when NOT to use it. */}
+    (200–350 words) What it costs, what it doesn't solve, and when NOT to use it. */}
 ## Trade-offs and when not to use it
 
 {/* 11. INTERVIEW CORNER
-    How this shows up in interviews, 3–5 typical questions, and what a strong answer covers. */}
+    (250–400 words) How this shows up in interviews, 3–4 typical questions, and what a strong answer covers. */}
 ## Interview corner
 
 {/* 12. CHECK YOURSELF
-    4–6 questions. Answers hidden in <details>. Mix recall with "what would happen if…". */}
+    4–5 questions. Answers hidden in <details>, short. Mix recall with "what would happen if…". */}
 ## Check yourself
 
 <details>
@@ -121,7 +123,7 @@ Answer, with the reasoning.
 </details>
 
 {/* 13. RECAP
-    5–8 bullets a reader could revise from the night before an interview. */}
+    6 bullets a reader could revise from the night before an interview. */}
 ## Recap
 
 {/* 14. WHERE TO GO NEXT

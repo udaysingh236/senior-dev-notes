@@ -56,9 +56,10 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 1 | Reverse proxies | reverse-proxies | 3 | planned |
 | 2 | Load balancing | load-balancing | 8 | planned |
 | 3 | API gateways | api-gateways | 9 | planned |
-| 4 | CDNs and edge caching | cdn-and-edge-caching | 84, 85 | planned |
-| 5 | Service discovery | service-discovery | 64 | planned |
-| 6 | Consistent hashing | consistent-hashing | new | planned |
+| 4 | Reverse proxy vs load balancer vs API gateway | proxy-lb-gateway | new | published (2026-10-22) |
+| 5 | CDNs and edge caching | cdn-and-edge-caching | 84, 85 | planned |
+| 6 | Service discovery | service-discovery | 64 | planned |
+| 7 | Consistent hashing | consistent-hashing | new | planned |
 
 ## 4. Databases — `databases`
 
@@ -229,3 +230,11 @@ Each case study ties many concepts together and links back to their pages.
 | 6 | Design a payment system | payment-system | new | planned |
 | 7 | Design a distributed cache | distributed-cache | new | planned |
 | 8 | Design a web crawler | web-crawler | new | planned |
+| 9 | How IRCTC Tatkal booking works | irctc-tatkal-booking | new | published (2026-10-22) |
+
+## Inbox
+
+Topic ideas saved with `/save-topic`, oldest first. `/add-topic` offers these first and moves each
+one into its track's table when the page is written. Bullets, not a table: the site build reads
+only the track tables above.
+

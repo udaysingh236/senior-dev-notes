@@ -182,3 +182,11 @@ Explainers
 - MDN: Populating the page: how browsers work
 - alex/what-happens-when
 - Ilya Grigorik: High Performance Browser Networking (latency primer)
+
+## Re-check, 2026-10-21 (page trimmed to the 40–45 min budget)
+
+- Let's Encrypt lifetimes re-confirmed: 90-day default, 6-day optional, 45-day default planned for
+  16 Feb 2028 (letsencrypt.org/docs/cert-lifetimes, via search; the site was unreachable from the sandbox).
+- Chrome 154 "Always Use Secure Connections" by default, October 2026: re-confirmed (Google security blog, Oct 2025).
+- Not re-checked (hosts blocked from the sandbox): root-servers.org instance count (2,047) and the
+  cloudping.co Mumbai to N. Virginia RTT (about 187 ms). Both last checked 2026-10-18.

@@ -1,6 +1,6 @@
 ---
 name: add-topic
-description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push so it goes live. Works for topics already in CURRICULUM.md and brand-new ones.
+description: Research, write, illustrate and publish one topic page on the system design site — story-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
 argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--no-push] [--update]"
 disable-model-invocation: true
 allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node *) Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
@@ -8,15 +8,16 @@ allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node 
 
 # Add a topic: $ARGUMENTS
 
-Before starting, read these files in this skill folder: `template.mdx`, `style-guide.md`,
-`visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
+Before starting, read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
+`template-case-study.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
 
 Work through the phases in order. Don't skip a phase because the topic feels familiar.
 
 ## Phase 0 — Understand the request
 
-- If no topic was given (empty arguments, or only flags): pick the next topic yourself. Take the
-  first `planned` or `pilot` topic from the starter path in `CURRICULUM.md`; once those are all
+- If no topic was given (empty arguments, or only flags): pick the next topic yourself. If the
+  Inbox at the end of `CURRICULUM.md` has entries, show the oldest three and ask whether to take one
+  of them; if the user declines or the Inbox is empty, take the first `planned` or `pilot` topic from the starter path in `CURRICULUM.md`; once those are all
   published, take the first `planned` topic in curriculum order (track by track, top to bottom).
   Tell the user which topic you picked, then carry on.
 - Otherwise the topic is the first part of the arguments. Everything after it is the user's notes: what they
@@ -24,7 +25,7 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
   everything in those notes.
 - Flags:
   - `--review` stop after the outline (Phase 3) and wait for approval
-  - `--no-push` commit but don't push
+  - `--no-push` commit on `develop` but don't push
   - `--update` rewrite or extend an existing page instead of creating one
 - Expand abbreviations before searching (for example DCR = Dynamic Client Registration,
   CIMD = Client ID Metadata Documents). If an abbreviation is ambiguous, pick the meaning that fits
@@ -43,8 +44,21 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
    - If the topic is really a small part of an existing page, add a section to that page instead
      and say so. If it's huge, create an overview page plus child pages and say so.
    - Add a row to `CURRICULUM.md` with `Post #` = `new`.
-5. Decide `prerequisites` and `next` slugs (planned pages are fine).
-6. Create `research/<slug>.md`.
+5. If the topic came from the Inbox, move it out of the Inbox into its track's table.
+6. Pick the page shape:
+   - **Single topic** (one idea, possibly with several variants or algorithms): `template.mdx`.
+   - **Comparison** (the title is "X vs Y" or "X vs Y vs Z" and the reader's real problem is telling
+     the concepts apart): `template-compare.mdx`. Each concept compared should have its own row in
+     `CURRICULUM.md`; add missing ones as `planned`. The comparison page links to those deep pages
+     and does not repeat their mechanics.
+   - Topics such as "TCP vs UDP" or "SQL vs NoSQL", where one page teaches both sides in depth and
+     no separate deep pages exist, stay single-topic pages.
+   - **Case study** ("How X works" for one real system, or "Design X"), where the page traces one
+     system end to end and pulls many concepts together: `template-case-study.mdx`, in the
+     `case-studies` track. Each deep dive links to its concept's own page; add missing concepts
+     to `CURRICULUM.md` as `planned`.
+7. Decide `prerequisites` and `next` slugs (planned pages are fine).
+8. Create `research/<slug>.md`.
 
 ## Phase 2 — Research
 
@@ -72,7 +86,8 @@ Keep quotes in notes under 15 words. Notes are for understanding, not for pastin
 
 ## Phase 3 — Outline
 
-Fill the template's 15 sections with bullet outlines, and decide:
+Fill the chosen template's sections with bullet outlines, and give each section a word budget
+that adds up to the page's reading budget (see "Length" in `style-guide.md`). Decide:
 
 - the opening story and the question it ends on
 - the everyday analogy and where it breaks
@@ -86,10 +101,12 @@ If `--review` was given: show the outline and wait for the user.
 
 ## Phase 4 — Write the page
 
-Create `src/content/docs/<track>/<slug>.mdx` from `template.mdx`.
+Create `src/content/docs/<track>/<slug>.mdx` from the template chosen in Phase 1.
 
 - Follow the section order and the voice and clarity rules in `style-guide.md`.
-- Usually 3,000–7,000 words; go longer when the topic has several algorithms. Never pad.
+- Stay inside the reading budget in `style-guide.md`: 40–45 minutes, up to 50 when the topic
+  needs the extra visuals, as shown by the "min read" in the page header. When a section runs long, cut or
+  move detail to the page that owns it; don't squeeze the opening story or the core idea.
 - Weave in the user's notes from Phase 0.
 - Remove every template comment.
 
@@ -120,7 +137,8 @@ Follow `visuals.md`.
 
 Fix anything that fails. Don't publish with known failures.
 
-- [ ] All 15 template sections present, in order, with no leftover template comments
+- [ ] All sections of the chosen template present, in order, with no leftover template comments
+- [ ] Reading time in the page header is inside the budget (40–45 min, 50 at most)
 - [ ] Opens with a problem story; nothing explained before it's motivated
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
@@ -133,19 +151,20 @@ Fix anything that fails. Don't publish with known failures.
 
 ## Phase 9 — Publish
 
-1. `git pull --rebase`
+1. `git checkout develop && git pull --rebase origin develop`
 2. Stage only the files for this topic: the page, its components, `examples/<slug>/`,
    `research/<slug>.md`, `CURRICULUM.md`, and any pages or shared components touched in Phase 5
    and Phase 7.
 3. Commit: `docs(<track>): add <Title>` (or `update <Title>` with `--update`).
-4. Unless `--no-push`: `git push`. Netlify builds and deploys `main` in a minute or two.
+4. Unless `--no-push`: `git push origin develop`. Never push to `main`: every push there is a
+   Netlify deploy. Uday merges `develop` into `main` once a week (see CLAUDE.md, "Git").
 5. If the push or build fails, report the error plainly and don't retry blindly.
 
 ## Final report to the user
 
 Keep it short:
 
-- the live URL of the page (site URL + `/<track>/<slug>/`)
+- the URL the page will have once `develop` is merged (site URL + `/<track>/<slug>/`)
 - word count, number of diagrams, sims or step-throughs, code examples, and sources
 - any assumption made (abbreviation meaning, placement, merged or split pages)
 - anything that deserves a human double-check, such as fast-moving facts

@@ -1,0 +1,56 @@
+---
+// The hero: how the three roles relate. An API gateway is a reverse proxy with API jobs added.
+// Load balancing is a job that both a reverse proxy (layer 7) and a plain layer 4 balancer do.
+const proxyChips = ['end TLS', 'buffer', 'cache', 'rewrite'];
+const gatewayChips = ['API keys', 'limits', 'routes', 'quotas'];
+---
+
+<svg viewBox="0 0 400 426" width="100%" role="img" aria-labelledby="plg-ly-t plg-ly-d">
+  <title id="plg-ly-t">How a reverse proxy, a load balancer and an API gateway overlap</title>
+  <desc id="plg-ly-d">
+    A large box labelled reverse proxy, which speaks HTTP at layer 7, holds four jobs: end TLS,
+    buffer, cache and rewrite. Inside it sits a smaller box, the API gateway, with four more jobs:
+    API keys, limits, routes and quotas. A band labelled load balancing, with pools and health
+    checks, straddles the bottom edge of the reverse proxy box and the top of a separate box below
+    it, the layer 4 load balancer, which handles TCP and UDP and never reads HTTP.
+  </desc>
+
+  <rect x="4" y="6" width="392" height="290" rx="14" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="20" y="36" font-size="20" font-weight="700" style="fill: var(--viz-ink)">Reverse proxy</text>
+  <text x="326" y="36" font-size="16" text-anchor="end" style="fill: var(--viz-muted)">speaks HTTP (L7)</text>
+
+  <g font-size="16" font-weight="600" text-anchor="middle">
+    {
+      proxyChips.map((c, i) => (
+        <g>
+          <rect x={20 + i * 92} y="52" width="84" height="32" rx="16" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+          <text x={62 + i * 92} y="73" style="fill: var(--viz-ink)">{c}</text>
+        </g>
+      ))
+    }
+  </g>
+
+  <rect x="20" y="100" width="360" height="120" rx="10" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="36" y="130" font-size="19" font-weight="700" style="fill: var(--viz-ink)">API gateway</text>
+  <text x="366" y="130" font-size="15" text-anchor="end" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">a proxy with API jobs</text>
+  <g font-size="16" font-weight="600" text-anchor="middle">
+    {
+      gatewayChips.map((c, i) => (
+        <g>
+          <rect x={32 + i * 86} y="150" width="78" height="32" rx="16" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-client)" />
+          <text x={71 + i * 86} y="171" style="fill: var(--viz-ink)">{c}</text>
+        </g>
+      ))
+    }
+  </g>
+  <text x="36" y="208" font-size="15" style="fill: var(--viz-muted)">knows who is calling, not only what</text>
+
+  <rect x="4" y="290" width="392" height="132" rx="14" stroke-width="2" stroke-dasharray="6 4" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="20" y="390" font-size="20" font-weight="700" style="fill: var(--viz-ink)">L4 load balancer</text>
+  <text x="20" y="412" font-size="16" style="fill: var(--viz-muted)">TCP and UDP only; never reads HTTP</text>
+
+  <rect x="48" y="240" width="304" height="104" rx="12" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="200" y="272" font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">load balancing</text>
+  <text x="200" y="298" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">a pool of copies, pick one,</text>
+  <text x="200" y="320" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">skip the ones that fail checks</text>
+</svg>

@@ -1,0 +1,135 @@
+---
+# Comparison pages ("X vs Y vs Z"). Copy to src/content/docs/<track>/<slug>.mdx and replace every value.
+title: Reverse Proxy vs Load Balancer vs API Gateway
+description: Three boxes that sit in front of your servers — what each one is for, where they overlap, and how to choose.
+tagline: Three names for the box in front of your servers, and why they are not the same box.
+difficulty: beginner              # beginner | intermediate | advanced
+track: traffic                    # folder name from CURRICULUM.md
+prerequisites: [how-the-web-works]
+next: [reverse-proxies, load-balancing, api-gateways]   # the deep page for each concept compared
+lastReviewed: 2026-10-21
+sidebar:
+  order: 7                        # position within the track, from CURRICULUM.md
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
+
+{/*
+  Use this template when the page's job is to separate 2–4 concepts that readers confuse.
+  The deep mechanics of each concept live on its own page; this page links to them and does
+  not repeat them. Reading budget: 40–45 minutes, up to 50 (see "Length" in style-guide.md).
+  Section order is fixed. Heading wording can be adapted. Delete every comment before publishing.
+*/}
+
+{/* 1. THE STORY (150–300 words)
+    A clearly illustrative moment where the confusion costs something: a design review where three
+    people say "gateway" and mean three different boxes, or a team that adds a second one it didn't need.
+    End with the question this page answers. */}
+## Three people, one word, three boxes
+
+{/* 2. WHAT THEY HAVE IN COMMON (200–400 words)
+    The shared baseline, explained once: what all of them are, where they sit, what problem they all
+    touch. After this section the reader should see why the names get mixed up. */}
+## What they have in common
+
+{/* 3. EACH ONE ON ITS OWN (250–500 words per concept)
+    One H3 per concept, same shape every time so the reader can compare:
+    its one job in a sentence → what it can see (layer, headers, identity) → what it can change
+    → a small diagram → typical tools → "reach for it when…" → link to its deep page.
+    No deep mechanics here; that is what the deep page is for. */}
+## Each one on its own
+
+### Reverse proxy
+
+### Load balancer
+
+### API gateway
+
+{/* 4. HOW THEY OVERLAP (200–400 words)
+    The hero diagram: nesting or layers that show how the concepts relate (for example a gateway is
+    a reverse proxy with more jobs; load balancing is one of those jobs). Say plainly that these are
+    roles, and one product can play several of them. */}
+## How they overlap
+
+<Figure caption="One sentence that repeats the key point of the diagram in words.">
+  <Layers />
+</Figure>
+
+{/* 5. SIDE BY SIDE
+    A comparison table, 6–8 rows (main job, network layer, what it knows about the request,
+    typical features, where it sits, typical tools, cost of running it). Then a 2–3 sentence summary. */}
+## Side by side
+
+{/* 6. HOW TO CHOOSE (200–400 words)
+    A short decision flow: a numbered list or a small flowchart diagram. Start from the reader's
+    situation ("one server", "many copies of one service", "many services and outside clients").
+    Include "you may not need any of them yet". */}
+## How to choose
+
+{/* 7. SEE IT IN ACTION
+    One small runnable demo that makes the difference visible, in Python and JavaScript tabs
+    (for example one ~50-line process that forwards, then round-robins, then checks an API key,
+    each role switched on in turn). Config snippets (nginx, Envoy, YAML) can follow on their own.
+    Runnable twins in examples/<slug>/, at most ~100 lines of code on the page in total. */}
+## See it in action
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="front_door.py"
+# runnable version: examples/proxy-lb-gateway/python/front_door.py
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="front-door.mjs"
+// runnable version: examples/proxy-lb-gateway/js/front-door.mjs
+```
+  </TabItem>
+</Tabs>
+
+{/* 8. IN REAL STACKS (200–400 words)
+    How they are stacked in a real system (CDN → L4 load balancer → gateway → services), and 2–3
+    real products that play more than one role. Facts that can change get "as of <Month YYYY>". */}
+## How real stacks combine them
+
+{/* 9. COMMON CONFUSIONS
+    3–5 misconceptions, each as a short claim → why it's wrong → what's true.
+    :::caution for mistakes that lead to bad designs. */}
+## Common confusions
+
+{/* 10. INTERVIEW CORNER
+    Comparison questions are interview favourites. 3–4 typical questions and what a strong answer
+    covers, including the follow-up an interviewer usually asks next. */}
+## Interview corner
+
+{/* 11. CHECK YOURSELF
+    4 scenario questions: "you have X, which do you add and why?". Answers hidden in <details>. */}
+## Check yourself
+
+<details>
+<summary>1. Question text?</summary>
+
+Answer, with the reasoning.
+
+</details>
+
+{/* 12. RECAP
+    One line per concept ("X is for…"), then 2–3 bullets on how they relate. */}
+## Recap
+
+{/* 13. WHERE TO GO NEXT
+    The deep page for each concept compared, plus anything else natural. */}
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'reverse-proxies', why: 'How a reverse proxy works inside: buffering, TLS termination, caching.' },
+  { slug: 'load-balancing', why: 'The algorithms behind spreading load, and how health checks fit in.' },
+  { slug: 'api-gateways', why: 'Auth, rate limits and routing for many services behind one front door.' },
+]} />
+
+{/* 14. FURTHER READING
+    Every source used, grouped: Specs & official docs / Engineering blogs / Explainers & talks.
+    One line each on what it's good for. */}
+## Further reading

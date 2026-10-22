@@ -1,0 +1,63 @@
+---
+// A typical production stack, top to bottom. Each tier plays one main role; several products
+// could play more than one.
+const tiers = [
+  { name: 'Users', note: 'apps, partners', kind: 'client' },
+  { name: 'CDN / edge', note: 'cache, WAF, TLS', kind: 'server' },
+  { name: 'L4 balancer', note: 'fixed IPs, spreads TCP', kind: 'server' },
+  { name: 'API gateway ×2', note: 'keys, limits, routes', kind: 'server' },
+];
+const ROW = 66;
+---
+
+<svg viewBox="0 0 400 362" width="100%" role="img" aria-labelledby="plg-rs-t plg-rs-d">
+  <title id="plg-rs-t">How a real stack layers the three roles</title>
+  <desc id="plg-rs-d">
+    A vertical stack. Users reach a CDN or edge network that caches, absorbs attacks and ends TLS.
+    It sends traffic to a layer 4 load balancer with fixed IP addresses, which spreads TCP
+    connections over two copies of an API gateway. The gateways check keys and limits and route by
+    path to services: three copies of orders and two of users, which they load balance at layer 7.
+  </desc>
+  <defs>
+    <marker id="plg-rs-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  {
+    tiers.map((t, i) => {
+      const y = 6 + i * ROW;
+      return (
+        <g>
+          <rect x="4" y={y} width="170" height="44" rx={t.kind === 'client' ? 14 : 6} stroke-width="2"
+            style={t.kind === 'client' ? 'fill: var(--viz-client-soft); stroke: var(--viz-client)' : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'} />
+          <text x="89" y={y + 28} font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{t.name}</text>
+          <text x="186" y={y + 28} font-size="16" style="fill: var(--viz-muted)">{t.note}</text>
+          <line x1="89" y1={y + 45} x2="89" y2={y + ROW - 3} stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#plg-rs-a)" />
+        </g>
+      );
+    })
+  }
+
+  <line x1="174" y1={6 + 3 * ROW + 40} x2="300" y2={6 + 4 * ROW - 3} stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#plg-rs-a)" />
+  <g font-size="16" font-weight="600" text-anchor="middle">
+    {
+      [0, 1, 2].map((k) => (
+        <g>
+          <rect x={4 + k * 76} y={6 + 4 * ROW} width="70" height="36" rx="5" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+          <text x={39 + k * 76} y={6 + 4 * ROW + 24} style="fill: var(--viz-ink)">orders</text>
+        </g>
+      ))
+    }
+    {
+      [0, 1].map((k) => (
+        <g>
+          <rect x={250 + k * 76} y={6 + 4 * ROW} width="70" height="36" rx="5" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+          <text x={285 + k * 76} y={6 + 4 * ROW + 24} style="fill: var(--viz-ink)">users</text>
+        </g>
+      ))
+    }
+  </g>
+  <text x="4" y={6 + 4 * ROW + 66} font-size="16" style="fill: var(--viz-muted)">services; the gateway balances across copies</text>
+  <text x="4" y={6 + 4 * ROW + 88} font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">each arrow is a separate TCP connection</text>
+</svg>
