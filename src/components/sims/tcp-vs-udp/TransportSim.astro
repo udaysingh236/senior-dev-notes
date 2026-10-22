@@ -1,8 +1,8 @@
 ---
-// One lossy link carrying 50 small messages a second, in one of three modes. See model.ts.
+// One lossy link carrying 50 small messages a second, in one of two modes. See model.ts.
 import SimShell from '../../sim/SimShell.astro';
 
-type Mode = 'tcp' | 'udp' | 'compare';
+type Mode = 'tcp' | 'compare';
 
 interface Props {
   mode: Mode;
@@ -16,23 +16,15 @@ const COPY: Record<Mode, { title: string; description: string; watchFor: string;
     description:
       'A sender on the left sends numbered packets, drawn as blue dots, across a link to a receiver on the right; grey dots travelling back are ACKs. A lost packet ends in a red cross halfway across, and its retransmission travels as an amber dot. Below, a bar chart shows the last 40 messages: each bar is the delay from being sent to reaching the application, with a dashed line at the 150 millisecond deadline. Green bars are on time, amber bars are late.',
     watchFor:
-      'When one packet is lost, the packets behind it still arrive, but they sit in the buffer until the retransmission fills the gap, then reach the app all at once. One loss turns into a staircase of several amber bars over the deadline. Raise the round-trip time and the staircase gets taller and wider.',
-    viewBox: '0 0 400 310',
-  },
-  udp: {
-    title: 'UDP on the same link: nothing waits, some things never come',
-    description:
-      'The same sender, link and receiver, with the same losses, but no ACKs and no retransmissions. Below, the bar chart of the last 40 messages: each delivered message has a short green bar; a lost message has a red cross under the axis and no bar.',
-    watchFor:
-      'Every delivered message takes the same short time, because nothing ever waits for anything else. The price is the red crosses: those messages are gone, and only the application can decide whether that matters.',
+      'When one packet is lost, the packets behind it still arrive, but the status line shows them held in the buffer until the retransmission fills the gap; then they reach the app all at once. One loss becomes a staircase of amber bars over the deadline. Raise the round-trip time and the staircase gets taller and wider; lower it to 40 ms and most losses stay under the line.',
     viewBox: '0 0 400 310',
   },
   compare: {
     title: 'TCP, QUIC and UDP on identical losses',
     description:
-      'Three bar charts on the same traffic and exactly the same lost packets. Top: TCP, one ordered stream. Middle: QUIC, with the messages spread over four independent streams. Bottom: UDP. Each bar is one message’s delay to the application against a dashed 150 millisecond deadline; red crosses mark messages that never arrive. The share of late or lost messages is shown at the right of each chart.',
+      'Three bar charts on the same traffic and exactly the same lost packets. Top: TCP, one ordered byte stream, which is also what HTTP/2 streams share. Middle: QUIC, with the messages spread over independent streams, four by default. Bottom: UDP. Each bar is one message’s delay to the application against a dashed 150 millisecond deadline; red crosses mark messages that never arrive. The share of late or lost messages is shown at the right of each chart.',
     watchFor:
-      'One loss makes several TCP bars late, because everything behind the gap waits. QUIC repairs the same loss, but only the lost message and its own stream wait, so usually one bar is late. UDP is never late and loses exactly the dropped messages. Same network, three different kinds of damage.',
+      'One loss makes several TCP bars late, because everything behind the gap waits. QUIC repairs the same loss, but only the lost message’s own stream waits. Set QUIC streams to 1 and its chart becomes identical to TCP’s: streams, not UDP, are what removes the blocking. UDP is never late and loses exactly the dropped messages.',
     viewBox: '0 0 400 366',
   },
 };

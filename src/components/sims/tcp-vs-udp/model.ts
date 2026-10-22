@@ -1,5 +1,5 @@
 // One lossy link, three ways to carry a stream of small messages (think voice frames or game
-// updates, 50 a second): TCP, QUIC with four independent streams, and plain UDP.
+// updates, 50 a second): TCP, QUIC with 1 to 8 independent streams, and plain UDP.
 //
 // config.mode picks the picture:
 //   'tcp'      packets and ACKs crossing the link; a loss is repaired by retransmission, and every
@@ -34,11 +34,11 @@ interface Packet {
 }
 
 const DEADLINE = 150; // ms
-const STREAMS = 4; // QUIC lane: packet n travels on stream n % 4
 const BARS = 40;
 const Y_MAX = 400; // ms at the top of each chart
 const LANES: Lane[] = ['tcp', 'quic', 'udp'];
-const LANE_LABEL: Record<Lane, string> = { tcp: 'TCP', quic: 'QUIC, 4 streams', udp: 'UDP' };
+const laneLabel = (lane: Lane, streams: number): string =>
+  lane === 'tcp' ? 'TCP (or HTTP/2 on it)' : lane === 'quic' ? `QUIC, ${streams} stream${streams > 1 ? 's' : ''}` : 'UDP';
 
 const INK = token('--viz-ink');
 const MUTED = token('--viz-muted');
@@ -53,6 +53,9 @@ const PARAMS: ParamSpec[] = [
   { name: 'rtt', label: 'Round-trip time', min: 40, max: 240, step: 10, value: 100, unit: 'ms' },
   { name: 'rate', label: 'Messages per second', min: 10, max: 50, step: 10, value: 50 },
 ];
+// Compare mode only: how many independent QUIC streams the messages are spread over (packet n
+// travels on stream n % streams). One stream is one ordered stream, exactly like TCP.
+const STREAMS_PARAM: ParamSpec = { name: 'streams', label: 'QUIC streams', min: 1, max: 8, step: 1, value: 4 };
 
 export const createTransportModel: SimFactory = (config) => {
   const mode = (config.mode as Mode) ?? 'tcp';
@@ -97,7 +100,7 @@ export const createTransportModel: SimFactory = (config) => {
       attempts.push({ send: useFast ? fast : timeout, lost: lossAt(n, k), how: useFast ? 'fast' : 'timeout' });
     }
     const arrive = attempts.at(-1)!.send + oneWay;
-    const stream = n % STREAMS;
+    const stream = n % (p.streams ?? 4);
     const tcp = Math.max(arrive, lastDeliver.tcp);
     const quic = Math.max(arrive, lastDeliver.quic[stream] ?? 0);
     lastDeliver.tcp = tcp;
@@ -261,7 +264,7 @@ export const createTransportModel: SimFactory = (config) => {
     LANES.forEach((lane, i) => {
       const top = 6 + i * 120;
       const c = counts[lane];
-      text(LANE_LABEL[lane], { x: 4, y: top + 16, fill: INK, 'font-size': 18, 'font-weight': 700 }, live);
+      text(laneLabel(lane, p.streams ?? 4), { x: 4, y: top + 16, fill: INK, 'font-size': 18, 'font-weight': 700 }, live);
       const bad = lane === 'udp' ? c.lost : c.late;
       const what = lane === 'udp' ? 'lost' : 'late';
       text(`${percent(bad, c.decided)} ${what}`, { x: 396, y: top + 16, 'text-anchor': 'end', fill: bad ? (lane === 'udp' ? BAD : WARN) : OK, 'font-size': 18, 'font-weight': 700 }, live);
@@ -270,7 +273,7 @@ export const createTransportModel: SimFactory = (config) => {
   }
 
   return {
-    params: PARAMS,
+    params: single ? PARAMS : [...PARAMS, STREAMS_PARAM],
 
     reset(params, rng: Rng) {
       p = params;

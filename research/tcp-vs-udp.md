@@ -207,3 +207,69 @@ Explainers: HPBN TCP and UDP chapters, Gaffer on Games UDP vs TCP.
   https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/
 - AWS NLB: TCP idle timeout default 350 s (60–6,000 configurable), UDP 120 s; unchanged.
   https://aws.amazon.com/blogs/networking-and-content-delivery/introducing-nlb-tcp-configurable-idle-timeout/
+
+## Rewrite to the owner's standard, 2026-10-22
+
+Angle for the rewrite: every TCP guarantee is enforced by making someone wait (a round trip, a
+timer, a gap), and every one of those waits has a number. UDP has none of the waits and none of
+the guarantees; the page is about locating each wait, and what you rebuild if you leave TCP.
+Readers already know "TCP reliable, UDP not", the three-way handshake and what a port is.
+
+New facts, with sources:
+
+- Mathis, Semke, Mahdavi, Ott, "The Macroscopic Behavior of the TCP Congestion Avoidance
+  Algorithm", ACM CCR, July 1997: steady-state rate ≈ (MSS/RTT) × C/√p, C ≈ 1.22 (√(3/2)) with
+  every packet acked. 1% loss, 100 ms, MSS 1460: ≈ 1.4 Mbit/s whatever the link. Less accurate
+  above ~2% loss, where timeouts dominate (Padhye et al.).
+  https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf
+- Linux `tcp_slow_start_after_idle` (RFC 2861 congestion window validation): on by default since
+  2006; idle longer than one RTO shrinks cwnd (halved per RTO idle, down to the restart window).
+  Local check on kernel 6.18: value 1. Kernel docs: https://docs.kernel.org/networking/ip-sysctl.html
+  RFC 2861: https://www.rfc-editor.org/rfc/rfc2861
+- Linux CUBIC uses HyStart by default to leave slow start before the first loss; it can exit too
+  early on paths with delay jitter; HyStart++ is RFC 9406 (netdev 0x1A, 2026).
+  https://netdevconf.info/0x1A/sessions/talk/validation-and-evaluation-of-hystart-for-linux.html
+  https://www.rfc-editor.org/rfc/rfc9406
+- `tcp_syn_linear_timeouts` (default 4), commit ccce324dabfe by David Morley (Google), merged in
+  the net-next tree in May–June 2023, so Linux 6.5: the first 4 SYN retransmissions wait 1 s each
+  (1, 1, 1, 1, 1, 2, 4 s…) instead of doubling. Local check on kernel 6.18: 4. Older kernels: 1,
+  2, 4, 8 s. (Version 6.5 inferred from the merge date: double-check.)
+  https://code.amethyst.name/public-mirrors/linux/commit/ccce324dabfe
+- `tcp_tw_reuse`: 0 off, 1 on, 2 loopback only (default). Lets a new *outgoing* connection take a
+  port still in TIME_WAIT, relying on TCP timestamps to reject old duplicates.
+  `tcp_tw_recycle` was removed in Linux 4.12 (2017) because it broke clients behind NAT.
+- Middlebox idle timeouts, as of October 2026:
+  - AWS NAT gateway: drops connections idle 350 s; the next packet gets an RST.
+    https://docs.aws.amazon.com/vpc/latest/userguide/nat-gateway-troubleshooting.html
+  - AWS NLB: TCP 350 s default (60–6,000), UDP 120 s (already noted).
+  - Azure Load Balancer: 4 minutes default (configurable to 100/120); silent drop unless
+    "TCP reset on idle" is enabled. https://learn.microsoft.com/azure/load-balancer/load-balancer-tcp-reset
+  - Google Cloud NAT: UDP mapping idle 30 s, TCP established 1,200 s (20 min).
+    https://cloud.google.com/nat/docs/tune-nat-configuration
+  - Linux conntrack: `nf_conntrack_tcp_timeout_established` 432,000 s (5 days);
+    `nf_conntrack_udp_timeout` 30 s, `_stream` 120 s.
+    https://docs.kernel.org/networking/nf_conntrack-sysctl.html
+- QUIC CPU cost: secondary surveys cite the SIGCOMM 2017 paper as ~3.5× the CPU of TLS/TCP for
+  the same traffic at the time. Could not read the primary PDF here: double-check before quoting
+  other figures. Later independent studies (2022) measured about 2× for downloads.
+  https://arxiv.org/pdf/1810.03884 (survey)
+
+Our own runs for the rewrite (Linux 6.18 container, Python 3.13.16, Node 22.22.0, 2026-10-22):
+
+- naive framing: 6 sends → 4 reads, none parse; framing fix parses all 6.
+- UDP loss on loopback: 98% lost at full speed (Python), 94% (Node); 0% paced to 3,000/s.
+- reliable UDP: plain 91/100; stop-and-wait 6.71 s; window of 16 0.89 s (Node 0.57 s).
+- Nagle: two writes 44.01 ms median; TCP_NODELAY 0.06 ms; one write 0.06 ms (Node the same).
+- TIME_WAIT demo (new): client closes first → 500 client-side TIME_WAIT sockets; server closes
+  first → 500 server-side; one reused connection → 1. Port range 32768–60999 = 28,232 → ~470
+  new connections/s per destination.
+- DNS UDP vs TCP to 1.1.1.1: cannot run here (outbound port 53 times out); dropped from the page.
+
+Sim checks (seed 42, headless):
+
+- HOL compare, defaults (4% loss, 100 ms, 50 msg/s, 4 streams), long run: TCP 17% late, QUIC 6%,
+  UDP 4% lost. 1 QUIC stream: 17% (same as TCP). 2 streams 12%, 8 streams 5%. RTT 200: TCP 42%.
+- Congestion window model (CUBIC-like, IW10, BDP-sized queue), 1 MB at 100 ms / 50 Mbit/s: cold
+  713 ms in 7 RTTs (10, 20, 40, 80, 160, 320, 55), warm 260 ms (= the link's ideal). 1 Gbit/s:
+  cold 701 ms. Idle gap 1,000 ms (> RTO 300 ms): warm drops to 80 segments, 429 ms. 5 MB at 1%
+  loss: about 1.6 Mbit/s on the 50 Mbit/s link; 0.1% loss about 21 Mbit/s.

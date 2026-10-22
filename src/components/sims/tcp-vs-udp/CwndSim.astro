@@ -1,0 +1,20 @@
+---
+// One TCP connection sending the same response again and again: slow start, losses, CUBIC and
+// the restart after idle. See cwnd-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tcp-cwnd"
+  title="Why a fast link does not make a new connection fast"
+  description="A bar chart of one TCP connection, one bar per round trip, showing how many segments the sender had in flight. A dashed line marks the pipe, the bandwidth-delay product. Responses alternate in two shades of blue with a dotted line between them; lost segments are red at the bottom of a bar with a red cross above it. Above the chart: the current response, the round trip and the congestion window. Below it: how long the last response took against the time the link alone would need."
+  watchFor="The first response climbs 10, 20, 40, 80, 160, 320 and takes seven round trips; the next one, on the now warm connection, takes two. Raise the bandwidth to 1000 Mbit/s: the first response barely gets faster. Set the idle gap to 1000 ms, longer than the retransmission timeout, and the warm window collapses before every response. Then set the size to 5000 KB and loss to 1%: the window never gets near the pipe, and throughput sits at a few Mbit/s on a 50 Mbit/s link."
+  viewBox="0 0 400 284"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createCwndModel } from './cwnd-model';
+
+  mountAll('tcp-cwnd', createCwndModel);
+</script>
