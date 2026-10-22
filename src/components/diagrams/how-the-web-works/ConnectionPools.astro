@@ -1,0 +1,45 @@
+---
+// Why "the connection is already open" is often false: the browser keeps separate connection
+// pools per top-level site and per credentials mode, so one server can need three connections.
+// The top-right corner is left empty for the Figure's enlarge button.
+---
+
+<svg viewBox="0 0 400 396" width="100%" role="img" aria-labelledby="hw-cpool-t hw-cpool-d">
+  <title id="hw-cpool-t">One server, three separate connections</title>
+  <desc id="hw-cpool-d">
+    Three requests from one browser go to the same server, cdn.example. A script loaded by site A
+    with cookies, a web font loaded by site A in anonymous mode, and a script loaded by site B with
+    cookies each land in a different connection pool, so the browser opens three connections and
+    pays three handshakes and three cold windows.
+  </desc>
+  <defs>
+    <marker id="hw-cpool-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="8" y="30" font-size="19" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one browser, three pools</text>
+
+  <g stroke-width="2">
+    <rect x="8" y="52" width="300" height="48" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <rect x="8" y="114" width="300" height="48" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <rect x="8" y="176" width="300" height="48" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <rect x="80" y="326" width="240" height="56" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  </g>
+  <g font-size="19" style="fill: var(--viz-ink)">
+    <text x="22" y="83"><tspan font-weight="700">site A</tspan>, script, cookies</text>
+    <text x="22" y="145"><tspan font-weight="700">site A</tspan>, font, anonymous</text>
+    <text x="22" y="207"><tspan font-weight="700">site B</tspan>, script, cookies</text>
+    <text x="200" y="361" text-anchor="middle" font-weight="700">cdn.example</text>
+  </g>
+
+  <g stroke-width="2" fill="none" style="stroke: var(--viz-flow)" marker-end="url(#hw-cpool-arrow)">
+    <path d="M308 76 H384 V274 L250 322" />
+    <path d="M308 138 H364 V264 L200 322" />
+    <path d="M308 200 H344 V254 L150 322" />
+  </g>
+  <g font-size="19" font-weight="600" style="fill: var(--viz-warn)">
+    <text x="8" y="266">3 handshakes,</text>
+    <text x="8" y="290">3 cold windows</text>
+  </g>
+</svg>

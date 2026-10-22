@@ -1,0 +1,68 @@
+---
+// Round trips before the first byte of the response, for five ways of reaching a server.
+// Each block is one round trip (drawn for 150 ms) plus 50 ms of server work. DNS left out.
+// The top-right corner is left empty for the Figure's enlarge button.
+---
+
+<svg viewBox="0 0 400 388" width="100%" role="img" aria-labelledby="hw-hs-t hw-hs-d">
+  <title id="hw-hs-t">Round trips before the first byte</title>
+  <desc id="hw-hs-d">
+    Five rows, each a row of blocks, one block per round trip at 150 ms, plus 50 ms of server work.
+    TCP with TLS 1.2: four round trips, 650 ms. TCP with TLS 1.3: three, 500 ms. HTTP/3 over QUIC:
+    two, 350 ms. QUIC with 0-RTT resumption: one, 200 ms, the same as a request on a connection that
+    is already open.
+  </desc>
+
+  <g font-size="19" font-weight="700" style="fill: var(--viz-ink)">
+    <text x="8" y="24">TCP + TLS 1.2</text>
+    <text x="8" y="100">TCP + TLS 1.3</text>
+    <text x="8" y="176">HTTP/3 (QUIC)</text>
+    <text x="8" y="252">QUIC, 0-RTT resume</text>
+    <text x="8" y="328">Connection reused</text>
+  </g>
+
+  <!-- One block = one round trip: 60 units. Server work: 20 units. -->
+  <g stroke-width="1.5">
+    <!-- TLS 1.2 -->
+    <rect x="8" y="34" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="68" y="34" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="128" y="34" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="188" y="34" width="58" height="32" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <rect x="248" y="34" width="18" height="32" rx="3" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <!-- TLS 1.3 -->
+    <rect x="8" y="110" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="68" y="110" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="128" y="110" width="58" height="32" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <rect x="188" y="110" width="18" height="32" rx="3" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <!-- QUIC -->
+    <rect x="8" y="186" width="58" height="32" rx="4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="68" y="186" width="58" height="32" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <rect x="128" y="186" width="18" height="32" rx="3" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <!-- 0-RTT -->
+    <rect x="8" y="262" width="58" height="32" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <rect x="68" y="262" width="18" height="32" rx="3" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <!-- Reused -->
+    <rect x="8" y="338" width="58" height="32" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+    <rect x="68" y="338" width="18" height="32" rx="3" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  </g>
+  <g font-size="19" text-anchor="middle" style="fill: var(--viz-ink)">
+    <text x="37" y="57">TCP</text>
+    <text x="97" y="57">TLS</text>
+    <text x="157" y="57">TLS</text>
+    <text x="217" y="57">GET</text>
+    <text x="37" y="133">TCP</text>
+    <text x="97" y="133">TLS</text>
+    <text x="157" y="133">GET</text>
+    <text x="37" y="209">QUIC</text>
+    <text x="97" y="209">GET</text>
+    <text x="37" y="285">GET</text>
+    <text x="37" y="361">GET</text>
+  </g>
+  <g font-size="19" font-weight="700" style="fill: var(--viz-ink)">
+    <text x="276" y="57">650 ms</text>
+    <text x="216" y="133">500 ms</text>
+    <text x="156" y="209">350 ms</text>
+    <text x="96" y="285">200 ms</text>
+    <text x="96" y="361">200 ms</text>
+  </g>
+</svg>

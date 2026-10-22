@@ -1,0 +1,19 @@
+---
+// A whole page load as a waterfall, with its critical path. See waterfall-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="page-waterfall"
+  title="One page, four hosts, and the chain that sets its speed"
+  description="A waterfall of one page load: HTML, CSS, JavaScript, a web font, an API call and eight images, one row each, with the eight images as thin stacked lanes. Each bar shows its phases: DNS lookup in teal, connection set-up in amber, an outlined gap while waiting for the first byte, and data arriving in blue. Green bars came from the browser's cache. Dashed green lines mark first render and the end of the load."
+  watchFor="With the defaults the server works for 50 ms, but the page needs about 1.8 s: the font waits for the CSS, the API call waits for the JavaScript, and each new host pays a lookup and two round trips of set-up. Set the CDN to 1: every connection now ends 20 ms away and the load drops to about 0.76 s, although the HTML and the API answer still come from the origin. Then try HTTP/1.1 (eleven connections), preconnect, and a repeat visit."
+  viewBox="0 0 400 290"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createWaterfallModel } from './waterfall-model';
+
+  mountAll('page-waterfall', createWaterfallModel);
+</script>

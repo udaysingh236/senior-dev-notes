@@ -1,0 +1,62 @@
+---
+// Why a CDN speeds up a page it cannot cache: the handshakes and slow start happen over 20 ms,
+// and the long hop to the origin rides a connection that is already open with a warm window.
+// Numbers match the page-waterfall sim: 30 KB of HTML, 150 ms to the origin, 50 ms of server work.
+// The top-right corner is left empty for the Figure's enlarge button.
+---
+
+<svg viewBox="0 0 400 356" width="100%" role="img" aria-labelledby="hw-split-t hw-split-d">
+  <title id="hw-split-t">The same uncacheable HTML, direct and through an edge</title>
+  <desc id="hw-split-d">
+    Direct: the browser looks up the name, then pays a TCP and a TLS round trip of 150 ms each,
+    a request round trip plus 50 ms of server work, and a second round trip of slow start: the
+    HTML is complete after 690 ms. Through an edge 20 ms away: the lookup, two 20 ms set-up round
+    trips, then the edge forwards the request over its open connection to the origin, 150 ms plus
+    the server work, and the second slow-start round is 20 ms: complete after 320 ms.
+  </desc>
+
+  <g stroke-width="2">
+    <rect x="8" y="54" width="104" height="46" rx="14" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <rect x="148" y="54" width="104" height="46" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="288" y="54" width="104" height="46" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  </g>
+  <g font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+    <text x="60" y="84">Browser</text>
+    <text x="200" y="84">Edge</text>
+    <text x="340" y="84">Origin</text>
+  </g>
+  <g stroke-width="2" fill="none">
+    <line x1="112" y1="77" x2="148" y2="77" style="stroke: var(--viz-warn)" />
+    <line x1="252" y1="77" x2="288" y2="77" style="stroke: var(--viz-ok)" stroke-width="4" />
+  </g>
+  <g font-size="19" text-anchor="middle">
+    <text x="130" y="128" style="fill: var(--viz-warn)">20 ms, new</text>
+    <text x="270" y="128" style="fill: var(--viz-ok)">150 ms, open</text>
+    <text x="270" y="40" style="fill: var(--viz-muted)">warm window</text>
+  </g>
+
+  <!-- Two timelines on one scale: 690 ms = 384 units. -->
+  <g font-size="19" font-weight="700" style="fill: var(--viz-ink)">
+    <text x="8" y="178">Direct</text>
+    <text x="8" y="270">Through the edge</text>
+  </g>
+  <g stroke-width="1.5">
+    <rect x="8" y="190" width="22" height="30" rx="3" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <rect x="30" y="190" width="167" height="30" rx="3" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="197" y="190" width="111" height="30" rx="3" style="fill: none; stroke: var(--viz-stroke)" />
+    <rect x="308" y="190" width="84" height="30" rx="3" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+
+    <rect x="8" y="282" width="22" height="30" rx="3" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <rect x="30" y="282" width="22" height="30" rx="3" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <rect x="52" y="282" width="122" height="30" rx="3" style="fill: none; stroke: var(--viz-stroke)" />
+    <rect x="174" y="282" width="12" height="30" rx="3" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  </g>
+  <g font-size="19">
+    <text x="114" y="212" text-anchor="middle" style="fill: var(--viz-ink)">TCP + TLS</text>
+    <text x="252" y="212" text-anchor="middle" style="fill: var(--viz-muted)">wait</text>
+    <text x="392" y="246" text-anchor="end" font-weight="700" style="fill: var(--viz-ink)">690 ms</text>
+    <text x="113" y="304" text-anchor="middle" style="fill: var(--viz-muted)">wait</text>
+    <text x="196" y="304" font-weight="700" style="fill: var(--viz-ink)">320 ms</text>
+    <text x="8" y="342" style="fill: var(--viz-muted)">teal DNS · amber set-up · blue data</text>
+  </g>
+</svg>
