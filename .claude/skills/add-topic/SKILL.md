@@ -8,7 +8,8 @@ allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node 
 
 # Add a topic: $ARGUMENTS
 
-Before starting, read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
+Before starting, read the "Owner's standing feedback" section of `style-guide.md`; it overrides
+anything below that conflicts with it. Then read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
 `template-case-study.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
 
 Work through the phases in order. Don't skip a phase because the topic feels familiar.

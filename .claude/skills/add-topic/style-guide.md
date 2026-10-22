@@ -2,6 +2,38 @@
 
 How every page should sound, read and teach.
 
+## Owner's standing feedback (October 2026): read this first
+
+Uday reviewed the first pages (IRCTC Tatkal, reverse proxy vs load balancer vs API gateway) and
+rejected them. Every new or rewritten page must meet these points:
+
+1. **The reader is technical.** It might be a fresher, but equally often an engineer with 6–8 years
+   of experience. We are not explaining to a non-technical person. Never explain what everybody
+   knows: how to book a ticket, what happens on the screen when you book, how to log in.
+2. **Technical core, not narrative.** The page is about mechanisms: data models, what the
+   database locks, how two requests are kept from getting the same thing, algorithms, failure
+   modes, numbers. The IRCTC page failed because it had no word on how the database is locked, how
+   two people cannot get the same berth, or how one berth is sold between different stations.
+3. **Fact checks are not content.** Listing public facts and rules is not an explanation. Cite facts
+   inline where they shape the design; never spend a section on them.
+4. **Open with a question the reader never thought of,** so a working engineer thinks "I never
+   asked myself that" and has to read on. A boring opening loses them. No long story before the
+   first explanation; at most a few lines of setup.
+5. **Do not repeat information.** Say each thing once.
+6. **Length follows the topic.** 40–45 minutes was never a request for storylines. Concise but
+   impactful: 30 minutes is fine if that covers the core; 45–50 is the hard maximum. If someone
+   gives us 30 minutes, every minute must be worth it.
+7. **Simulations must be worth looking at.** A sim that walks through the steps of a flow (the
+   booking steps, a request passing boxes) is not worth building. Sims show mechanisms the reader
+   cannot see in a diagram: contention, races, allocation, imbalance, queues, retries multiplying.
+   The reader changes an input and sees the outcome change.
+8. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
+   how they behave differently under load, not feature lists.
+
+The two rewritten pages, `case-studies/irctc-tatkal-booking` and `traffic/proxy-lb-gateway`, are
+the reference for this standard. The older pages (how the web works, DNS, TCP vs UDP, TLS, rate
+limiting) predate it; Uday will have them redone, one page per session, with `/add-topic --update`.
+
 ## Who we write for
 
 - Anyone from a final-year CS student to an engineer with 6–8 years of experience. Write so the

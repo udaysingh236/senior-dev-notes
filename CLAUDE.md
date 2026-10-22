@@ -47,7 +47,10 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
    walkthroughs of one real system. Save ideas for later with `/save-topic`.
 2. Reading budget: usually 30–45 minutes, 50 at most, set by the topic and never padded (style guide,
    "Length"). Pages open with a sharp technical question, not a story, and never repeat themselves.
-3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`.
+3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`. Read its
+   "Owner's standing feedback" section before writing or rewriting any page: technical core over
+   narrative, no explaining the obvious, no fact-check sections, a hook question, no repetition,
+   and sims that show mechanisms, not steps.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
 5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
    Credit every source in the page's Further reading.
