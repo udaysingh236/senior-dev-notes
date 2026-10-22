@@ -100,3 +100,17 @@ results that quote the official pages. Items marked (verify) deserve a second lo
 ## Further reading (source list)
 
 See the page's Further reading section; every URL above is listed there.
+
+## Added in the 2026-10-22 rewrite
+
+- L4 balancing with long-lived HTTP/2 / gRPC connections is uneven; Kubernetes Services balance
+  connections. https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/
+- Envoy least-request uses power of two choices; slow start mode exists for round robin and least
+  request. https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers
+- Retries at several layers multiply; deadlines and retry budgets. Google SRE book, "Addressing
+  cascading failures". https://sre.google/sre-book/addressing-cascading-failures/
+- ECMP and anycast in front of L4 balancers; Maglev uses consistent hashing plus connection tracking.
+- Sim results (our model, seed 42): 4 connections / 6 backends: L4 leaves 2 idle; 8 connections: L4
+  p95 ~1.9 s vs ~32 ms at L7; backend 1 3× slower: round robin p95 ~1.5 s vs ~45 ms least
+  outstanding. Timeouts 1.2 s service / 1 s gateway / 1.5 s client with 2 retries per hop: ~6 service
+  calls per click, >90% of service work wasted, ~half of clicks fail.

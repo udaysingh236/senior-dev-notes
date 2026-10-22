@@ -1,0 +1,19 @@
+---
+// Timeouts and retries at two hops, one user click at a time. See timeout-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="hop-timeouts"
+  title="One click, two hops, a timeout and retries at each"
+  description="A timeline for one user click. The top row shows the client's attempts, the middle row the gateway's attempts, and the bottom rows every execution on the service, stacked when they overlap. Green work produced the answer the user saw. Red is a caller timing out. Amber is service or gateway work that finished after its caller had already given up: done for nobody. A blue line sweeps the timeline."
+  watchFor="With the defaults, the service needs about 1.2 s, the gateway gives up after 1 s, and the client after 1.5 s. Each hop retries twice, so one click becomes up to nine service executions, almost all of them amber, and the user still gets an error about half the time. Now set retries to 0, the gateway timeout to 2,800 ms and the client timeout to 3,000 ms: one execution per click and more than 80% of clicks answered. The failures left are the calls that really are slow, and each costs the service one execution instead of up to nine."
+  viewBox="0 0 400 244"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createTimeoutModel } from './timeout-model';
+
+  mountAll('hop-timeouts', createTimeoutModel);
+</script>
