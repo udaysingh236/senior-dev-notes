@@ -9,7 +9,23 @@ import hashlib
 import hmac
 import secrets
 
-from bit_flip import decrypt, encrypt
+
+def keystream(key: bytes, nonce: bytes, length: int) -> bytes:
+    """A toy stream cipher, SHA-256(key | nonce | counter), so the demo needs only the standard
+    library. Real TLS uses AES-GCM or ChaCha20-Poly1305. Teaching code: never use this cipher."""
+    out = bytearray()
+    counter = 0
+    while len(out) < length:
+        out += hashlib.sha256(key + nonce + counter.to_bytes(8, "big")).digest()
+        counter += 1
+    return bytes(out[:length])
+
+
+def encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+    return bytes(a ^ b for a, b in zip(plaintext, keystream(key, nonce, len(plaintext))))
+
+
+decrypt = encrypt  # XOR with the same keystream undoes itself
 
 # RFC 3526 group 14: a 2048-bit prime p and generator g = 2. Everyone knows these.
 P = int(

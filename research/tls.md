@@ -237,3 +237,67 @@ Explainers: The Illustrated TLS 1.3 Connection, HPBN ch. 4, Cloudflare Learning.
   https://docs.aws.amazon.com/elasticloadbalancing/latest/application/describe-ssl-policies.html
 - Mozilla root count (121, Sept 2026), Cloudflare 0-RTT methods and Istio 24 h default not re-fetched:
   those hosts were unreachable from this session; values from 2026-10-18 kept.
+
+## Rewrite, 2026-10-22 (owner's standing feedback: hook question, mechanisms, no padding)
+
+New angle: what the handshake actually proves (CertificateVerify over the transcript), what it
+leaves visible, which keys undo forward secrecy, 0-RTT replay in a cluster, chain building,
+revocation, 47-day lifetimes, mesh mTLS pitfalls, termination. Dropped: the Friday-night story,
+bit-flip demo, ACME step-through, handshake round-trip measurement (needs the internet; the
+foundations page covers round trips), certificate field anatomy, the version/attack history list.
+
+New facts and sources (WebSearch; WebFetch cannot resolve hosts here):
+
+- Session tickets and forward secrecy. Langley, "How to botch TLS forward secrecy" (27 June 2013):
+  TLS 1.2 ticket contains the session state incl. master secret, encrypted under a STEK; servers
+  often generate one STEK at startup and keep it for months.
+  https://imperialviolet.org/2013/06/27/botchingpfs.html . Valsorda: resumed connections without
+  DH have no FS against STEK compromise. https://words.filippo.io/we-need-to-talk-about-session-tickets/
+  TLS 1.3: psk_dhe_ke mixes fresh (EC)DHE; early data keys come from the PSK alone (RFC 8446 2.3).
+- 0-RTT anti-replay: RFC 8446 section 8 (8.1 single-use tickets, 8.2 ClientHello recording, 8.3
+  freshness checks). Guarantee is at most once per server instance; freshness window for internet
+  clients on the order of 10 s (genart review of rfc8446bis). Cross-zone replay when state is not
+  shared. https://datatracker.ietf.org/doc/html/rfc8446#section-8
+- Traffic analysis: Miller, Huang, Joseph, Tygar, "I Know Why You Went to the Clinic" (arXiv
+  1403.0297 / PETS 2014): 6,000+ pages on 10 sites, 89% page identification (PETS version: 90%);
+  defence reduces to 27% (PETS: 25%) for 9% more traffic. https://arxiv.org/abs/1403.0297
+- BREACH (2013, CVE-2013-3587): HTTP compression + reflected input recovers secrets from response
+  sizes; mitigations: per-response masking of tokens, separating secrets from input, length hiding.
+  https://breachattack.com/
+- ECH: RFC 9849, Proposed Standard, March 2026. https://www.rfc-editor.org/rfc/rfc9849.html
+  Browser defaults not confirmed from primary sources in this session (Chrome 117/118 shipped ECH
+  in 2023 per secondary sources); page avoids stating browser defaults.
+- Revocation: Firefox CRLite on for all desktop users from Firefox 137; OCSP disabled for DV certs in
+  Firefox 142; updates every 12 h; covers certs in CT logs whose CAs publish CRLs.
+  https://hacks.mozilla.org/2025/08/crlite-fast-private-and-comprehensive-certificate-revocation-checking-in-firefox/
+  Chrome CRLSets: curated, pushed via component updates, emergencies first; Chrome stopped online
+  checks in most cases (Langley 2014, https://www.imperialviolet.org/2014/04/29/revocationagain.html).
+  Let's Encrypt: Must-Staple requests fail from 30 Jan 2025 (except prior users), ignored from 7 May
+  2025; OCSP responders off 6 Aug 2025. https://letsencrypt.org/2024/12/05/ending-ocsp/
+- Missing intermediates: Firefox preloads all CCADB-disclosed intermediates (over 2,000 in 2020),
+  never implemented AIA fetching; Chrome fetches via AIA.
+  https://blog.mozilla.org/security/2020/11/13/preloading-intermediate-ca-certificates-into-firefox/
+- TLS 1.2 sends the certificate in the clear; TLS 1.3 encrypts everything after ServerHello
+  (RFC 8446). Verified locally with examples/tls observer: CA name readable in 1.2, not in 1.3.
+- Record overhead measured locally (observer example, OpenSSL 3.0.13, TLS_AES_256_GCM_SHA384 /
+  ECDHE-ECDSA-AES256-GCM-SHA384): TLS 1.3 record length = plaintext + 17; TLS 1.2 = plaintext + 24.
+- Istio: PeerAuthentication PERMISSIVE accepts mTLS and plaintext and is the default; STRICT rejects
+  plaintext. 24 h default workload cert TTL confirmed only by secondary sources (oneuptime.com,
+  Feb 2026); rotation point reported as 50% or 80% of lifetime by different sources, so the page
+  makes no claim about when rotation happens; it states only the 24 h default.
+- Envoy: x-forwarded-client-cert is sanitized by default when forward_client_cert_details is unset.
+  https://envoyproxy.io/docs/envoy/latest/configuration/http/http_conn_man/headers
+- Post-quantum ClientHello size breaking middleboxes: tldr.fail (David Adrian et al.) documents
+  servers/middleboxes that fail when the ClientHello spans two packets. https://tldr.fail/
+  (not re-fetched this session; double-check).
+- CAA records: RFC 8659; CAs must check before issuance. https://www.rfc-editor.org/rfc/rfc8659
+
+Sim numbers (seed 42, headless test bundled with esbuild):
+- ReplaySim, 5 simulated minutes, 8 servers, 4 copies: none 797/800 copies run (3 in flight);
+  per-server cache 570/800 (71%; theory 72.5%); shared cache 0 (997 lookups); no POST early 0
+  (200 POSTs lose 0-RTT). Per-server with 1/2/4/16 servers: 0/189/409/676 of 800 run.
+  12 servers, 3 copies, 30 min: 3,063 of 3,600 run (2.55 per transfer; theory 2.53).
+- SizeLeakSim, 5 min: no padding 82% named; padding 1/2/4/8/16/32 KB: 78/70/59/44/27/21% with
+  2/3/6/12/23/52% extra bytes; noise 0/10/20%: 100/51/34%.
+- RenewalSim, 2 years: 47-day default: 139 certs, 9 breakages, 0 outage days; alert 0: 27 days;
+  6-day: 12 days; 6-day with 1-day fix: 0.

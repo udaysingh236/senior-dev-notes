@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Creates a small private PKI for the TLS examples, in ./certs (git-ignored).
 #
-#   root CA  ->  intermediate CA  ->  server.pem      localhost, valid 90 days
+#   root CA  ->  intermediate CA  ->  server.pem      localhost and clinic.example.in, valid 90 days
 #                                 ->  expired.pem     localhost, expired on 1 April 2026
 #                                 ->  wrongname.pem   payments.internal only
 #                                 ->  orders.pem      client cert, spiffe://shop.internal/orders
@@ -34,7 +34,7 @@ authorityKeyIdentifier = keyid
 basicConstraints = critical, CA:FALSE
 keyUsage = critical, digitalSignature
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:localhost, IP:127.0.0.1
+subjectAltName = DNS:localhost, DNS:clinic.example.in, IP:127.0.0.1
 authorityKeyIdentifier = keyid
 
 [wrongname]

@@ -4,7 +4,24 @@
 // secret from anyone who only listens, but Mallory does not only listen: she runs one exchange with
 // Alice and another with the bank, and relays between them. Standard library only.
 import { createHash, createHmac, getDiffieHellman, randomBytes, timingSafeEqual } from 'node:crypto';
-import { decrypt, encrypt } from './bit-flip.mjs';
+
+/** A toy stream cipher, SHA-256(key | nonce | counter), so the demo needs no libraries. Real TLS
+ * uses AES-GCM or ChaCha20-Poly1305. Teaching code: never use this cipher. */
+function keystream(key, nonce, length) {
+  const blocks = [];
+  for (let counter = 0n; blocks.length * 32 < length; counter++) {
+    const c = Buffer.alloc(8);
+    c.writeBigUInt64BE(counter);
+    blocks.push(createHash('sha256').update(Buffer.concat([key, nonce, c])).digest());
+  }
+  return Buffer.concat(blocks).subarray(0, length);
+}
+
+const encrypt = (key, nonce, plaintext) => {
+  const stream = keystream(key, nonce, plaintext.length);
+  return Buffer.from(plaintext.map((b, i) => b ^ stream[i]));
+};
+const decrypt = encrypt; // XOR with the same keystream undoes itself
 
 /** One side of a Diffie-Hellman exchange in RFC 3526 group 14 (2048-bit prime, generator 2). */
 function party() {

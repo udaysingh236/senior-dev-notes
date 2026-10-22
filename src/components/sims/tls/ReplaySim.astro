@@ -1,0 +1,19 @@
+---
+// A 0-RTT request copied by an attacker and replayed into a cluster. See replay-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tls-replay"
+  title="Replaying 0-RTT early data into a cluster"
+  description="On the left, a client and an attacker. On the right, a row of servers behind a load balancer. Every 1.5 seconds the client sends POST /transfer as early data, a blue circle, to a random server. The attacker copies that encrypted flight and sends the copies, red diamonds, to random servers a few seconds later. A server outline flashes green when it runs the genuine request, red when it runs a copy a second time, amber when the genuine request ran only after a full handshake, and grey when it rejects a copy."
+  watchFor="With a replay cache inside each server (defence 1), a copy is caught only when it lands on the server that already saw it, so with 8 servers about 7 copies in 10 still run. Drag servers to 1 and every copy is caught; drag it to 16 and only about 1 in 7 is. A shared cache (defence 2) catches every copy but adds a lookup to every handshake; refusing POST in early data (defence 3) catches every copy and gives up 0-RTT for every POST."
+  viewBox="0 0 400 236"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createReplayModel } from './replay-model';
+
+  mountAll('tls-replay', createReplayModel);
+</script>

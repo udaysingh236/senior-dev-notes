@@ -1,0 +1,77 @@
+---
+// The hero picture: what the server's CertificateVerify signature covers. Every handshake message
+// so far, including both key shares, is hashed into one transcript hash, and the server signs that
+// hash with the private key behind its certificate. A man in the middle who swaps a key share
+// changes the hash, and cannot produce a new signature without the private key.
+const msgs = [
+  { name: 'ClientHello', detail: 'random, key share A, SNI', tone: 'client', mitm: true },
+  { name: 'ServerHello', detail: 'random, key share B', tone: 'server', mitm: false },
+  { name: 'EncryptedExtensions', detail: 'ALPN choice, extras', tone: 'server', mitm: false },
+  { name: 'Certificate', detail: 'chain for shop.example.in', tone: 'server', mitm: false },
+];
+const top = 40;
+const H = 50;
+const GAP = 8;
+---
+
+<svg viewBox="0 0 400 446" width="100%" role="img" aria-labelledby="tls-tr-t tls-tr-d">
+  <title id="tls-tr-t">What the CertificateVerify signature covers</title>
+  <desc id="tls-tr-d">
+    Four handshake messages stacked on the left: ClientHello with the client's random value, key
+    share A and the server name; ServerHello with the server's random value and key share B;
+    EncryptedExtensions; and the Certificate chain for shop.example.in. All four feed one transcript
+    hash. The server signs that hash with the private key that matches the certificate: that
+    signature is CertificateVerify. A note on the right: if Mallory swaps key share A, the hash
+    changes, and the signature no longer verifies, because she cannot sign without the private key.
+    At the bottom, the Finished messages: a MAC over the same transcript, in both directions.
+  </desc>
+  <defs>
+    <marker id="tls-tr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+    <marker id="tls-tr-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">everything the server signs</text>
+
+  {
+    msgs.map((m, i) => {
+      const y = top + i * (H + GAP);
+      return (
+        <g>
+          <rect x="4" y={y} width="246" height={H} rx={m.tone === 'client' ? 12 : 6} stroke-width="2"
+            style={`fill: var(--viz-${m.tone}-soft); stroke: var(--viz-${m.tone})`} />
+          <text x="16" y={y + 21} font-size="18" font-weight="700" style="fill: var(--viz-ink)">{m.name}</text>
+          <text x="16" y={y + 42} font-size="16" style="fill: var(--viz-muted)">{m.detail}</text>
+        </g>
+      );
+    })
+  }
+
+  <!-- Bracket: all four go into the hash -->
+  <path d={`M254 ${top + 4} h10 v${4 * H + 3 * GAP - 8} h-10`} fill="none" stroke-width="2" style="stroke: var(--viz-ink)" />
+  <path d={`M264 ${top + 2 * H + GAP} h6 V279`} fill="none" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#tls-tr-arrow)" />
+
+  <!-- Mallory's attempt -->
+  <g font-size="16" style="fill: var(--viz-bad)">
+    <path d={`M250 ${top + 34} C 300 ${top + 34}, 312 ${top + 54}, 312 ${top + 74}`} fill="none" stroke-width="1.8" stroke-dasharray="4 3" style="stroke: var(--viz-bad)" marker-end="url(#tls-tr-bad)" />
+    <text x="276" y={top + 98} font-weight="700">Mallory swaps</text>
+    <text x="276" y={top + 118}>key share A:</text>
+    <text x="276" y={top + 138}>the hash</text>
+    <text x="276" y={top + 158}>changes, and</text>
+    <text x="276" y={top + 178}>she has no</text>
+    <text x="276" y={top + 198}>private key</text>
+    <text x="276" y={top + 218}>to re-sign</text>
+  </g>
+
+  <!-- Hash, then signature -->
+  <rect x="60" y="282" width="280" height="44" rx="8" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="200" y="310" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">transcript hash</text>
+  <line x1="200" y1="326" x2="200" y2="346" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#tls-tr-arrow)" />
+  <rect x="4" y="350" width="392" height="50" rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="372" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">CertificateVerify</text>
+  <text x="200" y="392" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">signed with the certificate's private key</text>
+  <text x="200" y="432" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">then Finished: a MAC over it, both ways</text>
+</svg>
