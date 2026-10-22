@@ -2,7 +2,7 @@
 # Case studies and system walkthroughs ("How X works", "Design X"). Copy to
 # src/content/docs/case-studies/<slug>.mdx and replace every value.
 title: How IRCTC Tatkal Booking Works
-description: One booking traced end to end — the 10 AM rush, the waiting room, seat locks, payments and why "money deducted, no ticket" happens.
+description: Segment-wise berth inventory, row locks under a 10 AM spike, berth allocation, RAC and waitlist promotion, and payments that fail halfway.
 tagline: A lakh people, a few hundred seats, and one minute to decide who gets them.
 difficulty: intermediate          # beginner | intermediate | advanced
 track: case-studies
@@ -22,31 +22,27 @@ import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Arch
 {/*
   Use this template when the page traces one real system end to end and pulls many concepts
   together. Each concept gets a short deep dive here and links to its own page for the full story.
-  Reading budget: 40–45 minutes, up to 50 (see "Length" in style-guide.md).
-  Accuracy matters more than usual: most companies publish little about their internals. Every
-  fact about the real system needs a source. Everything else is clearly labelled as how a system
-  like this could be built. Never present a guess as how the company does it.
+  Reading budget: usually 35–50 minutes, never padded (see "Length" in style-guide.md).
+  Most companies publish little about their internals. Present the page as how you would build a
+  system like this, with one sentence near the top saying the internals are not public. Cite the
+  real rules and numbers you use (quotas, timings, scale) inline. Never present a guess as how the
+  company does it. Do not explain the product from the user's side; the reader has used it.
   Section order is fixed. Heading wording can be adapted. Delete every comment before publishing.
 */}
 
-{/* 1. THE STORY (200–350 words)
-    The moment the system is under the most pressure, from the user's side
-    (9:59:58 AM, a family trip, one browser tab, everyone refreshing). End with the question. */}
-## 9:59:58 AM
+{/* 1. THE HOOK (40–120 words)
+    The hardest technical question in this system, one the reader has never asked themselves
+    (one berth, three journeys, three requests in the same second: what is locked?). Then one
+    sentence: internals are not public, this is how we would build it. No narrative. */}
+## The question
 
-{/* 2. WHAT WE KNOW AND WHAT WE DON'T (200–400 words)
-    The publicly known facts, each sourced and dated "as of <Month YYYY>" (rules, timings, scale
-    figures from official releases or reputable news). Then say plainly that the rest of the page
-    is a reasoned design for a system like this, not the company's internal design. */}
-## What is public, and what is our design
-
-{/* 3. REQUIREMENTS AND NUMBERS (400–600 words)
+{/* 2. REQUIREMENTS AND NUMBERS (250–450 words)
     Functional requirements (what the system must do) and non-functional ones (fairness, no double
     booking, availability at the peak). Back-of-the-envelope numbers: users at the peak, requests
     per second, seats per train, how long a seat stays held. Mark illustrative numbers as such. */}
 ## What the system has to do, in numbers
 
-{/* 4. THE BIG PICTURE (300–500 words)
+{/* 3. THE BIG PICTURE (200–400 words)
     The hero architecture diagram: at most ~8 boxes (edge, waiting room, app servers, inventory,
     payments, notification). One paragraph per box on why it exists. */}
 ## The big picture
@@ -55,33 +51,31 @@ import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Arch
   <Architecture />
 </Figure>
 
-{/* 5. ONE BOOKING, STEP BY STEP (600–900 words)
-    A <StepThrough> following one request from login to confirmed ticket. Each step says what the
-    user sees, what the system does, and what can go wrong there. */}
-## One booking, step by step
-
-{/* 6. DEEP DIVES (3,000–3,500 words across all H3s)
-    One H3 per hard problem, 3–5 of them. For each: why it is hard at the peak → the design choice
-    → a diagram or sim → numbers → what it costs → link to the concept's own page.
-    The sim usually goes here: the peak moment with and without the key mechanism. */}
+{/* 4. DEEP DIVES (the bulk of the page, 4–6 H3s)
+    One H3 per hard problem. For each: the question → the naive answer and exactly how it fails →
+    the data model or algorithm → a diagram or sim → numbers → edge cases and races → what it costs
+    → link to the concept's own page. Show schemas, queries and lock scopes, not user screens.
+    Sims go here and show mechanisms (an inventory grid, two transactions racing), not user flows. */}
 ## The hard parts
 
-### Surviving the 10 AM spike
+### One berth, many journeys: the inventory model
 
-### Keeping bots out without locking people out
+### What exactly gets locked
 
-### Never selling one seat twice
+### Choosing which berth
+
+### RAC, waitlist and charting
+
+### Surviving 10:00:00
 
 ### Payments: when money leaves but no ticket arrives
 
-### Waitlists and cancellations
-
-{/* 7. WHEN THINGS GO WRONG (400–600 words)
+{/* 5. WHEN THINGS GO WRONG (250–450 words)
     Failure modes at the peak and what the user sees for each. Sourced real incidents only.
     :::danger for the ones that lose money or data. */}
 ## When things go wrong
 
-{/* 8. BUILD A PIECE (200–400 words)
+{/* 6. BUILD A PIECE (200–400 words)
     One small, runnable piece of the system, not the whole thing (for example a seat hold that
     expires, or an idempotent payment callback). Python and JavaScript in synced tabs. At most
     ~150 lines on the page per language; runnable twins in examples/<slug>/. */}
@@ -100,17 +94,17 @@ import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Arch
   </TabItem>
 </Tabs>
 
-{/* 9. TRADE-OFFS (300–500 words)
+{/* 7. TRADE-OFFS (200–400 words)
     The big choices in this design, what each one gives up, and what you would do differently at
     10× or 0.1× the scale. */}
 ## Trade-offs, and what we'd change
 
-{/* 10. INTERVIEW CORNER (250–400 words)
+{/* 8. INTERVIEW CORNER (250–400 words)
     The interview version of this system ("design a ticket booking system"), how to structure the
     45 minutes, and the 3–4 follow-up questions interviewers usually ask. */}
 ## Interview corner
 
-{/* 11. CHECK YOURSELF
+{/* 9. CHECK YOURSELF
     4–5 "what would happen if…" questions about this system. Answers hidden in <details>, short. */}
 ## Check yourself
 
@@ -121,11 +115,11 @@ Answer, with the reasoning.
 
 </details>
 
-{/* 12. RECAP
+{/* 10. RECAP
     6 bullets: one per hard part, plus the big lesson. */}
 ## Recap
 
-{/* 13. WHERE TO GO NEXT
+{/* 11. WHERE TO GO NEXT
     The concept pages the deep dives linked to, and related case studies. */}
 ## Where to go next
 
@@ -134,7 +128,7 @@ Answer, with the reasoning.
   { slug: 'load-shedding', why: 'What to drop first when the whole system is overloaded.' },
 ]} />
 
-{/* 14. FURTHER READING
+{/* 12. FURTHER READING
     Every source used, grouped: Official sources / Engineering blogs / News and explainers.
     One line each on what it's good for. */}
 ## Further reading
