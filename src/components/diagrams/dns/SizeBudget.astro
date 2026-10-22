@@ -1,0 +1,62 @@
+---
+// How big DNS answers get, against the two UDP limits that matter: 512 bytes (the original
+// limit) and 1,232 bytes (the EDNS buffer size most resolvers have used since DNS Flag Day 2020).
+// Sizes: our own measurement for the A record and the toy TXT answer; DNSKEY answers from APNIC's
+// 2021 measurements of RSA-4096 and ECDSA P-256 keys.
+const MAX = 3000;
+const X0 = 4;
+const W = 392;
+const xOf = (bytes: number) => X0 + (bytes / MAX) * W;
+const BARS = [
+  { label: 'A record, one address', bytes: 72, tone: 'ok' },
+  { label: 'DNSKEY, one ECDSA P-256 key', bytes: 347, tone: 'ok' },
+  { label: 'DNSKEY, one RSA-4096 key', bytes: 1245, tone: 'warn' },
+  { label: 'DNSKEY, two RSA-4096 (a rollover)', bytes: 1755, tone: 'bad' },
+  { label: 'our toy TXT record, 12 strings', bytes: 2835, tone: 'bad' },
+];
+const TOP = 70;
+const ROW = 56;
+const height = TOP + BARS.length * ROW + 8;
+---
+
+<svg viewBox={`0 0 400 ${height}`} width="100%" role="img" aria-labelledby="dns-size-t dns-size-d">
+  <title id="dns-size-t">DNS answer sizes against the UDP limits</title>
+  <desc id="dns-size-d">
+    A horizontal bar chart on a scale from 0 to 3,000 bytes, with two dashed vertical lines: 512
+    bytes, the original UDP limit, and 1,232 bytes, the EDNS buffer size most resolvers now use.
+    An A record with one address is 72 bytes. A DNSKEY answer with one ECDSA P-256 key is 347
+    bytes. With one RSA-4096 key it is 1,245 bytes, slightly over the 1,232 line. During a key rollover
+    with two RSA-4096 keys it is 1,755 bytes. Our toy TXT record with 12 long strings is 2,835
+    bytes. Everything past 1,232 bytes comes back truncated over UDP and must be fetched again
+    over TCP.
+  </desc>
+
+  <g font-size="15" style="fill: var(--viz-muted)">
+    <text x={xOf(512)} y="40" text-anchor="middle">512</text>
+    <text x={xOf(1232) - 30} y="40" style="fill: var(--viz-bad)">1,232: TCP beyond this</text>
+  </g>
+
+  {
+    BARS.map((b, i) => {
+      const y = TOP + i * ROW;
+      const w = Math.max(3, xOf(b.bytes) - X0);
+      const inside = w > 120;
+      return (
+        <g>
+          <text x="4" y={y} font-size="17" style="fill: var(--viz-ink)">{b.label}</text>
+          <line x1={xOf(512)} y1={y + 4} x2={xOf(512)} y2={y + 34} stroke-width="1.5" stroke-dasharray="4 3" style="stroke: var(--viz-muted)" />
+          <line x1={xOf(1232)} y1={y + 4} x2={xOf(1232)} y2={y + 34} stroke-width="1.5" stroke-dasharray="4 3" style="stroke: var(--viz-bad)" />
+          <rect x={X0} y={y + 8} width={w} height="22" rx="4" stroke-width="1.5" style={`fill: var(--viz-${b.tone}-soft); stroke: var(--viz-${b.tone})`} />
+          <text
+            x={inside ? X0 + w - 6 : X0 + w + 6}
+            y={y + 25}
+            font-size="16"
+            font-weight="700"
+            text-anchor={inside ? 'end' : 'start'}
+            style="fill: var(--viz-ink); font-family: var(--sl-font-mono)"
+          >{b.bytes.toLocaleString('en-US')} B</text>
+        </g>
+      );
+    })
+  }
+</svg>

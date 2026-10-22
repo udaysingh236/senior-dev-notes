@@ -194,3 +194,80 @@ Explainers: Julia Evans, Cloudflare Learning Center.
   ICANN, so the 1,437 TLD count and the root key rollover are still from the 2026-10-18 reading.
   A search confirmed KSK-2024 was scheduled to sign the root zone from 11 October 2026; no
   post-rollover report was found, so the page no longer claims "no widespread disruption".
+
+## Update 2026-10-22: rewritten to the owner's standard (hook, mechanisms, mechanism sims)
+
+Angle: a DNS answer is a lease nobody can recall. The page now spends its words on what each layer
+does to the TTL, migration lead time, negative and failure caching, outage spread, name server
+selection, DNS load balancing, size limits and DNSSEC costs. The resolution walk, record-type
+tables, DoT/DoH/DoQ detail and the CNAME apex section were cut (known to the reader or covered on
+how-the-web-works). WebFetch could not resolve hosts in this session; facts below came from
+WebSearch results and are worth a second look where marked (*).
+
+### New facts and sources
+
+- BIND 9 defaults: `max-cache-ttl` 604800 (7 d), `max-ncache-ttl` 10800 (3 h, hard cap 7 d),
+  `stale-answer-enable no`. https://bind9.readthedocs.io/en/stable/reference.html
+  (stale-cache-enable default differs between versions; not used on the page.)
+- Unbound defaults: `cache-max-ttl` 86400, `cache-max-negative-ttl` 3600, `cache-min-ttl` 0,
+  `serve-expired no`. https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html
+- Unbound server selection: random among servers within a 400 ms RTT band of the fastest; unknown
+  server assumed 376 ms; infra-cache entries live 15 min.
+  https://unbound.docs.nlnetlabs.nl/en/latest/reference/history/info-timeout-server-selection.html
+  (A GitHub issue, #567, argues the band is only 400 ms at first.) (*)
+- RFC 9520 (Dec 2023): resolvers MUST cache resolution failures (SERVFAIL, timeouts, validation
+  failures) for at least 1 s and at most 5 min; SHOULD back off. https://www.rfc-editor.org/rfc/rfc9520.html
+- RFC 8767 serve-stale: stale answers get TTL 30 s; keep stale data 1–3 days (the RFC also mentions
+  a 7-day cap as common practice). (*) https://www.rfc-editor.org/rfc/rfc8767
+- RFC 8020: NXDOMAIN means nothing exists below the name. RFC 8198: aggressive use of NSEC/NSEC3
+  proofs to synthesize NXDOMAIN for ranges; on by default since BIND 9.12 (`synth-from-dnssec`).
+  https://www.rfc-editor.org/rfc/rfc8198 · https://blog.apnic.net/2018/02/06/aggressive-nsec-caching-bind-9-12/
+- Moura et al., "When the Dike Breaks" (IMC 2018): caching not effective for ~30% of clients
+  during a DDoS; retries raise authoritative traffic up to 8×; with fresh caches 35–70% of clients
+  served from cache. https://ant.isi.edu/~johnh/PAPERS/Moura18b.pdf
+- Moura et al., "Cache Me If You Can" (IMC 2019): most resolvers are child-centric (prefer TTLs of
+  authoritative child answers). https://ant.isi.edu/bib/Moura19b.html
+- Müller et al., "Recursives in the Wild" (IMC 2017): most resolvers query all authoritatives over
+  time; about half prefer lower latency; recommend anycast on every NS.
+  https://ant.isi.edu/~johnh/PAPERS/Mueller17b.pdf
+- Chrome: 60 s cache when using the OS resolver (no TTL known); built-in resolver uses TTL with a
+  60 s minimum. https://textslashplain.com/2022/03/31/chromiums-dns-cache/ (*)
+- Java: `networkaddress.cache.ttl` 30 s, `networkaddress.cache.negative.ttl` 10 s (java.security).
+- glibc getaddrinfo sorts addresses by RFC 3484/6724 rules, which can defeat round robin.
+  https://cern.ch/twiki/bin/view/LinuxSupport/GlibcDnsLoadBalancing · https://sourceware.org/bugzilla/show_bug.cgi?id=24282
+- Route 53 health checks: 30 s interval default (10 s option), failure threshold 3; AWS suggests
+  60 s TTL on failover records. https://aws.amazon.com/blogs/aws/route-53-health-check-improvements-faster-interval-and-configurable-failover/
+- ECS cache effects: cache size up to an order of magnitude larger, hit rates for ECS queries under
+  half of normal (one CDN + one public resolver). (*) https://akamai.com/site/en/documents/research-paper/a-look-at-the-ecs-behavior-of-dns-resolvers.pdf
+- DNSKEY response sizes (APNIC, Huston 2021): 1 RSA-4096 key 1,245 B, 2 keys 1,755 B, 3 keys
+  2,237 B; 1 ECDSA P-256 key 347 B. (*) https://labs.apnic.net/presentations/store/2021-11-25-rsa4096.pdf
+  Signature sizes: RSA-2048 256 B, ECDSA P-256 64 B.
+- DNSSEC deployment: ~36% of users behind validating resolvers, ~7% secure delegations in 2025
+  (CircleID, Feb 2026, citing an APNIC post that could not be opened). (*)
+  https://circleid.com/posts/dnssec-doesnt-need-a-better-story-it-needs-a-better-tuesday
+  .com signing rate 4.3% (Verisign, 2023).
+- KeyTrap CVE-2023-50387: specification flaw; one packet could stall BIND up to 16 h; fixed in
+  BIND 9.16.48 / 9.18.24 / 9.19.21 (Feb 2024). https://kb.isc.org/docs/cve-2023-50387 · https://arxiv.org/pdf/2406.03133
+- AWS DynamoDB 2025: DNS restored 2:25 AM; customers reconnected as cached records expired; DynamoDB
+  errors ended 2:40 AM. https://aws.amazon.com/message/101925/
+
+### Sim checks (seed 42, headless, numbers quoted on the page)
+
+- migration-model, defaults (old TTL 3600, lead 0, off after 10 min, 2% pinned): 176 of 200 caches
+  on the old address at switch-off; 13,182 of 47,817 lookups after it failed (28%); last unpinned
+  cache switched at +1 h 00 min; DNS queries 2.8/min before → ~147/min with 60 s TTL (~52×).
+  Lead 30: 68 caches, 6%, last +30 min. Lead 60: 4 (pinned) caches, 2%, last +2 min.
+- outage-model 'unreachable', defaults (TTL 300, 60 min, 0% stale): 100% failing from minute 5.
+  TTL 3600: 58% at minute 30, 99% at minute 59. Stale 50%: ~51% failing. Stale 100%: 0.
+- outage-model 'empty', defaults (TTL 300, 50 min, negative TTL 900): 83–89% still failing in the
+  ten minutes after the fix; last failure at +64.9 min (~15 min after the fix). Negative TTL 60:
+  last failure +51 min.
+- rr-model, defaults (10 resolvers Zipf, 100% first address, TTL 300): largest resolver 34% of
+  users; worst moment 3.46× fair share; some server above 1.5× 100% of the time; longest one server
+  stayed above 1.5×: 10 min; busiest server's 2-hour average 1.19×. 200 resolvers: worst 2.16×,
+  hot 43% of the time, biggest 17%. First address 0%: even. TTL 30: longest hot 90 s; TTL 1800: 47 min.
+
+### Sandbox note
+
+UDP port 53 in this session returned fake answers (NXDOMAIN for example.com from "1.1.1.1"), so no
+live lookups were run; `lookup.py`/`lookup.mjs` were removed with the page sections that used them.

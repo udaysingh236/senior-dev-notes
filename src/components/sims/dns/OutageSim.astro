@@ -1,0 +1,46 @@
+---
+// The authoritative side of a popular name fails, seen through 200 resolver caches. See outage-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+
+type Kind = 'unreachable' | 'empty';
+
+interface Props {
+  kind: Kind;
+}
+
+const COPY: Record<Kind, { title: string; description: string; watchFor: string }> = {
+  unreachable: {
+    title: 'Your name servers stop answering',
+    description:
+      'A grid of 200 resolver caches for one popular name. Green cells answer from a fresh copy, amber cells answer from an expired copy (serve-stale), red cells answer SERVFAIL. Below, a red line shows the share of lookups failing each minute and a dashed amber line the share answered from stale copies; the grey band is the outage.',
+    watchFor:
+      'Nothing breaks at the moment of the outage. Failures grow only as copies expire: with a 300-second TTL every cache is failing by minute 5; set the TTL to 3,600 and 58% of lookups fail after half an hour. Then raise the serve-stale share: each step removes the same share of failures, and at 100% users notice nothing. Recovery is immediate when the servers return.',
+  },
+  empty: {
+    title: 'Your name servers answer, with an empty record',
+    description:
+      'The same 200 caches, but now the authoritative servers stay up and publish the record with no addresses. Green cells answer with addresses; red cells hold the cached answer "no address" (a negative answer). The red line is the share of lookups failing each minute; the grey band is the time the record was empty.',
+    watchFor:
+      'The failure grows exactly as fast as before, and there is no serve-stale slider, because an empty answer is a valid answer. When the record is fixed at +50 min, most caches keep failing: 83% of lookups still fail ten minutes later, and the last failure comes about 15 minutes after the fix, one negative TTL. Slide the negative TTL to 60 s and the tail almost disappears.',
+  },
+};
+
+const { kind } = Astro.props;
+const copy = COPY[kind];
+---
+
+<SimShell
+  name="dns-outage"
+  title={copy.title}
+  description={copy.description}
+  watchFor={copy.watchFor}
+  viewBox="0 0 400 364"
+  config={{ kind }}
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createOutageModel } from './outage-model';
+
+  mountAll('dns-outage', createOutageModel);
+</script>
