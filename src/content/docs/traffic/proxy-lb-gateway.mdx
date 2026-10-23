@@ -18,6 +18,7 @@ import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
 import Role from '../../../components/diagrams/proxy-lb-gateway/Role.astro';
 import WhatItSees from '../../../components/diagrams/proxy-lb-gateway/WhatItSees.astro';
 import Choose from '../../../components/diagrams/proxy-lb-gateway/Choose.astro';
+import Terminate from '../../../components/diagrams/proxy-lb-gateway/Terminate.astro';
 import RealStack from '../../../components/diagrams/proxy-lb-gateway/RealStack.astro';
 import BalancerSim from '../../../components/sims/proxy-lb-gateway/BalancerSim.astro';
 import TimeoutSim from '../../../components/sims/proxy-lb-gateway/TimeoutSim.astro';
@@ -46,15 +47,39 @@ is half of the naming confusion.
 
 The other half is that these are **roles**, not kinds of machine. nginx, HAProxy and Envoy can each
 play all three; Kong is an API gateway built on nginx; AWS's Application Load Balancer is called a
-load balancer but routes by path and can check logins. What separates the roles is one line:
+load balancer but routes by path and can check logins.
+
+The layer numbers come from the **OSI model**, a numbered stack of networking jobs in which each
+layer wraps the one above it. Three layers matter here. **Layer 3** is IP: addresses that get a
+packet to a machine. **Layer 4** is TCP or UDP: port numbers that get bytes to one program on that
+machine and, for TCP, a **connection** that delivers them in order. **Layer 7** is the application
+protocol, here HTTP: method, path, headers and body. Layers 5 and 6 are rarely named in practice,
+and TLS sits between 4 and 7, encrypting all of layer 7. So `GET /orders/42` over HTTPS travels as
+IP packets from 203.0.113.7 to the server, inside a TCP connection from port 51234 to port 443,
+carrying TLS records whose encrypted contents are the HTTP request. A box that reads only the outer
+two wrappers knows who is talking to which port, and nothing about orders.
+
+What separates the roles is which of those layers a box reads:
 
 - A **layer 4** (L4) box sees TCP or UDP: addresses, ports, bytes. It never decrypts TLS, so it
   cannot read a path, a header or an API key, and the unit it can balance is a **connection**.
 - A **layer 7** (L7) box terminates the client's connection, decrypts it and parses HTTP. It can
   read and change everything, and the unit it can balance is a **request**.
 
-Every box adds a hop: another connection to manage, another timeout, and another component that
-fails for every request at once.
+**Terminating** a connection means being its far end. The client's TCP and TLS handshakes complete
+with the proxy, not with your server; the proxy decrypts the bytes, reads the request, and sends it
+on over a second, separate connection to a backend, often one it opened earlier and keeps for reuse.
+A layer 4 box does not terminate TLS: the TLS session runs from the client to the backend and the box
+passes its encrypted bytes along. Some L4 balancers (Google's Maglev, Linux IPVS) forward the
+client's packets so that even the TCP connection runs end to end; others, such as HAProxy in TCP mode,
+accept the TCP connection and open their own, but still never see inside the TLS.
+
+<Figure caption="Passing through versus terminating. Behind a layer 4 balancer the client's TLS session runs all the way to the app, unread. A layer 7 proxy completes the client's handshake itself, reads the request, and forwards it on a second connection of its own.">
+  <Terminate />
+</Figure>
+
+So one request through a layer 7 proxy rides two connections, each with its own handshake and
+timeout. Every box adds such a hop, and another component that fails for every request at once.
 
 ## Each one on its own
 
@@ -65,7 +90,8 @@ not have to. It is layer 7: it sees the whole request and response.
 
 - **TLS termination.** It holds the certificate and decrypts; the [TLS page](/networking/tls/#where-tls-ends-inside-your-system)
   covers re-encryption and passthrough.
-- **Buffering slow clients.** Say Gunicorn runs 4 workers, each request needs 20 ms of real work,
+- **Buffering slow clients.** Say Gunicorn runs 4 sync workers (each serves one request at a time,
+  from its first byte to its last), each request needs 20 ms of real work,
   and 100 users on poor mobile links each take 2 s to upload a request. Without a proxy, each
   worker waits 2 s for bytes before 20 ms of work: 2 requests a second. With nginx in front holding
   the slow uploads (it is built for thousands of idle connections) and handing each complete request
@@ -92,16 +118,38 @@ are unhealthy. Whether it can do that per request depends entirely on its layer.
 </Figure>
 
 A layer 4 balancer picks a backend when a connection opens and sends every packet of that
-connection there. That works when connections are short and numerous (HTTP/1.1 browsers open many).
-It breaks when they are long-lived and **multiplexed**: an HTTP/2 or gRPC client opens one
-connection and sends thousands of requests over it for hours. The whole client then lands on one
-backend, and the balancer cannot move individual requests, because it cannot see them. This is
-why gRPC behind a plain Kubernetes `Service` (an L4 mechanism) is famously uneven
+connection there. Whether that spreads requests depends on how many requests share a connection,
+and that depends on the HTTP version. HTTP/1.1 carries one request at a time on a connection: the
+next request waits until the previous response has fully arrived, so a browser that wants six files
+at once opens up to six connections to the same host. HTTP/2 **multiplexes**: it cuts every request
+and response into small frames, labels each frame with a stream number (one stream per request), and
+interleaves the frames of many streams on one connection. Servers commonly allow 100 or more streams
+in progress at once ([RFC 9113, section 6.5.2](https://www.rfc-editor.org/rfc/rfc9113#section-6.5.2)
+recommends no fewer than 100), so a client has no reason to open a second connection. gRPC runs on
+HTTP/2, and a gRPC client usually keeps one connection per server address for the life of its process.
+
+Per-connection balancing works when connections are short and numerous, as with HTTP/1.1 browsers.
+It breaks when they are long-lived and multiplexed. A gRPC client that sends 60 requests a second
+for an hour sends 216,000 requests on one connection, and the L4 balancer made one decision for all
+of them. The whole client lands on one backend, and the balancer cannot move individual requests,
+because it cannot see them. This is why gRPC behind a plain Kubernetes `Service` is famously uneven:
+a `Service` is a stable virtual address whose rules, written by kube-proxy on every node, pick one
+pod per new connection, which is an L4 mechanism
 ([Kubernetes blog, 2018](https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/)).
 
 A layer 7 balancer is a reverse proxy with a pool behind it. It terminates the client's
 connections, keeps its own pool of connections to every backend, and picks a backend for each
 request. That costs TLS and parsing on every request, and buys the right unit of balancing.
+
+Two terms carry the rest of this section. A request is **in flight**, or **outstanding**, from the
+moment the balancer sends it to a backend until the response comes back; meanwhile it is either
+being worked on or waiting in that backend's queue. **Utilisation** is how busy a backend is: the
+rate requests arrive divided by the rate it can finish them. A backend that finishes 100 requests a
+second and receives 60 is at 60%, and requests rarely wait. At 120 a second it is past 100%: 20 more
+arrive each second than leave, so after 10 s there are 200 waiting and a new request waits 2 s behind
+them; after a minute, 12 s. The queue never settles at a new level. It grows for as long as arrivals
+exceed the service rate. Even below 100%, requests arrive in random clumps, so short queues form and
+waits rise steeply as utilisation nears 100%.
 
 **The algorithm matters once requests are the unit:**
 
@@ -113,6 +161,20 @@ request. That costs TLS and parsing on every request, and buys the right unit of
   uses it ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
 - **Hashing** a client address or key, when the same client must reach the same backend.
 
+Why two random picks are enough deserves a number. Finding the least loaded of all backends means
+reading every backend's count on every request, and when many balancer copies see the same "least
+loaded" backend at the same moment, they all send to it together and overload it. Two random picks
+avoid both problems and still dodge bad backends almost every time. With 10 backends of which 3 are
+overloaded, one random pick lands on an overloaded one 30% of the time; two picks lose only when both
+are overloaded: 3/10 × 2/9, about 7%.
+
+The sim below reports **p95 latency**. Sort the response times of every request in a recent window
+and read the value that 95% of them are at or under. If 94 requests out of 100 take 20 ms and 6 take
+2 s, the median (p50) is 20 ms and the average about 140 ms, but p95 is 2 s: the slow end of the
+distribution, the **tail**, is where those 6 users live, and an average hides them. The tail matters
+more than it looks. A page that makes 20 backend calls waits for the slowest one, and if each call
+has a 5% chance of being slow, about 64% of page loads hit at least one (1 − 0.95²⁰).
+
 Here is all of it at once, on the same traffic: four long-lived connections at 60 requests a second
 each, six backends that can each serve 100 a second.
 
@@ -120,18 +182,25 @@ each, six backends that can each serve 100 a second.
 
 Three effects to take away. Per-connection balancing leaves backends idle and overloads others as
 soon as connections outnumber or unevenly share the backends. Round robin is blind to a slow
-backend and builds a queue there that dominates the tail latency. Least outstanding requests reacts
+backend and builds a queue there that dominates the tail latency: at a third of the speed, backend 1
+finishes about 33 requests a second but still receives its 40, so its queue gains about 7 every
+second. Least outstanding requests reacts
 to slowness without any health check at all, because a slow server's in-flight count is the signal.
 
 One trap in the other direction: a freshly started backend has nothing in flight, so least
 outstanding requests (and least connections) send it a burst of traffic while its caches are cold,
-its connection pools are empty and, on the JVM, its code is not yet compiled. The fix is **slow
+its connection pools are empty and, on the JVM, the JIT compiler has not yet turned its hot code
+into machine code. The fix is **slow
 start**: ramp a new backend's share up over 30 to 60 seconds. Envoy has a slow start mode for its
 round robin and least-request balancers; check that whatever you run has one before you autoscale.
 
-**Health checks** remove dead backends. **Active** checks call each backend every few seconds
-(`GET /healthz`); **passive** checks watch real traffic: in open-source nginx, one failed attempt
-takes a backend out for 10 s by default (`max_fails=1`, `fail_timeout=10s` in the
+A **health check** is the balancer asking each backend "can you serve?" and removing the ones that
+say no or do not answer. **Active** checks call each backend on a timer (`GET /healthz` every few
+seconds) and mark it down only after several failures in a row, so one lost packet does not eject a
+healthy server. That makes them slow by design: checks every 5 s with 3 failures needed leave a
+crashed backend in the pool for up to 15 s, which at 100 req/s is 1,500 requests sent to it.
+**Passive** checks watch real traffic and react to the failures themselves: in open-source nginx,
+one failed attempt takes a backend out for 10 s by default (`max_fails=1`, `fail_timeout=10s` in the
 [upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html), as of October
 2026). **Draining** stops new work to a backend during a deploy while in-flight requests finish.
 
@@ -143,21 +212,38 @@ Layer 4 still earns its place. It is far cheaper per byte: Google's
 [Maglev](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/)
 fills a 10 Gbps link with small packets on one ordinary Linux machine, and Cloudflare's
 [Unimog](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/) spreads connections
-across every server in each data centre with XDP in the kernel. **Reach for L4** for non-HTTP
+across every server in each data centre with XDP (a Linux hook that runs the balancer's code on each
+packet as the network driver receives it, before the rest of the kernel's network stack).
+**Reach for L4** for non-HTTP
 traffic (databases, UDP game protocols, MQTT), for fixed IP addresses partners can allow-list, for
 TLS passthrough, and in front of your L7 tier to scale it. **Reach for L7** whenever connections
 are long-lived, routing depends on the request, or backends differ in speed.
 
 **Who balances the load balancer?** One L4 machine is a single point of failure, so large sites run
-many and spread traffic over them below layer 4. The routers in front announce the same address
-from every balancer and spread packets over them with **ECMP** (equal-cost multi-path routing),
-which hashes each packet's addresses and ports so a connection's packets keep taking the same path.
-When a balancer is added or removed, that hash changes for some connections; Maglev handles it with
-consistent hashing (most connections still map to the same backend) plus a table of established
-connections. Across regions, the same trick runs one level up: **anycast** announces one address from
-many data centres and lets internet routing pick the nearest, while DNS-based balancing (the
-[DNS page](/networking/dns/)) hands out different addresses per region. It is load balancing all the
-way down; only the layer, and what each layer can see, changes.
+many and spread traffic over them at layer 3, in the routers. A router learns where to send packets
+from **route announcements**: a machine tells it "send packets for 203.0.113.10 to me", in practice
+over BGP, the internet's routing protocol. If four balancers all announce 203.0.113.10, the router
+has four equally good next hops, and **ECMP** (equal-cost multi-path routing) picks one for each
+packet by hashing the packet's addresses, ports and protocol. Every packet of a connection carries
+the same values, so it hashes the same way: a connection from 198.51.100.7 port 51234 keeps
+reaching, say, balancer 3.
+
+Adding or removing a balancer changes the set that hash picks from, and some connections start
+arriving at a balancer that never saw them. Maglev answers with two mechanisms. Every Maglev machine
+picks a backend from the same **consistent hashing** table, so whichever machine a packet reaches, it
+goes to the same backend. "Consistent" means that when a backend joins or leaves, most connections
+keep their backend; a plain `hash mod N` would move about three quarters of them when N goes from 4
+to 3. And each machine keeps a table of connections it already forwards, so those stay put even
+while the backend set changes.
+
+Across regions, the same announcement trick runs on the internet. With **anycast**, every data
+centre announces the same address, and each network on the way delivers packets to the announcement
+it sees as nearest: a user in Mumbai connecting to Cloudflare's DNS resolver at 1.1.1.1 reaches a
+data centre near Mumbai, and a user in Frankfurt reaches one in Frankfurt at the same address.
+"Nearest" is in routing terms (fewest networks to cross, adjusted by each network's own policies),
+not in kilometres. DNS-based balancing (the [DNS page](/networking/dns/)) instead hands out different
+addresses per region. It is load balancing all the way down; only the layer, and what each layer can
+see, changes.
 
 **Typical tools:** L4: AWS Network Load Balancer, Google Cloud network load balancers, HAProxy in
 TCP mode, Linux IPVS. L7: AWS Application Load Balancer, nginx, HAProxy, Envoy.
@@ -415,27 +501,47 @@ points to the Gateway API instead
 for the hop behind it, and the service does not stop working when its caller gives up. If the
 gateway gives up after 1 s on a service that needs 1.2 s, and retries, and the client gives up after
 1.5 s and also retries, one click turns into several executions of the same expensive request, most
-of them for nobody:
+of them for nobody.
+
+The count multiplies rather than adds. A hop that makes one attempt plus two retries sends up to 3
+attempts to the hop behind it. If the client makes 3 attempts and each one reaches a gateway that
+makes 3 of its own, the service can run the request 3 × 3 = 9 times; add a third hop that retries the
+same way and it is 27. Every retry at an outer hop restarts the whole chain inside it:
 
 <TimeoutSim />
 
-With two retries at each of two hops, a click can become nine service executions; the sim's
-defaults average about six per click with over 90% of the service's work wasted, and the user still
-sees an error about half the time. Under real overload it is worse than the sim shows, because the
-extra executions make the service slower still, which causes more timeouts: the retry storm that
+The sim's defaults average about six service executions per click with over 90% of the service's
+work wasted, and the user still sees an error about half the time. Under real overload it is worse
+than the sim shows, because the extra executions make the service slower still, which causes more timeouts: the retry storm that
 Google's SRE book describes as a main driver of cascading failures
 ([Google SRE book](https://sre.google/sre-book/addressing-cascading-failures/)). The rules that
 follow: the client waits longest and each hop inward waits a little less; retry at one layer
 (usually the outermost that knows whether the request is safe to repeat), with a budget; and pass a
 deadline inward so the service can stop work nobody will read.
 
-**Idle connections must be closed from the outside first.** Proxies keep connections to backends
-open and reuse them. If the backend closes an idle connection before the balancer does, the balancer
-can send a request down a connection the backend has already closed, and the client gets a 502 that
-never appears in the app's logs. AWS's Application Load Balancer keeps idle connections for 60 s by
-default, while Node.js's HTTP server closes them after 5 s and Gunicorn after 2 s (as of October
-2026); AWS's guidance is to set the application's keep-alive timeout longer than the load balancer's
-idle timeout ([ALB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html)).
+Safe to repeat means **idempotent**: running the request twice leaves the same result as running it
+once. Reading an order or setting its status to "shipped" is idempotent; a `POST /payments` that
+charges ₹500 is not, and two runs charge ₹1,000 unless the request carries an idempotency key the
+service checks. A **retry budget** caps retries as a share of traffic, for example at most 10% extra
+requests, so retries can cover the odd failure but cannot multiply load during an outage.
+
+**Idle connections must be closed from the outside first.** Opening a connection costs a round trip
+for the TCP handshake and another for TLS 1.3 before the first byte of a request moves. **Keep-alive**
+avoids paying that on every request: after a response, both sides leave the connection open for the
+next one, and a proxy keeps a pool of such connections to each backend. An open connection holds
+memory and a file descriptor on both ends, so each side also has an **idle timeout**: close the
+connection if nothing has been sent on it for that long. The two sides set their timeouts
+independently, and a close is a message that takes time to arrive.
+
+If the backend closes an idle connection before the balancer does, the balancer can pick that
+connection for a new request in the same instant the backend's close is on its way. The request
+reaches a socket that is already closed, and the client gets a 502 that never appears in the app's
+logs. AWS's Application Load Balancer keeps idle connections for 60 s by default, while Node.js's
+HTTP server closes them after 5 s and Gunicorn after 2 s (as of October 2026). With those defaults,
+every pooled connection that sits idle for 5 s is closed by Node, and each close is a chance for that
+race. AWS's guidance is to set the application's keep-alive timeout longer than the load balancer's
+idle timeout ([ALB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-load-balancer-attributes.html)),
+so the balancer always closes first and never sends on a connection it closed itself.
 
 **Health checks must mean "I can do my job".** The L4 balancer checks the gateways; the gateways
 check the services. A gateway health check that returns 200 while the gateway cannot reach any
@@ -581,6 +687,7 @@ limit at the edge or gateway, which knows the caller's identity, not only their 
 
 - [RFC 9110, section 3.7](https://www.rfc-editor.org/rfc/rfc9110#section-3.7) — proxies, gateways and tunnels, and why "gateway" first meant reverse proxy.
 - [RFC 7239, Forwarded](https://www.rfc-editor.org/rfc/rfc7239) and [MDN: X-Forwarded-For](https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Forwarded-For) — the client address behind proxies, and which entries to trust.
+- [RFC 9113, HTTP/2](https://www.rfc-editor.org/rfc/rfc9113) — streams and multiplexing, and the recommended minimum of 100 concurrent streams.
 - [HAProxy: the PROXY protocol](https://www.haproxy.org/download/3.1/doc/proxy-protocol.txt) — the client address through a layer 4 hop.
 - [nginx upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) and [proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) — round robin, passive health checks, buffering.
 - [Envoy: load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) — round robin, least request with power of two choices, ring hash.

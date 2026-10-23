@@ -1,0 +1,67 @@
+---
+// What "terminating" a connection means. A layer 4 balancer passes the client's TLS session
+// through unread; a layer 7 proxy is the far end of the client's connection and opens a second
+// connection of its own to the app.
+const BOX = { client: { x: 4, w: 76 }, mid: { x: 158, w: 84 }, app: { x: 320, w: 76 } };
+const rows = [
+  { y: 40, head: 'Layer 4 balancer', headColor: 'var(--viz-server)', mid: 'L4 LB' },
+  { y: 196, head: 'Layer 7 proxy', headColor: 'var(--viz-client)', mid: 'proxy' },
+];
+const H = 44;
+---
+
+<svg viewBox="0 0 400 314" width="100%" role="img" aria-labelledby="plg-tm-t plg-tm-d">
+  <title id="plg-tm-t">Passing a connection through versus terminating it</title>
+  <desc id="plg-tm-d">
+    Two rows, each with a client, a box in the middle and an app server. In the top row the middle
+    box is a layer 4 balancer: one TLS session runs from the client all the way to the app, and the
+    balancer passes its encrypted bytes along without reading them. In the bottom row the middle
+    box is a layer 7 proxy: the client's connection ends at the proxy, which decrypts and reads the
+    request, and the proxy sends it to the app over a second, separate connection.
+  </desc>
+  <defs>
+    <marker id="plg-tm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="plg-tm-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+  </defs>
+
+  {
+    rows.map((r) => (
+      <g>
+        <text x="4" y={r.y - 14} font-size="18" font-weight="700" style={`fill: ${r.headColor}`}>{r.head}</text>
+        <g font-size="17" font-weight="600" text-anchor="middle">
+          <rect x={BOX.client.x} y={r.y} width={BOX.client.w} height={H} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+          <text x={BOX.client.x + BOX.client.w / 2} y={r.y + 28} style="fill: var(--viz-ink)">client</text>
+          <rect x={BOX.mid.x} y={r.y} width={BOX.mid.w} height={H} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+          <text x={BOX.mid.x + BOX.mid.w / 2} y={r.y + 28} style="fill: var(--viz-ink)">{r.mid}</text>
+          <rect x={BOX.app.x} y={r.y} width={BOX.app.w} height={H} rx="5" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+          <text x={BOX.app.x + BOX.app.w / 2} y={r.y + 28} style="fill: var(--viz-ink)">app</text>
+        </g>
+        <g stroke-width="2" fill="none" style="stroke: var(--viz-flow)">
+          <line x1="81" y1={r.y + H / 2} x2="154" y2={r.y + H / 2} marker-end="url(#plg-tm-a)" />
+          <line x1="243" y1={r.y + H / 2} x2="316" y2={r.y + H / 2} marker-end="url(#plg-tm-a)" />
+        </g>
+      </g>
+    ))
+  }
+
+  <!-- Layer 4: one TLS session from client to app; the balancer cannot read inside it. -->
+  <line x1="42" y1="104" x2="358" y2="104" stroke-width="2" style="stroke: var(--viz-ok)" marker-start="url(#plg-tm-ok)" marker-end="url(#plg-tm-ok)" />
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="200" y="128">one TLS session, client to app:</text>
+    <text x="200" y="149">the balancer cannot read it</text>
+  </g>
+
+  <!-- Layer 7: two connections, the first ends at the proxy. -->
+  <line x1="42" y1="260" x2="196" y2="260" stroke-width="2" style="stroke: var(--viz-ok)" marker-start="url(#plg-tm-ok)" marker-end="url(#plg-tm-ok)" />
+  <line x1="204" y1="260" x2="358" y2="260" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#plg-tm-a)" marker-end="url(#plg-tm-a)" />
+  <g font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">
+    <text x="119" y="284">connection 1</text>
+    <text x="119" y="304">TLS ends here</text>
+    <text x="281" y="284">connection 2</text>
+    <text x="281" y="304">the proxy's own</text>
+  </g>
+</svg>
