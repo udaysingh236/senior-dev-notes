@@ -31,6 +31,13 @@ rejected them. Every new or rewritten page must meet these points:
    measurements describe systems that have changed; use sources from 2020 onwards.
 9. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
    how they behave differently under load, not feature lists.
+10. **Slow down before each new concept.** Being fast on what everyone knows does not mean being
+   fast on what they don't. Before an algorithm, data structure or mechanism, spend a short
+   paragraph and one tiny worked example on its building blocks: what a "token" and a "bucket"
+   stand for before the token bucket; what a bit, a mask and AND / OR do before a bitmask
+   formula; what a lock is, who waits on it, and what "optimistic" and "pessimistic" mean before
+   locking strategies. Feedback (October 2026): the rate limiting page jumped straight into the
+   algorithms, and the IRCTC page went too quickly through bitmasks and DB locking.
 
 The two rewritten pages, `case-studies/irctc-tatkal-booking` and `traffic/proxy-lb-gateway`, are
 the reference for this standard. The older pages (how the web works, DNS, TCP vs UDP, TLS, rate
@@ -90,6 +97,11 @@ inside a section when they carry a number or a failure case; long narratives are
 - Do not explain what every engineer already knows (see "Who we write for"). Spend the words on
   the parts that are hard, surprising or commonly wrong.
 - Never pad to reach a reading time. If the topic is done in 30 minutes, it is done.
+- "Obvious" means how products work from the user's side (booking a ticket, logging in) and what
+  every working engineer uses daily (HTTP requests, SQL queries). Computer-science building blocks
+  that many engineers rarely touch (bit operations, lock types, isolation levels, queueing,
+  hashing) are not obvious: introduce each one in plain words with a small example the first time
+  it appears, then build on it. See "Slow down before each new concept" above.
 
 ## The shape of every explanation: left, right, then centre
 

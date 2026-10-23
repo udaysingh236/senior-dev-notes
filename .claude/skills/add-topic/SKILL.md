@@ -148,6 +148,7 @@ Fix anything that fails. Don't publish with known failures.
 - [ ] All sections of the chosen template present, in order, with no leftover template comments
 - [ ] Reading time in the page header fits the topic (usually 30–45 min, 50 at most), with no padding
 - [ ] Opens with a sharp technical question in 2–4 sentences, no narrative; nothing is said twice
+- [ ] Before each algorithm, data structure or mechanism, its building blocks are introduced in plain words with a tiny worked example (style guide, "Slow down before each new concept")
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
 - [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption
