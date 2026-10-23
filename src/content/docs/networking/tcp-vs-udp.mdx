@@ -6,7 +6,7 @@ difficulty: intermediate
 track: networking
 prerequisites: [how-the-web-works, dns]
 next: [tls, http-evolution, connection-pooling, timeouts, websockets, backpressure]
-lastReviewed: 2026-10-22
+lastReviewed: 2026-10-23
 sidebar:
   order: 2
 ---
@@ -18,6 +18,7 @@ import RequestTimeline from '../../../components/diagrams/tcp-vs-udp/RequestTime
 import Framing from '../../../components/diagrams/tcp-vs-udp/Framing.astro';
 import SetupCost from '../../../components/diagrams/tcp-vs-udp/SetupCost.astro';
 import NatTimeout from '../../../components/diagrams/tcp-vs-udp/NatTimeout.astro';
+import SlidingWindow from '../../../components/diagrams/tcp-vs-udp/SlidingWindow.astro';
 import TransportSim from '../../../components/sims/tcp-vs-udp/TransportSim.astro';
 import CwndSim from '../../../components/sims/tcp-vs-udp/CwndSim.astro';
 
@@ -59,6 +60,28 @@ slowly and four consequences fall out, each of which this page measures:
 your side is done; if the peer's process crashes before it reads them, they are gone and you were
 told "success". Only an application-level reply can confirm the application acted, which is why
 payment APIs add their own acknowledgements and idempotency keys on top of TCP.
+
+**The pieces every later section is built from.** TCP cuts your bytes into **segments**, each one
+IP packet. It numbers every byte (the **sequence number**), and the receiver answers with an
+**acknowledgement** (ACK) that names the next byte it expects. The time from sending a segment to
+getting its ACK back is the **round-trip time** (RTT). Here are 4,000 bytes sent at once, numbered
+from 1 for readability (real connections start from a random number):
+
+| Segment | Carries bytes | Receiver answers | Meaning |
+|---|---|---|---|
+| 1 | 1–1,460 | ACK 1461 | "I have everything up to 1,460" |
+| 2 | 1,461–2,920 | ACK 2921 | "everything up to 2,920" |
+| 3 | 2,921–4,000 | ACK 4001 | "everything up to 4,000; 4,001 next" |
+
+ACKs are cumulative: ACK 4001 also confirms segments 1 and 2, so a lost ACK costs nothing once a
+later one arrives. A byte that stays unacknowledged for too long is assumed lost and sent again;
+much of this page is about how long "too long" is.
+
+Before any data, the two kernels agree on starting numbers in the **handshake**: the client sends a
+**SYN** ("my bytes start at *x*"), the server answers **SYN-ACK** ("mine start at *y*, and I have
+yours"), and the client's ACK can carry the first request. That is one RTT before the server sees
+a byte of data. At the end, each side sends a **FIN** ("I have nothing more to send") and the other
+ACKs it; an **RST** (reset) instead aborts the connection at once.
 
 ## What people assume first, and how it breaks
 
@@ -135,7 +158,8 @@ overhead; it handed you the job.
 
 ## The core idea
 
-Every TCP guarantee is a wait with a known size:
+Every TCP guarantee is a wait with a known size. The table is the map; each row has its own
+section below, which builds the mechanism up from the pieces above.
 
 | Guarantee | Enforced by waiting for | Typical cost |
 |---|---|---|
@@ -197,27 +221,58 @@ path carries.
 
 ### Loss repair: fast retransmit, timers, and the one-second spike
 
-TCP numbers every byte, and each ACK names the next byte the receiver expects: "ACK 5001" means
-"I have everything up to 5,000". When a segment in the middle of a busy stream is lost, the segments
-after it still arrive, and each one triggers the same ACK again. Three of these **duplicate ACKs**
-tell the sender "lost, not late", and it resends at once: **fast retransmit**, roughly one round
-trip after the loss. With **SACK** (selective acknowledgement, on by default everywhere) the ACKs
-also say exactly which later ranges arrived, so only the hole is resent.
+When a segment in the middle of a busy stream is lost, the segments after it still arrive. The
+receiver cannot acknowledge past the hole, so it repeats its last ACK for each of them. Five
+1,000-byte segments, the second one lost:
+
+| Arrives at the receiver | ACK it sends | What the sender concludes |
+|---|---|---|
+| bytes 1–1,000 | ACK 1001 | all fine |
+| (1,001–2,000 is lost) | | |
+| bytes 2,001–3,000 | ACK 1001, duplicate 1 | maybe two packets swapped places |
+| bytes 3,001–4,000 | ACK 1001, duplicate 2 | still maybe reordering |
+| bytes 4,001–5,000 | ACK 1001, duplicate 3 | lost: resend 1,001–2,000 now |
+
+Networks reorder a packet or two often enough that one **duplicate ACK** proves nothing; three
+are taken as "lost, not late". The sender resends without waiting for any timer: **fast
+retransmit**, roughly one round trip after the loss. With **SACK** (selective acknowledgement, on
+by default everywhere) each duplicate ACK also lists the later ranges that did arrive ("SACK
+2001–5000"), so only the hole is resent.
 
 Fast retransmit needs later segments to produce those duplicate ACKs. When the lost segment is the
 last of a burst, or the connection is quiet, nothing comes back, and only the **retransmission
-timeout** (RTO) is left. [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298) sets it from a smoothed
-round-trip time and its variation:
+timeout** (RTO) is left: a timer on the oldest unacknowledged segment that resends it when it
+fires. Too short, and it resends segments that were only late; too long, and every tail loss waits
+for nothing. So the sender sets it from what it measures.
+
+Each ACK gives one **RTT sample**: the time from sending a segment to its ACK. One sample is noisy,
+so [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298) keeps two running averages: the **smoothed
+RTT** (SRTT) moves 1/8 of the way towards each new sample, and the **RTT variation** (RTTVAR) moves
+1/4 of the way towards how far that sample was from SRTT. The timer is the average plus four times
+the typical deviation:
 
 > RTO = SRTT + 4 × RTTVAR
 
-Three rules surround it. Before any measurement, the RTO is **1 second**. It never drops below a
-floor: the RFC asks for 1 s, Linux uses **200 ms**. And it **doubles after every expiry**, so a dead
-path is not flooded. A retransmitted segment is never used to measure the round trip, because you
+The first sample sets SRTT to itself and RTTVAR to half of it. Three steady samples, then a spike:
+
+| Sample | SRTT | RTTVAR | SRTT + 4 × RTTVAR |
+|---|---|---|---|
+| 100 ms | 100 | 50 | 300 ms |
+| 100 ms | 100 | 37.5 | 250 ms |
+| 100 ms | 100 | 28.1 | 213 ms |
+| 180 ms | 110 | 41.1 | 274 ms |
+
+A steady path pulls the timer down towards the RTT; jitter pushes it up, so a merely slow ACK is
+not mistaken for a loss.
+
+Three rules surround it. Before any measurement, the RTO is **1 second**. It has a floor: the RFC
+asks for at least 1 s, which would lift every row above to 1 s; Linux instead never lets the
+4 × RTTVAR term count for less than **200 ms**, so its RTO is at least SRTT + 200 ms. And it
+**doubles after every expiry**, so a dead path is not flooded. A retransmitted segment is never used to measure the round trip, because you
 cannot tell which copy the ACK was for (Karn's rule).
 
-**A worked example.** A steady 100 ms path has almost no variation, so Linux's RTO is about
-100 + 200 = **300 ms**. The last segment of a response is lost: the sender waits 300 ms and
+**A worked example.** On a steady 100 ms path, Linux's RTO is therefore about 100 + 200 =
+**300 ms**. The last segment of a response is lost: the sender waits 300 ms and
 resends. If that copy is lost too, it waits 600 ms, then 1.2 s. One unlucky segment has cost over
 two seconds on a path where a round trip is a tenth of a second. Linux softens the first case with
 a **tail loss probe** that resends after about two round trips instead of the full RTO
@@ -278,13 +333,21 @@ the same simulation below.
 
 ### Flow control: the receive window and the bandwidth-delay product
 
-Every ACK also carries the **receive window**: how many more bytes the receiver's buffer can take.
-The sender may have at most that many bytes sent but not yet acknowledged. If the receiving
-application stops reading, the window falls to zero and the sender stops without losing a byte.
-That is TCP's built-in **backpressure**, and it is why the UDP demo above lost 98% while a TCP
-version would have lost nothing.
+Every ACK also carries the **receive window**: how many more bytes the receiver's buffer can take
+right now. The sender may have at most that many bytes **in flight**, sent but not yet
+acknowledged. Picture the stream as a row of bytes with the window as a frame laid over it:
 
-The window also caps throughput at **one window per round trip**, however fast the link. To keep a
+<Figure caption="With a 4,000-byte window, after ACK 2001 the sender may have bytes 2,001 to 6,000 out; byte 6,001 must wait. ACK 3001 moves the frame 1,000 bytes to the right and lets 1,000 more bytes go. This is the sliding window.">
+  <SlidingWindow />
+</Figure>
+
+Each ACK slides the frame forward by the bytes it confirms. If the receiving application stops
+reading, its buffer fills, the window it advertises shrinks to zero and the sender stops without
+losing a byte. That is TCP's built-in **backpressure**, and it is why the UDP demo above lost 98%
+while a TCP version would have lost nothing.
+
+The window also caps throughput at **one window per round trip**, however fast the link: the
+sender sends a full window, then waits a round trip for the ACKs that let it send more. To keep a
 100 Mbit/s path 100 ms long busy, you need 100,000,000 ÷ 8 × 0.1 = **1.25 MB** in flight at all
 times. That product of bandwidth and round-trip time is the **bandwidth-delay product** (BDP),
 the size of the "pipe". The original 16-bit window field allows 65,535 bytes, which caps that path
@@ -303,21 +366,50 @@ because the network was full ([Jacobson and Karels, 1988](https://ee.lbl.gov/pap
 Their fix is still the shape of every TCP.
 
 The sender keeps a second limit, the **congestion window** (cwnd): its own guess at how much the
-path can hold. It may have in flight only the smaller of cwnd and the receive window.
+path can hold. It may have in flight only the smaller of cwnd and the receive window: with a
+256 KB receive window and a cwnd of 14.6 KB, it sends 14.6 KB; once cwnd grows past 256 KB, the
+receiver is the limit.
 
-- **Slow start.** A new connection starts at 10 segments, about 14.6 KB
-  ([RFC 6928](https://www.rfc-editor.org/rfc/rfc6928)), and doubles cwnd every round trip in which
-  everything is acknowledged. A response of *S* bytes on a new connection therefore needs about
-  log₂(*S* ÷ 14.6 KB + 1) round trips: 3 for 100 KB, 7 for 1 MB, 10 for 10 MB, **whatever the
-  bandwidth**.
+**Why a guess.** The sender cannot see the routers. A router sends packets out of each link at that
+link's speed and holds any excess in a queue; when the queue is full, it drops new arrivals. A
+50 Mbit/s link forwards about 4,170 full-size packets a second. If senders push 5,000 a second,
+its queue grows by about 830 packets a second, a 1,000-packet queue is full in 1.2 s, and from
+then on every extra packet is dropped. The sender sees only the effects: ACKs come back later as
+the queue grows, and one goes missing when a packet is dropped. So a classic TCP probes: it raises
+cwnd while everything is acknowledged and cuts it when a loss shows that a queue overflowed.
+
+**Slow start.** A new connection starts at 10 segments, about 14.6 KB
+([RFC 6928](https://www.rfc-editor.org/rfc/rfc6928)). Every segment acknowledged raises cwnd by one
+segment, so 10 segments acknowledged make a window of 20: the window doubles every round trip.
+
+| Round trip | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| cwnd (segments) | 10 | 20 | 40 | 80 |
+| Sent so far | 14.6 KB | 43.8 KB | 102 KB | 219 KB |
+
+After *k* round trips it has sent 10 × (2^*k* − 1) segments, so a response of *S* bytes on a new
+connection needs about log₂(*S* ÷ 14.6 KB + 1) round trips: 3 for 100 KB, 7 for 1 MB, 10 for
+10 MB, **whatever the bandwidth**. The rest of the algorithm:
+
 - **A loss means congestion.** The sender assumes a queue overflowed and cuts cwnd: to 70% under
   **CUBIC** ([RFC 9438](https://www.rfc-editor.org/rfc/rfc9438)), the default in Linux, Windows and
   Apple's stacks, or to 50% under the older Reno.
-- **Then it probes again.** CUBIC climbs back along a cubic curve: fast at first, flat near the
-  window where the last loss happened, then faster again to look for more.
+- **Then it probes again**, more carefully than in slow start (below).
 - **Idle resets it.** If a connection sits idle for longer than one RTO, Linux shrinks cwnd back
   towards 10 segments before sending again, because what it learned about the path may be stale
   (`tcp_slow_start_after_idle`, on by default, from [RFC 2861](https://www.rfc-editor.org/rfc/rfc2861)).
+
+**How it climbs back.** Reno adds one segment per round trip: after a cut from 100 segments to 50
+on a 100 ms path, it needs 50 round trips, 5 s, to get back. CUBIC grows by elapsed time instead,
+along a cubic curve centred on *W*max, the window at which the last loss happened. With RFC 9438's
+constants and *W*max = 100 segments:
+
+| Seconds after the loss | 0 | 2 | 4.2 | 6 | 8 |
+|---|---|---|---|---|---|
+| cwnd (segments) | 70 | 96 | 100 | 102 | 122 |
+
+Fast while well below the old limit, nearly flat around it, where the last loss happened, then
+faster again to look for more.
 
 Here is one connection sending the same response again and again. Each bar is one round trip: how
 many segments the sender had in flight. The dashed line is the pipe, the BDP; the bottleneck can
@@ -340,12 +432,17 @@ for exactly this reason.
 
 **Loss caps throughput, not bandwidth.** Set the response to 5,000 KB and random loss to 1%. The
 window never gets near the pipe: each loss cuts it, and it climbs back by only a few segments per
-round trip. The sim settles at about **1.6 Mbit/s on a 50 Mbit/s link**. The classic model of this
-is the Mathis formula: a loss-based TCP's long-run rate is about (MSS ÷ RTT) × 1.22 ÷ √*p*, where *p*
-is the loss rate ([Mathis et al., 1997](https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf)).
-At 1% loss and 100 ms, that is 1,460 × 8 ÷ 0.1 × 1.22 ÷ 0.1 ≈ **1.4 Mbit/s** for Reno, whatever the
-link. Halve the round trip and the rate doubles; cut the loss to 0.1% and it rises about three
-times. This is why a long-distance transfer over a slightly lossy link is slow even on a huge pipe.
+round trip. The sim settles at about **1.6 Mbit/s on a 50 Mbit/s link**.
+
+The classic model of this is the Mathis formula
+([Mathis et al., 1997](https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf)),
+and it follows from Reno's sawtooth. The window climbs by one segment per round trip to a peak *W*,
+one loss halves it to *W*/2, and it climbs again. One cycle lasts *W*/2 round trips and sends about
+(3/8)*W*² segments with one loss, so the loss rate is *p* = 1 ÷ ((3/8)*W*²). At *p* = 1%,
+(3/8)*W*² = 100 gives *W* ≈ 16: the window swings between 8 and 16 segments and averages about 12
+per 100 ms round trip, 12 × 1,460 × 8 ÷ 0.1 ≈ **1.4 Mbit/s**, whatever the link. Solved in
+general, the long-run rate is about (MSS ÷ RTT) × 1.22 ÷ √*p*: halve the round trip and the rate
+doubles; cut the loss to 0.1% and it rises about three times. This is why a long-distance transfer over a slightly lossy link is slow even on a huge pipe.
 
 Two refinements matter in practice. Linux's CUBIC uses **HyStart** to leave slow start before the
 first loss, by watching round-trip times rise as the queue fills, so it rarely overshoots as hard as
@@ -363,13 +460,23 @@ control its rate in a way comparable to TCP.
 
 ### Nagle and delayed ACK: the 44 ms request
 
-Back to the first puzzle. **Nagle's algorithm** ([RFC 896](https://www.rfc-editor.org/rfc/rfc896)),
-on by default, holds back small writes while any sent data is unacknowledged. **Delayed ACK** makes
-the receiver wait before acknowledging, hoping to piggyback the ACK on its reply: at least 40 ms on
-Linux, up to 200 ms on Windows. A client writes the header, which goes out at once. It writes the body, which Nagle holds because
-the header is unacknowledged. The server has the header but cannot reply without the body, so it
-has nothing to piggyback the ACK on and waits for its delayed-ACK timer. Each side waits for the
-other until the timer fires. `nagle.py` and `nagle.mjs` time 50 such requests on loopback:
+Back to the first puzzle. It comes from two features that are each sensible alone. IP and TCP
+headers take 40 bytes, so a 1-byte write, a keystroke over SSH, would cost a 41-byte packet.
+**Nagle's algorithm** ([RFC 896](https://www.rfc-editor.org/rfc/rfc896)), on by default, holds
+back small writes while any sent data is unacknowledged, and sends them together when the ACK
+comes. A bare ACK is also a 40-byte packet, so **delayed ACK** makes the receiver wait before
+acknowledging, hoping to piggyback the ACK on its reply: at least 40 ms on Linux, up to 200 ms on
+Windows. Now the request sent as two writes:
+
+| Time | Client | Server |
+|---|---|---|
+| 0 ms | writes the header; it goes out at once | has the header, cannot reply yet, so holds the ACK |
+| 0 ms | writes the body; Nagle holds it, the header is unacknowledged | waits for the body |
+| ~40 ms | | delayed-ACK timer fires; sends the bare ACK |
+| ~40 ms | ACK arrives; sends the body | has the body; replies |
+
+Each side waits for the other until the timer fires. `nagle.py` and `nagle.mjs` time 50 such
+requests on loopback:
 
 ```text title="python nagle.py (Linux; node nagle.mjs gave the same)"
 nagle on, two writes     median  44.01 ms   worst  48.20 ms
@@ -385,12 +492,25 @@ Windows' loopback path does not show the stall, so measure on the operating syst
 
 ### Closing: TIME-WAIT, CLOSE_WAIT and running out of ports
 
-A TCP connection is named by four numbers: source address, source port, destination address,
-destination port. The side that closes first does not free its four-tuple at once; it enters
-**TIME-WAIT** for twice the maximum segment lifetime. That wait does two jobs: if the final ACK is
+A TCP connection is named by four numbers, the **four-tuple**: source address, source port,
+destination address, destination port. The kernel uses it to find which socket an arriving segment
+belongs to, so no two live connections may share one. For a client calling one database, three of
+the four never change:
+
+| Source address | Source port | Destination address | Destination port |
+|---|---|---|---|
+| 10.0.1.7 | 51000 | 10.0.2.9 | 5432 |
+| 10.0.1.7 | 51001 | 10.0.2.9 | 5432 |
+
+Only the source port tells these two connections apart, and the kernel picks it for you from a
+range of temporary **ephemeral ports**. That is the limit this section ends on.
+
+The side that closes first does not free its four-tuple at once; it enters **TIME-WAIT** for twice
+the **maximum segment lifetime** (MSL), the longest a segment is assumed to survive in the network
+before a router discards it. That wait does two jobs: if the final ACK is
 lost, the peer resends its FIN and still gets an answer, and a delayed duplicate segment from this
 connection cannot be mistaken for data in a new connection with the same four numbers. The RFC's
-value is 4 minutes; Linux uses a fixed **60 seconds**.
+MSL is 2 minutes, so TIME-WAIT lasts 4; Linux uses a fixed **60 seconds**.
 
 Which side holds it is decided by who calls `close()` first.
 [`time_wait.py`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/tcp-vs-udp/python/time_wait.py)
@@ -407,7 +527,7 @@ can open at most about 470 new connections a second to one server address and po
 
 TIME-WAIT on a server costs a little memory and nothing else, because the server's port is fixed
 and each four-tuple differs by the client's address and port. On a client it is a real limit. Each
-outgoing connection takes an **ephemeral port** from 32,768–60,999 on Linux by default (28,232
+outgoing connection takes an ephemeral port from 32,768–60,999 on Linux by default (28,232
 ports, as of October 2026), and a port stays taken for 60 s after the client closes. Per
 destination address and port:
 
@@ -438,12 +558,21 @@ growing count in `ss -tan` is a file-descriptor leak in progress.
 
 ### Idle connections: the middleboxes that forget them
 
-Between your two kernels sit boxes that keep a table entry for every flow they pass: NAT routers,
-cloud NAT gateways, load balancers, firewalls, Linux's own connection tracking. Each entry has an
-idle timer, and when it expires the entry is deleted without telling either end. The next packet
-on that connection is dropped silently, or answered with an RST. TCP's own **keep-alive**, which
-could keep the entry fresh, is off unless you enable it, and once enabled Linux waits **2 hours**
-before its first probe. Every one of these timeouts is shorter (as of October 2026):
+Between your two kernels sit boxes that keep a table entry for every flow they pass. The commonest
+is a **NAT** (network address translation): many machines with private addresses share one public
+address, so the NAT rewrites the source of each outgoing packet and remembers the swap:
+
+| Inside | Rewritten to | Talking to |
+|---|---|---|
+| 10.0.1.7:51000 | 198.51.100.7:40001 | 203.0.113.5:5432 |
+
+A reply addressed to 198.51.100.7:40001 reaches 10.0.1.7:51000 only because that row exists.
+Cloud NAT gateways, load balancers, stateful firewalls and Linux's **conntrack** (the
+connection-tracking table behind iptables NAT and Kubernetes service routing) all keep rows like
+this one. Each row has an idle timer, and when it expires the row is deleted without telling
+either end. The next packet on that connection is dropped silently, or answered with an RST. TCP's
+own **keep-alive**, which could keep the row fresh, is off unless you enable it, and once enabled
+Linux waits **2 hours** before its first probe. Every one of these timeouts is shorter (as of October 2026):
 
 | Box | Idle timeout | What happens next |
 |---|---|---|

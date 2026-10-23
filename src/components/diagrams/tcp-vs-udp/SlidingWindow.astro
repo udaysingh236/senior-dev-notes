@@ -1,0 +1,68 @@
+---
+// The sliding window: the byte stream as a row of 1,000-byte blocks, with the receive window as a
+// frame over it. One ACK later the frame has moved one block to the right, freeing one more block
+// to send. Row 1 is labelled; row 2 uses the same fills and outlines.
+const step = 48;
+const width = 46;
+const x = (i: number) => 8 + step * i;
+
+type Kind = 'acked' | 'flight' | 'may' | 'wait';
+const before: Kind[] = ['acked', 'acked', 'flight', 'flight', 'may', 'may', 'wait', 'wait'];
+const after: Kind[] = ['acked', 'acked', 'acked', 'flight', 'may', 'may', 'may', 'wait'];
+
+const look: Record<Kind, { fill: string; stroke: string; dash?: string }> = {
+  acked: { fill: 'var(--viz-ok-soft)', stroke: 'var(--viz-ok)' },
+  flight: { fill: 'var(--viz-flow-soft)', stroke: 'var(--viz-flow)' },
+  may: { fill: 'var(--viz-surface)', stroke: 'var(--viz-flow)', dash: '5 4' },
+  wait: { fill: 'var(--viz-surface)', stroke: 'var(--viz-stroke)' },
+};
+
+const labels = [
+  { text: 'ACKed', cx: x(0) + step - 1 },
+  { text: 'in flight', cx: x(2) + step - 1 },
+  { text: 'may send', cx: x(4) + step - 1 },
+  { text: 'must wait', cx: x(6) + step - 1 },
+];
+
+// Frame around four blocks starting at `first`.
+const frame = (first: number) => ({ x: x(first) - 4, w: 3 * step + width + 8, cx: x(first) + (3 * step + width) / 2 });
+const f1 = frame(2);
+const f2 = frame(3);
+---
+
+<svg viewBox="0 0 400 270" width="100%" role="img" aria-labelledby="tu-sw-t tu-sw-d">
+  <title id="tu-sw-t">The receive window slides along the byte stream as ACKs arrive</title>
+  <desc id="tu-sw-d">
+    Two rows of eight blocks, each block 1,000 bytes. First row, after ACK 2001: two blocks are
+    acknowledged, two are in flight, two may be sent now, two must wait. A frame marks the
+    4,000-byte window, bytes 2,001 to 6,000. Second row, after ACK 3001: three blocks are
+    acknowledged, one is in flight, three may be sent, one must wait, and the frame has moved one
+    block to the right, covering bytes 3,001 to 7,000.
+  </desc>
+
+  <g font-size="18" style="fill: var(--viz-ink)">
+    <text x="4" y="22">After ACK 2001</text>
+    <text x="4" y="172">After ACK 3001: slid 1,000 bytes</text>
+  </g>
+
+  <!-- Row 1 -->
+  <g stroke-width="2">
+    {before.map((k, i) => (
+      <rect x={x(i)} y="36" width={width} height="44" rx="4" stroke-dasharray={look[k].dash} style={`fill: ${look[k].fill}; stroke: ${look[k].stroke}`} />
+    ))}
+  </g>
+  <rect x={f1.x} y="30" width={f1.w} height="56" rx="7" fill="none" stroke-width="3" style="stroke: var(--viz-ink)" />
+  <g font-size="17" text-anchor="middle" style="fill: var(--viz-muted)">
+    {labels.map((l) => <text x={l.cx} y="107">{l.text}</text>)}
+  </g>
+  <text x={f1.cx} y="134" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">window: bytes 2,001–6,000</text>
+
+  <!-- Row 2 -->
+  <g stroke-width="2">
+    {after.map((k, i) => (
+      <rect x={x(i)} y="186" width={width} height="44" rx="4" stroke-dasharray={look[k].dash} style={`fill: ${look[k].fill}; stroke: ${look[k].stroke}`} />
+    ))}
+  </g>
+  <rect x={f2.x} y="180" width={f2.w} height="56" rx="7" fill="none" stroke-width="3" style="stroke: var(--viz-ink)" />
+  <text x={f2.cx} y="260" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">window: bytes 3,001–7,000</text>
+</svg>
