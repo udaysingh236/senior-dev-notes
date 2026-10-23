@@ -152,14 +152,68 @@ where.
 
 ## How it works, piece by piece
 
+### What a limiter has to remember
+
+"100 requests per second" sounds like one number, but a rate is a count divided by a span of time,
+and a limiter never sees a rate. It sees one request arriving at one instant, and it has a fraction
+of a millisecond to answer one question: **counting this one, has this key been too busy
+"recently"?** Every algorithm below is a different definition of "recently", and the definition
+decides what the limiter must store per key. There are two families.
+
+**Count inside a window.** Pick a span of time, the **window**, and count the key's requests that
+fall inside it. A **fixed window** cuts time into slices that start at fixed instants
+(10:00:00 to 10:00:10, then 10:00:10 to 10:00:20, and so on); each slice has its own counter, which
+starts again at zero when the next slice begins. A **sliding window** always looks back exactly W
+seconds from *now*, so the span moves with every request. With a limit of 10 per 10 seconds and a
+request arriving at 10:00:12:
+
+| Window | Requests it counts | What must be stored |
+|---|---|---|
+| Fixed, slice 10:00:10–10:00:20 | Only those since 10:00:10 | One counter per slice |
+| Sliding, last 10 s | Those since 10:00:02 | Every timestamp, or an estimate of them |
+
+**Spend from an allowance that refills.** Instead of counting the past, give each key an allowance
+and let requests spend it. One unit of allowance is called a **token**: a permission to make one
+request. Tokens are not objects anywhere; a token is a number going down by one. The **bucket** is
+only the name for where unspent allowance is kept, and it has a maximum size. Two numbers describe
+it:
+
+- **Capacity** C, the most tokens the bucket can hold. This is the biggest burst a key can send at
+  once after it has been quiet for a while.
+- **Refill rate** r, how many new tokens appear each second. This is the average rate the key can
+  keep up forever.
+
+A mobile data plan that adds 1 GB a day and lets you carry over at most 10 GB works the same way:
+the daily top-up is the refill rate, the 10 GB ceiling is the capacity, and a quiet week lets you
+binge on one day but never by more than 10 GB. The analogy stops at the clock: the plan tops up
+once a day, while a token bucket refills continuously, in fractions of a token.
+
+Here is a bucket with C = 10 and r = 1 token a second, for a key that has been idle:
+
+| Time | What arrives | Tokens before | Outcome | Tokens after |
+|---|---|---|---|---|
+| 0.0 s | a burst of 10 | 10 (full) | all 10 accepted | 0 |
+| 0.0 s | an 11th | 0 | rejected | 0 |
+| 3.0 s | 3 requests | 0 + 3 s × 1 = 3 | all 3 accepted | 0 |
+| 3.5 s | 1 request | 0.5 | rejected; a whole token is 0.5 s away | 0.5 |
+| 60 s | 1 request | would be 57, capped at 10 | accepted | 9 |
+
+A **leaky bucket** is the same picture turned over. Instead of a bucket of permissions that
+requests drain, it is a bucket of *requests* that arrival fills and that **leaks** out at a fixed
+rate; a request that arrives to a full bucket overflows and is rejected.
+
+So a limiter stores, per key, either counters or timestamps (window algorithms) or a token count
+plus the time it was last updated (bucket algorithms). That small piece of state is what the rest
+of this page moves between machines, races on, and loses when a store goes down.
+
 ### The state per key: five algorithms in one pass
 
 All examples use one limit: **10 requests per 10 seconds**; for a bucket, a capacity of 10
 refilling at 1 per second.
 
-**Token bucket.** Each key has a bucket of up to C tokens that refills at r tokens a second; a
-request takes a token or is rejected. No timer drips tokens in: when a request arrives, add
-`elapsed × r`, cap at C, then try to take one. This **lazy refill** makes the state two numbers
+**Token bucket.** The allowance above, stored as two numbers. No timer drips tokens in: when a
+request arrives, add `elapsed × r`, cap at C, then try to take one, which is the arithmetic in the
+table above. This **lazy refill** makes the state two numbers
 (tokens, last update) and a million idle keys cost only storage. The retry time for a rejected
 request falls out of the same arithmetic: `(1 − tokens) ÷ r`.
 
@@ -174,10 +228,14 @@ measured 19). A token bucket bounds the average rate and the burst size, not the
 window. If your docs promise "at most 100 in any minute", a window algorithm fits the promise
 better.
 
-**GCRA** (generic cell rate algorithm, from ATM networks) is the same limit stored as one timestamp:
-the **theoretical arrival time** at which the bucket would be empty again. Each request pushes it
-forward by `1 ÷ rate`; a request is allowed while it is no more than `burst ÷ rate` seconds ahead of
-now. One number per key matters when you keep millions of keys, and
+**GCRA** (generic cell rate algorithm, from ATM networks) is the same limit stored as one timestamp
+instead of two numbers: the **theoretical arrival time** (TAT), the moment at which the key would
+have used up all its allowance if it kept the average rate. Each accepted request pushes the TAT
+forward by `1 ÷ rate`; a request is allowed if, after the push, the TAT is no more than
+`burst ÷ rate` seconds ahead of now. With 1 request a second and a burst of 3: three requests at
+t = 0 push the TAT to 1, 2 and 3 s, each no more than 3 s ahead, so all pass; a fourth would push it
+to 4 s, which is 4 s ahead, so it is rejected. At t = 1 s the TAT of 3 s becomes 4 s, which is again
+3 s ahead, so one more request passes. One number per key matters when you keep millions of keys, and
 [redis-cell](https://github.com/brandur/redis-cell) implements it as one Redis command.
 
 **Leaky bucket** names two different mechanisms, which is where most confusion in this topic comes
