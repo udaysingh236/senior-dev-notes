@@ -71,8 +71,11 @@ than collapsing.
 Three decisions shape everything below:
 
 - **The unit of ownership is train + date.** All berths, quotas and waitlists for train 12627 on
-  24 October live together, and nothing in a booking ever touches two trains. That is the natural
-  partition key: a booking never needs a lock across shards.
+  24 October live together, and nothing in a booking ever touches two trains. When data is too
+  big or too busy for one server, it is split into **shards**, slices that each live on one
+  server, and the **partition key** is the field that decides which shard a row belongs to.
+  Train + date is the natural partition key here: every row a booking touches is in the same
+  shard, so a booking never needs a lock that spans two servers.
 - **Reads are separated from writes.** "Available 43" on the search page is a cached count. If it
   is two seconds stale, a booking fails and the user sees the new count; nothing is oversold,
   because only the shard decides.
@@ -286,19 +289,33 @@ someone else, the query returns nothing, so a request can be told "sold out" whi
 have had is held by a transaction that is about to roll back. And the berth you get is "the first
 unlocked one", not the best one, which matters a lot in the next section.
 
-**4. A single writer per train-date (no locks at all).** Route every write for one train and date to one thread that
-owns that shard's masks in memory, and append each decision to a durable log before replying. No
-row locks exist, because nothing else can write. The arithmetic: an allocation is a scan of a few
-hundred integers, around a microsecond or two; one thread could do hundreds of thousands per second,
-and the whole train has 1,300 berths. The bottleneck becomes the durable write, which you batch:
-fsync every 2 ms with all decisions made in that window (**group commit**), so 500 bookings cost
-one disk flush. Failover needs a standby that replays the log. This is the design we would choose
+**4. A single writer per train-date (no locks at all).** Locks exist because many threads may
+change the same rows at once. Remove that and the locks go with it: route every write for one train
+and date to one thread that owns that shard's masks in memory, and let it process requests one at a
+time from a queue. No two decisions can interleave, so there is nothing to lock.
+
+Memory alone is lost in a crash, so before replying "booked", the thread appends the decision to a
+**durable log**: a file of decisions in order, from which the masks can be rebuilt by replaying it.
+"Durable" has a precise meaning. Writing to a file only puts the bytes in the operating system's
+memory; they reach the disk later. The system call `fsync` forces them onto the disk and waits until
+the disk confirms, which takes far longer than a mask scan. The arithmetic: an allocation is a scan
+of a few hundred integers, around a microsecond or two, so one thread could decide hundreds of
+thousands of bookings a second, and the whole train has 1,300 berths. The bottleneck is the fsync.
+The fix is **group commit**: collect every decision made in the last 2 ms, write them together, call
+fsync once, then reply to all of them. If 500 bookings arrive in those 2 ms, they cost one disk
+flush instead of 500, and each waits at most 2 ms longer. For failover, a standby server reads the
+same log and replays it, so it holds the same masks and can take over. This is the design we would choose
 for the shard in the architecture diagram, because the contention is naturally per train and this
 removes it rather than managing it.
 
-**What about `SERIALIZABLE`?** At the serializable level, PostgreSQL's serializable snapshot
-isolation would catch the read-work-write race itself and abort one of the two transactions with a
-serialization failure. It is correct, and it lets you write the naive code. The cost appears under
+**What about `SERIALIZABLE`?** **Serializable** is the strictest isolation level: the database
+promises that the result of running transactions concurrently equals the result of running them
+one after another in some order. PostgreSQL keeps that promise with serializable snapshot
+isolation: it lets transactions run without blocking, records which rows each one read and wrote,
+and at commit aborts any transaction whose reads and writes cannot fit into a one-at-a-time order.
+Two bookings that both read berth 23 as free and both wrote it cannot be put in any order (whichever
+went second would have seen the berth sold), so one of them is aborted with a serialization
+failure. It is correct, and it lets you write the naive code. The cost appears under
 exactly this workload: every transaction that read the same coach is a conflict candidate, so at
 10:00 most of them abort and retry, and each retry repeats the slow work. Serializable is a good
 default for low-contention business logic; for a known hot spot, an explicit conditional update
@@ -328,8 +345,10 @@ clears the bits in a new short transaction. Locks are for milliseconds; holds ar
 The lock strategies above decide *whether* two requests collide. Allocation decides *which* berth
 each one gets, and it has three goals that conflict.
 
-**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it,
-like a best-fit memory allocator. A Mathura–Agra passenger should go on a berth that is already sold
+**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it.
+This is the **best-fit** rule that memory allocators use: given free gaps of 8 KB, 3 KB and 20 KB,
+a 3 KB request goes into the 3 KB gap, so the 20 KB gap stays whole for a large request later.
+Here the gaps are runs of free segments on each berth. A Mathura–Agra passenger should go on a berth that is already sold
 New Delhi–Mathura and Agra onwards, not on an empty berth, which it would split into two shorter
 pieces nobody may want. Here is the cost of ignoring it, on the same journeys:
 
@@ -431,8 +450,13 @@ date, and on keeping the read side close to the truth.
 ([All India Radio, 2024](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days)).
 With a few thousand reserved train services a day (illustrative), that is a few hundred thousand
 live train-dates at any time, each a few hundred kilobytes of masks and waitlists. That fits in the
-memory of a modest cluster. Map train-dates to shards with consistent hashing, so adding a shard
-moves only a small share of them, and keep a routing table that the booking servers cache.
+memory of a modest cluster. The obvious mapping, `hash(train-date) mod N`, has a flaw: change N
+from 4 shards to 5 and the remainder changes for about four in five train-dates, so most of them
+move at once. **Consistent hashing** avoids that. Picture the range of hash values as a circle;
+each shard is placed at a few points on it, and each train-date belongs to the next shard point
+clockwise from its own hash. Adding a fifth shard only takes over the train-dates that now fall right
+before its new points, about one in five, and the rest stay put. Keep the result in a routing table
+that the booking servers cache.
 
 **Hot shards are expected, not a bug.** At 10:00 the train-dates for tomorrow's popular trains are
 hot, and everything else is quiet. Because each train-date is one owner, a hot one cannot be split
@@ -442,7 +466,8 @@ landing on one weak shard; assign tomorrow's known popular trains to separate sh
 before, which the railway can do because it knows its own timetable.
 
 **Keeping the read model fresh.** The shard publishes every committed change (berth, bits, quota)
-to a change stream. The read model applies them and recomputes availability only for the journeys
+to a **change stream**: an ordered feed of changes that other systems can read from, such as a
+Kafka topic or the database's own change log. Here it can be the durable log itself. The read model applies them and recomputes availability only for the journeys
 people actually search: computing all 780 station pairs per class per train on every change is
 wasted work, while computing "AGC→BPL, 3A, TQ" when someone searches it, then caching it for a
 second or two, costs one scan. Under the Tatkal spike, the cache absorbs thousands of identical
@@ -479,9 +504,11 @@ room.
 ### Payments: when money leaves but no ticket arrives
 
 The berth is in the railway's database; the money is in the passenger's bank. No transaction spans
-both, so the booking is a small **saga**: hold the berth (local commit), take the payment (remote),
-confirm or release (local commit), with a refund as the compensation when the last step cannot
-happen.
+both. When one business action spans systems that cannot share a transaction, the pattern is a
+**saga**: a sequence of steps, each committed on its own, where every step that can be undone has a
+**compensating step** that undoes it if a later step fails. The booking is a small saga: hold the
+berth (local commit), take the payment (remote), confirm or release (local commit), with a refund as
+the compensation when the last step cannot happen.
 
 <Figure caption="The hold and the payment run on two clocks. If the bank's confirmation lands after the hold expired and the bits were given to someone else, money has moved and the berth has not, until reconciliation settles it.">
   <PaymentGap />

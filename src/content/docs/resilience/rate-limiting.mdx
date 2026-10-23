@@ -363,8 +363,12 @@ answering the GET and the SET arriving, a full round trip passes, and every othe
 lands in that gap reads the same, already stale, count. Each SET then overwrites the others, so the
 increments are lost too: that is how line 4 above ended with 20 admitted and a stored count of 1.
 
-How much does it let through? Each write hides the requests that arrive during its round trip, so
-the admitted count is about **limit × (1 + rate × round trip)**. At 100 requests a second and a 1 ms
+How much does it let through? Work it through at 1,000 requests a second with a 1 ms round trip.
+A new request arrives every millisecond, so while one request's GET-then-SET is in flight, about one
+more request arrives and reads the same count. Every time the counter moves by one, about two
+requests were let through: one that was counted and one that read the stale value. In general each
+write hides the `rate × round trip` requests that arrive during it, so the admitted count is about
+**limit × (1 + rate × round trip)**. At 100 requests a second and a 1 ms
 round trip, that is 100 × 1.1, invisible. At 1,000 a second it is 2× the limit, and at 3,000 a
 second, 4×. The race is not a rare corner case; it is a multiplier that grows with exactly the load
 the limiter exists for.
@@ -377,14 +381,19 @@ test in staging, where one laptop sends 50 requests a second, and fail on the fi
 
 **The fixes, in order of preference:**
 
-- For a **counter**, `INCR` is already atomic: it returns the new value, and you reject if it is
-  over the limit. No read-then-write exists. The only trap is setting the expiry: `INCR` then
+- For a **counter**, `INCR` is already **atomic**, meaning no other command can run between its
+  read and its write: Redis executes commands one at a time on a single thread, so "read the
+  number, add one, store it" happens as one indivisible step. It returns the new value, and you
+  reject if it is over the limit. No read-then-write gap exists. The only trap is setting the expiry: `INCR` then
   `EXPIRE` as two commands leaves a counter with no expiry if the process dies between them, and
   that key is over the limit forever. Use one script, or `SET key 0 EX 60 NX` before the `INCR`.
 - For **state with several fields** (a token bucket's tokens and timestamp), the read, the decision
   and the write must run inside the store. A **Lua script** does that: Redis runs it from start to
-  finish with no other command in between, in one round trip. `MULTI`/`EXEC` cannot branch on a
-  value it read, and `WATCH` retries under exactly the contention a limiter sees
+  finish with no other command in between, in one round trip. Redis's other two tools fall short
+  here. `MULTI`/`EXEC` queues several commands and runs them together, but the app cannot look at a
+  value read inside the batch and decide what to write. `WATCH` is optimistic locking: it aborts
+  the batch if a watched key changed since you read it, so you retry, and a limiter's hot key
+  changes constantly, so under load it mostly retries
   ([Redis tutorial](https://redis.io/tutorials/howtos/ratelimiting/)).
 
 Here is the token bucket as a Lua script, shared by the Python and JavaScript examples:
@@ -424,9 +433,11 @@ because ten refills of 0.1 add up to 0.9999999999999999; without it the token bu
 the examples disagreed, 19 against 20.
 
 Two costs of Lua. A script blocks the whole Redis shard while it runs, so keep it to a handful of
-commands; a slow script stalls every client of that shard, not only the limiter. And in Redis
-Cluster all keys a script touches must live in the same slot, so a script reading two keys for one
-tenant needs a hash tag such as `rl:{tenant42}:minute` and `rl:{tenant42}:day`. Run against a real
+commands; a slow script stalls every client of that shard, not only the limiter. And in **Redis
+Cluster**, which spreads keys over many servers by hashing each key into one of 16,384 **slots**,
+all keys a script touches must hash to the same slot, or the script is refused. A **hash tag**
+fixes that: only the part of the key inside `{...}` is hashed, so `rl:{tenant42}:minute` and
+`rl:{tenant42}:day` always land on the same server. Run against a real
 Redis, with twenty threads racing for ten tokens:
 
 ```text title="redis_limiter.py output (first lines)"
@@ -616,10 +627,13 @@ on the 429 rate: detection took 62 minutes and came from customers
 ([PostHog postmortem](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages)).
 :::
 
-Even a correctly read IP is a weak key. **Carrier-grade NAT** puts thousands of mobile users behind
-one IPv4 address, so a per-IP limit punishes all of them for one bad phone. IPv6 has the opposite
-problem: one attacker controls billions of addresses, so per-address IPv6 limits are usually applied
-to the whole /64. An API key is better, with its own trap: one customer running 200 legitimate
+Even a correctly read IP is a weak key. Mobile carriers have far more phones than public IPv4
+addresses, so they share addresses with **carrier-grade NAT**: the carrier's router rewrites
+thousands of phones' traffic to come from one public address. A per-IP limit then punishes all of
+them for one bad phone. IPv6 has the opposite problem. A home or a cloud server is normally given a
+whole **/64**, a block of 2^64 addresses that differ only in their last 64 bits, so one attacker can
+use a new address for every request. Per-address IPv6 limits are therefore usually applied to the
+whole /64. An API key is better, with its own trap: one customer running 200 legitimate
 servers on one key looks exactly like one abuser. Key on what you bill, and use IP limits only at
 the edge, against floods, where nothing else is known yet.
 
