@@ -152,14 +152,68 @@ where.
 
 ## How it works, piece by piece
 
+### What a limiter has to remember
+
+"100 requests per second" sounds like one number, but a rate is a count divided by a span of time,
+and a limiter never sees a rate. It sees one request arriving at one instant, and it has a fraction
+of a millisecond to answer one question: **counting this one, has this key been too busy
+"recently"?** Every algorithm below is a different definition of "recently", and the definition
+decides what the limiter must store per key. There are two families.
+
+**Count inside a window.** Pick a span of time, the **window**, and count the key's requests that
+fall inside it. A **fixed window** cuts time into slices that start at fixed instants
+(10:00:00 to 10:00:10, then 10:00:10 to 10:00:20, and so on); each slice has its own counter, which
+starts again at zero when the next slice begins. A **sliding window** always looks back exactly W
+seconds from *now*, so the span moves with every request. With a limit of 10 per 10 seconds and a
+request arriving at 10:00:12:
+
+| Window | Requests it counts | What must be stored |
+|---|---|---|
+| Fixed, slice 10:00:10–10:00:20 | Only those since 10:00:10 | One counter per slice |
+| Sliding, last 10 s | Those since 10:00:02 | Every timestamp, or an estimate of them |
+
+**Spend from an allowance that refills.** Instead of counting the past, give each key an allowance
+and let requests spend it. One unit of allowance is called a **token**: a permission to make one
+request. Tokens are not objects anywhere; a token is a number going down by one. The **bucket** is
+only the name for where unspent allowance is kept, and it has a maximum size. Two numbers describe
+it:
+
+- **Capacity** C, the most tokens the bucket can hold. This is the biggest burst a key can send at
+  once after it has been quiet for a while.
+- **Refill rate** r, how many new tokens appear each second. This is the average rate the key can
+  keep up forever.
+
+A mobile data plan that adds 1 GB a day and lets you carry over at most 10 GB works the same way:
+the daily top-up is the refill rate, the 10 GB ceiling is the capacity, and a quiet week lets you
+binge on one day but never by more than 10 GB. The analogy stops at the clock: the plan tops up
+once a day, while a token bucket refills continuously, in fractions of a token.
+
+Here is a bucket with C = 10 and r = 1 token a second, for a key that has been idle:
+
+| Time | What arrives | Tokens before | Outcome | Tokens after |
+|---|---|---|---|---|
+| 0.0 s | a burst of 10 | 10 (full) | all 10 accepted | 0 |
+| 0.0 s | an 11th | 0 | rejected | 0 |
+| 3.0 s | 3 requests | 0 + 3 s × 1 = 3 | all 3 accepted | 0 |
+| 3.5 s | 1 request | 0.5 | rejected; a whole token is 0.5 s away | 0.5 |
+| 60 s | 1 request | would be 57, capped at 10 | accepted | 9 |
+
+A **leaky bucket** is the same picture turned over. Instead of a bucket of permissions that
+requests drain, it is a bucket of *requests* that arrival fills and that **leaks** out at a fixed
+rate; a request that arrives to a full bucket overflows and is rejected.
+
+So a limiter stores, per key, either counters or timestamps (window algorithms) or a token count
+plus the time it was last updated (bucket algorithms). That small piece of state is what the rest
+of this page moves between machines, races on, and loses when a store goes down.
+
 ### The state per key: five algorithms in one pass
 
 All examples use one limit: **10 requests per 10 seconds**; for a bucket, a capacity of 10
 refilling at 1 per second.
 
-**Token bucket.** Each key has a bucket of up to C tokens that refills at r tokens a second; a
-request takes a token or is rejected. No timer drips tokens in: when a request arrives, add
-`elapsed × r`, cap at C, then try to take one. This **lazy refill** makes the state two numbers
+**Token bucket.** The allowance above, stored as two numbers. No timer drips tokens in: when a
+request arrives, add `elapsed × r`, cap at C, then try to take one, which is the arithmetic in the
+table above. This **lazy refill** makes the state two numbers
 (tokens, last update) and a million idle keys cost only storage. The retry time for a rejected
 request falls out of the same arithmetic: `(1 − tokens) ÷ r`.
 
@@ -174,10 +228,14 @@ measured 19). A token bucket bounds the average rate and the burst size, not the
 window. If your docs promise "at most 100 in any minute", a window algorithm fits the promise
 better.
 
-**GCRA** (generic cell rate algorithm, from ATM networks) is the same limit stored as one timestamp:
-the **theoretical arrival time** at which the bucket would be empty again. Each request pushes it
-forward by `1 ÷ rate`; a request is allowed while it is no more than `burst ÷ rate` seconds ahead of
-now. One number per key matters when you keep millions of keys, and
+**GCRA** (generic cell rate algorithm, from ATM networks) is the same limit stored as one timestamp
+instead of two numbers: the **theoretical arrival time** (TAT), the moment at which the key would
+have used up all its allowance if it kept the average rate. Each accepted request pushes the TAT
+forward by `1 ÷ rate`; a request is allowed if, after the push, the TAT is no more than
+`burst ÷ rate` seconds ahead of now. With 1 request a second and a burst of 3: three requests at
+t = 0 push the TAT to 1, 2 and 3 s, each no more than 3 s ahead, so all pass; a fourth would push it
+to 4 s, which is 4 s ahead, so it is rejected. At t = 1 s the TAT of 3 s becomes 4 s, which is again
+3 s ahead, so one more request passes. One number per key matters when you keep millions of keys, and
 [redis-cell](https://github.com/brandur/redis-cell) implements it as one Redis command.
 
 **Leaky bucket** names two different mechanisms, which is where most confusion in this topic comes
@@ -305,8 +363,12 @@ answering the GET and the SET arriving, a full round trip passes, and every othe
 lands in that gap reads the same, already stale, count. Each SET then overwrites the others, so the
 increments are lost too: that is how line 4 above ended with 20 admitted and a stored count of 1.
 
-How much does it let through? Each write hides the requests that arrive during its round trip, so
-the admitted count is about **limit × (1 + rate × round trip)**. At 100 requests a second and a 1 ms
+How much does it let through? Work it through at 1,000 requests a second with a 1 ms round trip.
+A new request arrives every millisecond, so while one request's GET-then-SET is in flight, about one
+more request arrives and reads the same count. Every time the counter moves by one, about two
+requests were let through: one that was counted and one that read the stale value. In general each
+write hides the `rate × round trip` requests that arrive during it, so the admitted count is about
+**limit × (1 + rate × round trip)**. At 100 requests a second and a 1 ms
 round trip, that is 100 × 1.1, invisible. At 1,000 a second it is 2× the limit, and at 3,000 a
 second, 4×. The race is not a rare corner case; it is a multiplier that grows with exactly the load
 the limiter exists for.
@@ -319,14 +381,19 @@ test in staging, where one laptop sends 50 requests a second, and fail on the fi
 
 **The fixes, in order of preference:**
 
-- For a **counter**, `INCR` is already atomic: it returns the new value, and you reject if it is
-  over the limit. No read-then-write exists. The only trap is setting the expiry: `INCR` then
+- For a **counter**, `INCR` is already **atomic**, meaning no other command can run between its
+  read and its write: Redis executes commands one at a time on a single thread, so "read the
+  number, add one, store it" happens as one indivisible step. It returns the new value, and you
+  reject if it is over the limit. No read-then-write gap exists. The only trap is setting the expiry: `INCR` then
   `EXPIRE` as two commands leaves a counter with no expiry if the process dies between them, and
   that key is over the limit forever. Use one script, or `SET key 0 EX 60 NX` before the `INCR`.
 - For **state with several fields** (a token bucket's tokens and timestamp), the read, the decision
   and the write must run inside the store. A **Lua script** does that: Redis runs it from start to
-  finish with no other command in between, in one round trip. `MULTI`/`EXEC` cannot branch on a
-  value it read, and `WATCH` retries under exactly the contention a limiter sees
+  finish with no other command in between, in one round trip. Redis's other two tools fall short
+  here. `MULTI`/`EXEC` queues several commands and runs them together, but the app cannot look at a
+  value read inside the batch and decide what to write. `WATCH` is optimistic locking: it aborts
+  the batch if a watched key changed since you read it, so you retry, and a limiter's hot key
+  changes constantly, so under load it mostly retries
   ([Redis tutorial](https://redis.io/tutorials/howtos/ratelimiting/)).
 
 Here is the token bucket as a Lua script, shared by the Python and JavaScript examples:
@@ -366,9 +433,11 @@ because ten refills of 0.1 add up to 0.9999999999999999; without it the token bu
 the examples disagreed, 19 against 20.
 
 Two costs of Lua. A script blocks the whole Redis shard while it runs, so keep it to a handful of
-commands; a slow script stalls every client of that shard, not only the limiter. And in Redis
-Cluster all keys a script touches must live in the same slot, so a script reading two keys for one
-tenant needs a hash tag such as `rl:{tenant42}:minute` and `rl:{tenant42}:day`. Run against a real
+commands; a slow script stalls every client of that shard, not only the limiter. And in **Redis
+Cluster**, which spreads keys over many servers by hashing each key into one of 16,384 **slots**,
+all keys a script touches must hash to the same slot, or the script is refused. A **hash tag**
+fixes that: only the part of the key inside `{...}` is hashed, so `rl:{tenant42}:minute` and
+`rl:{tenant42}:day` always land on the same server. Run against a real
 Redis, with twenty threads racing for ten tokens:
 
 ```text title="redis_limiter.py output (first lines)"
@@ -558,10 +627,13 @@ on the 429 rate: detection took 62 minutes and came from customers
 ([PostHog postmortem](https://posthog.com/handbook/company/post-mortems/2025-10-21-feature-flags-recurring-outages)).
 :::
 
-Even a correctly read IP is a weak key. **Carrier-grade NAT** puts thousands of mobile users behind
-one IPv4 address, so a per-IP limit punishes all of them for one bad phone. IPv6 has the opposite
-problem: one attacker controls billions of addresses, so per-address IPv6 limits are usually applied
-to the whole /64. An API key is better, with its own trap: one customer running 200 legitimate
+Even a correctly read IP is a weak key. Mobile carriers have far more phones than public IPv4
+addresses, so they share addresses with **carrier-grade NAT**: the carrier's router rewrites
+thousands of phones' traffic to come from one public address. A per-IP limit then punishes all of
+them for one bad phone. IPv6 has the opposite problem. A home or a cloud server is normally given a
+whole **/64**, a block of 2^64 addresses that differ only in their last 64 bits, so one attacker can
+use a new address for every request. Per-address IPv6 limits are therefore usually applied to the
+whole /64. An API key is better, with its own trap: one customer running 200 legitimate
 servers on one key looks exactly like one abuser. Key on what you bill, and use IP limits only at
 the edge, against floods, where nothing else is known yet.
 

@@ -40,8 +40,26 @@ why revocation barely works, and what breaks as certificate lifetimes fall to 47
 
 ## What TLS promises, word by word
 
-**TLS** (Transport Layer Security) protects one byte stream between two endpoints. Stated
-precisely, after a successful handshake the client knows this:
+**TLS** (Transport Layer Security) protects one byte stream between two endpoints. It is built from
+two kinds of cryptography, and the rest of the page leans on the difference:
+
+- **Symmetric** (shared-key) encryption uses one key both to lock and to unlock. AES is the common
+  one, and every modern CPU has instructions for it, so it is fast. But both sides must already
+  hold the same key, and two strangers on the internet do not.
+- **Public-key** cryptography gives each party a **key pair**: a **private key** it keeps secret
+  and a **public key** it gives to anyone. What one key does, only the other can undo or check.
+  Anyone can encrypt to the bank's public key and only the bank can decrypt; only the bank can
+  *sign* with its private key, and anyone can check the signature with the public one. No shared
+  secret is needed, but the operations are far slower and work only on small inputs.
+
+So TLS uses public-key operations only during the handshake, to agree on a fresh symmetric key and
+to prove who is on the other end, and then encrypts the data with that symmetric key. A
+**certificate** ties a public key to a name: a small public document that says "this public key
+belongs to `bank.example.in`", signed by a **certificate authority** (CA). The CA's own certificate
+is signed in turn, up to a **root** CA whose certificate ships inside your operating system or
+browser, in its **trust store**.
+
+Stated precisely, after a successful handshake the client knows this:
 
 > The bytes I receive were sent by someone holding the private key of a certificate that names the
 > host I asked for and chains to a root in my trust store, and nobody has changed, reordered,
@@ -61,19 +79,40 @@ Every qualifier in that sentence is a place where real systems break, and each h
 - **What is not in the sentence at all**: who you talk to, when and how much. Sizes and timing
   are visible. So is the site name, unless Encrypted Client Hello is in use.
 
-The data itself travels in **records**, each sealed with an **AEAD** cipher (authenticated
-encryption: AES-GCM or ChaCha20-Poly1305), which encrypts and adds a 16-byte tag in one operation.
-The nonce for each record comes from a counter that both sides keep and never send, so a dropped,
-reordered or repeated record fails its tag check and the connection is torn down. The record layer
-is the part of TLS that rarely goes wrong. The handshake that creates its keys is where the
-interesting failures are.
+Once the handshake has produced a symmetric key, the data travels in **records** of up to 16 KB.
+Encryption alone hides bytes but does not stop someone flipping them: a changed ciphertext decrypts
+to changed plaintext, and the receiver cannot tell. So each record also carries a **tag**, or
+**MAC** (message authentication code): a 16-byte value computed from the key and the encrypted
+bytes. Change one bit and the tag no longer matches, and without the key nobody can compute one
+that does. A cipher that encrypts and tags in one operation is an **AEAD** (authenticated
+encryption with associated data, the associated data being the record header, which is checked but
+left readable). TLS 1.3 allows only AEAD ciphers; in practice AES-GCM or ChaCha20-Poly1305.
+
+The last ingredient is a **nonce**, a number used only once per key and mixed into each record so
+that two identical records encrypt differently. TLS takes it from a record counter that both sides
+keep and never send. Swap records 1 and 2 on the wire, and the receiver opens the first to arrive
+with nonce 1, but it was sealed with nonce 2: the tag fails and the connection is torn down.
+Dropped and repeated records fail the same way. The record layer is the part of TLS that rarely
+goes wrong. The handshake that creates its keys is where the interesting failures are.
 
 ## The obvious fix, and why it breaks
 
-Two strangers can agree on a secret key in public with **Diffie-Hellman** key exchange: each sends a
-public **key share** derived from a private random number, and both compute the same secret, which
-an eavesdropper cannot. That defeats anyone who only listens. It does nothing against someone who
-answers. Here is the attack the hotspot owner, Mallory, runs:
+Two strangers can agree on a symmetric key in public with **Diffie-Hellman** key exchange. It rests
+on one piece of arithmetic. Write `x mod p` for the remainder after dividing x by p: 27 mod 23 = 4.
+Raising a number to a power and then taking the remainder is fast, even for numbers hundreds of
+digits long. Going back, from the remainder to the exponent, has no known shortcut at those sizes.
+
+Both sides agree in public on a prime p and a base g. Each picks a private random exponent and
+sends g to that power mod p, its **key share**. Each then raises the other's share to its own
+exponent. Both arrive at the same number, because (g<sup>a</sup>)<sup>b</sup> =
+(g<sup>b</sup>)<sup>a</sup>, and that number is the shared secret. With numbers small enough to
+check:
+
+<Figure caption="Each side keeps its exponent, sends 5 to that power mod 23, and raises the other's share to its own exponent. Both reach 2, while the wire carried only 23, 5, 8 and 19.">
+  <KeyExchange />
+</Figure>
+
+That defeats anyone who only listens. It does nothing against someone who answers. Here is the attack the hotspot owner, Mallory, runs:
 
 <StepThrough
   title="A key exchange with a man in the middle"
@@ -113,10 +152,27 @@ happen automatically, for a billion clients and servers that have never met.
 
 ## The core idea
 
+The fix needs two more building blocks.
+
+A **hash** function turns any input into a short, fixed-size fingerprint. SHA-256, the one TLS
+usually uses, gives 32 bytes. The same input always gives the same output, changing one character
+changes the output completely, and nobody can construct a second input with the same hash. The
+SHA-256 of `pay ₹100` starts `14695baf`; that of `pay ₹900` starts `044dcdf1`. A hash has no key,
+so anyone can compute one, which is what lets two sides compare.
+
+A **digital signature** is a value that only the private key can produce for a given hash, and
+that anyone holding the public key can check. Here it is with toy RSA numbers: the public key is
+n = 33 and e = 3, the private key is d = 7. To sign a message whose hash is 4, the signer computes
+4<sup>7</sup> mod 33 = 16 and sends 16 with the message. The verifier computes 16<sup>3</sup> mod
+33 = 4, hashes the message it received itself, and accepts only if both give 4. If Mallory changes
+the message so its hash becomes 5, the signature still opens to 4 and the check fails. The
+signature that opens to 5 is 14, and computing it needs d. Real signatures use 2048-bit RSA or
+elliptic-curve keys, where d cannot be worked out from the public key.
+
 The server signs the conversation. After sending its certificate, the server takes a hash of every
-handshake message so far, both random values and **both key shares** included, and signs that hash
-with the private key that matches the certificate. This signature is the **CertificateVerify**
-message. Both sides then send **Finished**, a MAC over the same transcript using keys derived from
+handshake message so far, the **transcript**, with both random values and **both key shares**
+included, and signs that hash with the private key that matches the certificate. This signature
+is the **CertificateVerify** message. Both sides then send **Finished**, a MAC over the same transcript using keys derived from
 the shared secret.
 
 <Figure caption="The server's signature covers a hash of the whole handshake so far, including the client's key share. Swap any byte and the hash changes; only the holder of the private key can produce a new signature.">
@@ -137,6 +193,12 @@ on this page is about what that sentence does not cover.
 ## How it works, piece by piece
 
 ### What the handshake proves, message by message
+
+Two terms first. A **group** is a named, standard choice of Diffie-Hellman parameters, the
+real-size version of p = 23 and g = 5. **X25519** is the common one, an elliptic-curve form of the
+same idea with 32-byte shares. And TLS never uses the shared secret directly as a key. It feeds the
+secret and the transcript hash through a hash-based function (HKDF) that **derives** a separate key
+for each direction and each stage, so changing any input changes every key.
 
 <StepThrough
   title="A full TLS 1.3 handshake"
@@ -194,23 +256,23 @@ anywhere. Mutual TLS, later on this page, fixes that between services.
 **Forward secrecy** means that stealing a server's long-term private key next year does not decrypt
 traffic recorded today. It comes from the word **ephemeral**: both sides pick fresh Diffie-Hellman
 secrets per handshake and delete them afterwards, so the secret that protected a recording no
-longer exists anywhere. Here is the exchange with numbers small enough to check:
-
-<Figure caption="Each side keeps a secret, sends a public number derived from it, and combines the other's number with its own secret. Both reach 2. An observer saw 23, 5, 8 and 19 and must solve for a secret exponent, which at real sizes has no known shortcut.">
-  <KeyExchange />
-</Figure>
-
-Real TLS does this on the X25519 curve with 32-byte shares. The certificate's key only *signs*; it
-never encrypts the session secret. TLS 1.2's older **RSA key exchange** did the opposite: the
-client encrypted the session secret to the server's certificate key, so one stolen key decrypts
+longer exists anywhere. In the [toy exchange](#the-obvious-fix-and-why-it-breaks), once both sides
+forget 6 and 15, the only way from a recording of 8 and 19 back to 2 is the hard reverse step, for
+the bank as much as for anyone. The certificate's key only *signs*; it never encrypts the session
+secret. TLS 1.2's older **RSA key exchange** did the opposite: the client encrypted the session secret to the server's certificate key, so one stolen key decrypts
 every recording ever made. TLS 1.3 removed it.
 
-The part teams miss is **session resumption**. A returning client presents a **session ticket**:
-state the server encrypted with a **session ticket encryption key** (STEK) and handed to the client
-to bring back later. The server needs no memory, and any server in the cluster that holds the STEK
-can resume.
+The part teams miss is **session resumption**. A full handshake costs a key exchange, a signature
+and a chain check; a client that returns a minute later would rather reuse a secret from its last
+connection. The server could keep those secrets in a table, but in a cluster the next connection
+may land on any server. So the server hands the secret to the client, locked: it encrypts it with
+a symmetric key of its own, the **session ticket encryption key** (STEK), and sends the result as
+a **session ticket**. The client cannot read the ticket; it only stores it. On Monday the client
+receives ticket T. On Tuesday it puts T in its ClientHello, server 7 of 10 decrypts T with the same
+STEK, recovers the secret, and both sides continue from it without the certificate or signature.
 
-- **In TLS 1.2**, the ticket contains the connection's master secret. Anyone who records traffic and
+- **In TLS 1.2**, the ticket contains the connection's **master secret**, the one value from which
+  every key of that connection was derived. Anyone who records traffic and
   later steals the STEK can decrypt the ticket and then the whole connection, including the original
   full handshake. Many servers created one STEK at startup and kept it for months, so in practice
   forward secrecy lasted as long as the process
@@ -223,10 +285,12 @@ can resume.
 So the STEK is a long-term key in disguise. Rotate it every few hours to a day, distribute it to the
 cluster as a secret, and keep old ones only as long as tickets live (at most 7 days in TLS 1.3).
 
-**Harvest now, decrypt later** is the same problem at a larger scale. A future quantum computer
-could solve X25519, so traffic recorded today could be opened then. The fix is a hybrid key
-exchange, **X25519MLKEM768**, which combines X25519 with the post-quantum ML-KEM; the session is safe
-if either holds ([RFC 10024](https://datatracker.ietf.org/doc/rfc10024/), August 2026). The cost is
+**Harvest now, decrypt later** is the same problem at a larger scale. A large enough quantum computer
+could work back from an X25519 share to its secret, so traffic recorded today could be opened then.
+The fix is a hybrid key exchange, **X25519MLKEM768**, which runs X25519 and **ML-KEM** side by side.
+ML-KEM agrees on a secret using different mathematics (lattice problems) that no known quantum
+algorithm breaks. Both secrets go into key derivation, so an attacker must break both, and the
+session is safe if either holds ([RFC 10024](https://datatracker.ietf.org/doc/rfc10024/), August 2026). The cost is
 size: the client's share grows from 32 to 1,216 bytes, so the ClientHello no longer fits in one
 packet, and middleboxes that assumed it would broke when browsers turned it on
 ([tldr.fail](https://tldr.fail/)). As of February 2026, over 60% of clients reaching Cloudflare
@@ -244,9 +308,11 @@ no keys at all:
 
 The **SNI** (server name indication) is in the ClientHello because the server needs it to pick a
 certificate before any keys exist. **Encrypted Client Hello** (ECH,
-[RFC 9849](https://www.rfc-editor.org/rfc/rfc9849.html), March 2026) encrypts the real ClientHello
-to a key the server publishes in DNS and sends an outer ClientHello naming only the provider. It
-hides the site only when many sites share that provider's addresses. A site on its own IP address
+[RFC 9849](https://www.rfc-editor.org/rfc/rfc9849.html), March 2026) uses public-key encryption
+to hide it. The hosting provider publishes an ECH public key in its DNS records. The client
+encrypts the real ClientHello, with the real name, to that key and wraps it inside an outer
+ClientHello whose SNI names only the provider: the observer reads `ech.provider.example`, and only
+the provider's private key opens the inner `clinic.example.in`. It hides the site only when many sites share that provider's addresses. A site on its own IP address
 gains nothing: the address already names it.
 
 Sizes leak more than names. Look at the one field TLS cannot hide:
@@ -375,8 +441,10 @@ random value on every response, so there is no stable string for guesses to matc
 
 ### 0-RTT: a request that can run twice
 
-On a resumed connection, TLS 1.3 lets the client send its first request inside the very first
-flight, as **early data**, encrypted with a key derived from the session ticket. A user 200 ms away
+A full handshake costs one round trip (one **RTT**) before the first request can leave. On a
+resumed connection TLS 1.3 can make that zero, hence **0-RTT**: the client already holds a secret
+from its ticket, so it sends its first request inside the very first flight, as **early data**,
+encrypted with a key derived from that secret. A user 200 ms away
 gets the answer 200 ms sooner. The price follows from the table above: a normal handshake is
 protected against replay because the *server's* fresh random value enters the keys. Early data is
 sent before the server has said anything, so its keys depend only on the client's flight. Anyone
@@ -417,6 +485,24 @@ every write an idempotency key so a second copy does nothing.
 :::
 
 ### Chain building, and why "works in my browser" proves nothing
+
+A certificate is a short structured record in a format called X.509. The fields that matter here:
+
+- **Subject Alternative Name** (SAN): the names it is valid for, such as `bank.example.in` and
+  `*.bank.example.in`.
+- **Public key**: the key whose private half must sign CertificateVerify.
+- **Issuer**: the CA that signed it.
+- **Validity**: not before and not after, for example 1 October to 17 November 2026.
+- **Serial number**: unique per CA, used to revoke it.
+- **Extensions** that limit the key: `CA:TRUE` or `CA:FALSE` (may it sign other certificates?) and
+  the allowed use, such as server authentication.
+- **The issuer's signature** over a hash of all the fields above.
+
+The last field makes the certificate a signed statement: the issuer vouches that this key belongs
+to these names until that date. Add one name and the hash changes, so the signature fails. Checking
+that signature needs the issuer's public key, which sits in the issuer's own certificate, which is
+signed by *its* issuer. A root signs its own certificate, so its signature proves nothing; it is
+trusted only because it is already in the trust store.
 
 A server sends its own certificate (the **leaf**) and the **intermediate** CA certificates that
 signed it. The client must build a path from the leaf to a **root** already in its trust store, and
@@ -512,9 +598,11 @@ passed a schedule that cuts the maximum lifetime in steps
 </Figure>
 
 The same ballot shortens how long a CA may reuse a past **domain validation** (proof that you control
-the name) to 10 days by 2029. In practice, nearly every renewal must pass a fresh challenge: the HTTP
-file, DNS record or TLS response that the ACME protocol ([RFC 8555](https://www.rfc-editor.org/rfc/rfc8555))
-uses must work *every* time, not once a year. As of October 2026, Let's Encrypt issues 90-day
+the name) to 10 days by 2029. Automated renewal runs on **ACME**
+([RFC 8555](https://www.rfc-editor.org/rfc/rfc8555)), the protocol certbot and similar clients
+speak to a CA: the CA hands out a random token, and the client proves control of the name by
+serving it at an HTTP path, in a DNS record or in a TLS response. In practice, nearly every renewal
+must now pass a fresh challenge, so that path must work *every* time, not once a year. As of October 2026, Let's Encrypt issues 90-day
 certificates by default, moves to 64 days on 10 February 2027 and 45 days in February 2028, and
 recommends renewing at about two-thirds of the lifetime, ideally when the CA's **ARI** (ACME Renewal
 Information) endpoint says so ([Let's Encrypt](https://letsencrypt.org/2026/10/07/64-day-certs)).

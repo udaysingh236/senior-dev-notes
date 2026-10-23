@@ -1,0 +1,85 @@
+---
+// Two booking transactions want the same berth. Three timelines: no locking (lost update),
+// pessimistic locking (the second waits), optimistic locking (the second's write fails, it retries).
+type Tone = 'plain' | 'ok' | 'warn' | 'bad';
+interface Step {
+  tx: 1 | 2;
+  text: string;
+  tone?: Tone;
+}
+const panels: { title: string; steps: Step[] }[] = [
+  {
+    title: 'No locking: lost update',
+    steps: [
+      { tx: 1, text: 'read B23: free' },
+      { tx: 2, text: 'read B23: free' },
+      { tx: 1, text: 'set bits, COMMIT', tone: 'ok' },
+      { tx: 2, text: 'set bits, COMMIT', tone: 'bad' },
+    ],
+  },
+  {
+    title: 'Pessimistic: lock first, others wait',
+    steps: [
+      { tx: 1, text: 'FOR UPDATE: locked', tone: 'ok' },
+      { tx: 2, text: 'FOR UPDATE: waits…', tone: 'warn' },
+      { tx: 1, text: 'set bits, COMMIT', tone: 'ok' },
+      { tx: 2, text: 'reads: sold → B24' },
+    ],
+  },
+  {
+    title: 'Optimistic: check at write, retry',
+    steps: [
+      { tx: 1, text: 'read B23 (v7)' },
+      { tx: 2, text: 'read B23 (v7)' },
+      { tx: 1, text: 'UPDATE if v7: 1 row', tone: 'ok' },
+      { tx: 2, text: 'UPDATE if v7: 0 rows', tone: 'warn' },
+    ],
+  },
+];
+const PANEL_H = 158;
+const ROW = 28;
+const COL_W = 182;
+const X = { 1: 30, 2: 214 } as const;
+const STYLE: Record<Tone, string> = {
+  plain: 'fill: var(--viz-server-soft); stroke: var(--viz-server)',
+  ok: 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)',
+  warn: 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)',
+  bad: 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)',
+};
+---
+
+<svg viewBox={`0 0 400 ${panels.length * PANEL_H + 4}`} width="100%" role="img" aria-labelledby="tk-tt-t tk-tt-d">
+  <title id="tk-tt-t">Two transactions booking the same berth, three ways</title>
+  <desc id="tk-tt-d">
+    Three timelines, each with transaction 1 on the left and transaction 2 on the right, time going
+    down. No locking: both read berth 23 as free, both set the bits and commit, and the berth is sold
+    twice. Pessimistic: transaction 1 locks the row with FOR UPDATE, transaction 2's FOR UPDATE waits;
+    when 1 commits, 2 gets the lock, sees the berth sold and moves to berth 24. Optimistic: both read
+    version 7; transaction 1's update with the condition "version is still 7" changes one row;
+    transaction 2's same update changes zero rows, so it knows it lost and retries.
+  </desc>
+
+  {
+    panels.map((p, pi) => {
+      const y0 = pi * PANEL_H;
+      return (
+        <g>
+          <text x="4" y={y0 + 20} font-size="17" font-weight="700" style="fill: var(--viz-ink)">{p.title}</text>
+          <text x={X[1] + COL_W / 2} y={y0 + 40} font-size="14" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">T1</text>
+          <text x={X[2] + COL_W / 2} y={y0 + 40} font-size="14" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">T2</text>
+          <text x="4" y={y0 + 60} font-size="14" style="fill: var(--viz-muted)">t</text>
+          <line x1="8" y1={y0 + 66} x2="8" y2={y0 + 46 + 4 * ROW} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+          {p.steps.map((s, i) => {
+            const y = y0 + 48 + i * ROW;
+            return (
+              <g>
+                <rect x={X[s.tx]} y={y} width={COL_W} height={ROW - 5} rx="5" stroke-width="1.5" style={STYLE[s.tone ?? 'plain']} />
+                <text x={X[s.tx] + 8} y={y + 17} font-size="14" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{s.text}</text>
+              </g>
+            );
+          })}
+        </g>
+      );
+    })
+  }
+</svg>

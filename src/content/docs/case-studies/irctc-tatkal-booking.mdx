@@ -15,6 +15,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Architecture.astro';
+import TwoTransactions from '../../../components/diagrams/irctc-tatkal-booking/TwoTransactions.astro';
 import SegmentMask from '../../../components/diagrams/irctc-tatkal-booking/SegmentMask.astro';
 import WaitlistSegments from '../../../components/diagrams/irctc-tatkal-booking/WaitlistSegments.astro';
 import PaymentGap from '../../../components/diagrams/irctc-tatkal-booking/PaymentGap.astro';
@@ -70,8 +71,11 @@ than collapsing.
 Three decisions shape everything below:
 
 - **The unit of ownership is train + date.** All berths, quotas and waitlists for train 12627 on
-  24 October live together, and nothing in a booking ever touches two trains. That is the natural
-  partition key: a booking never needs a lock across shards.
+  24 October live together, and nothing in a booking ever touches two trains. When data is too
+  big or too busy for one server, it is split into **shards**, slices that each live on one
+  server, and the **partition key** is the field that decides which shard a row belongs to.
+  Train + date is the natural partition key here: every row a booking touches is in the same
+  shard, so a booking never needs a lock that spans two servers.
 - **Reads are separated from writes.** "Available 43" on the search page is a cached count. If it
   is two seconds stale, a booking fails and the user sees the new count; nothing is oversold,
   because only the shard decides.
@@ -84,9 +88,34 @@ The rest of the page is the inside of that inventory shard.
 
 ### One berth, many journeys: the inventory model
 
-Number the stops on the route 0 to N−1. Segment *i* is the stretch from stop *i* to stop *i*+1. A
-journey from stop *a* to stop *b* occupies segments *a* to *b*−1. Store each berth's occupancy as
-a **bitmask**: an integer with bit *i* set when segment *i* is sold.
+Number the stops on the route 0 to N−1. Segment *i* is the stretch from stop *i* to stop *i*+1, so
+a route of 8 stops has 7 segments. A journey from stop *a* to stop *b* occupies segments *a* to
+*b*−1: New Delhi (stop 0) to Agra (stop 2) occupies segments 0 and 1. For each berth we need to
+remember which of the 7 segments are sold, and to answer "are segments 2, 3 and 4 all free on this
+berth?" millions of times a minute. The tool for that is a bitmask, which needs a short detour.
+
+**Bits and masks.** A **bit** is one 0 or 1. A computer stores an integer as a row of bits, each
+worth a power of two: bit 0 is worth 1, bit 1 is worth 2, bit 2 is worth 4, and so on, and the
+integer is the sum of the bits that are 1. So 99 = 64 + 32 + 2 + 1, which is bits 0, 1, 5 and 6.
+Using an integer as a **bitmask** means ignoring its value as a number and reading it as a row of
+on/off switches, one per thing you track. Here, one switch per segment: 1 is sold, 0 is free. On
+this page masks are written with segment 0 on the left, the reverse of how binary is usually
+printed, so that they line up with the route on a map: `1100011` means segments 0, 1, 5 and 6 are
+sold, and it is stored as the integer 99.
+
+Three operations work on every switch of two masks at once, in a single CPU instruction, and SQL
+databases support them on integers too:
+
+| Operation | Rule at each position | What we use it for | Example (segment 0 first) |
+|---|---|---|---|
+| AND, `&` | 1 only where both are 1 | Do two sets of segments overlap? Zero means no | `1100011 & 0011100 = 0000000` |
+| OR, `\|` | 1 where either is 1 | Mark a journey's segments as sold | `1100011 \| 0011100 = 1111111` |
+| AND NOT, `& ~` | Clear the right-hand switches | Free a cancelled journey's segments | `1111111 & ~0011100 = 1100011` |
+
+One more operation builds masks: a **shift**, `x << k`, slides every switch k positions toward the
+higher segments, so `1 << 3` is a single 1 at segment 3.
+
+Now the data model. Store each berth's occupancy as one bitmask:
 
 ```sql
 CREATE TABLE berth (
@@ -100,8 +129,17 @@ CREATE TABLE berth (
 );
 ```
 
-A journey needs the mask `need = ((1 << (b − a)) − 1) << a`. The berth can take it exactly when
-`mask & need = 0`; booking it is `mask = mask | need`; cancelling is `mask = mask & ~need`.
+A journey from stop *a* to stop *b* needs the mask `need = ((1 << (b − a)) − 1) << a`. Read it
+inside out, for Agra (stop 2) to Bhopal (stop 5), which is 3 segments:
+
+| Step | Value | Mask (segment 0 first) | Meaning |
+|---|---|---|---|
+| `1 << 3` | 8 | `0001000` | a single 1, three places up |
+| `− 1` | 7 | `1110000` | subtracting 1 turns it into three 1s at the bottom |
+| `<< 2` | 28 | `0011100` | slide them up to start at Agra: segments 2, 3 and 4 |
+
+The berth can take the journey exactly when `mask & need = 0` (no segment both sold and wanted);
+booking it is `mask = mask | need`; cancelling it is `mask = mask & ~need`.
 
 <Figure caption="Berth 23 is sold New Delhi–Agra and Bhopal–Nagpur. Agra–Bhopal ANDs to zero and fits; Mathura–Gwalior collides on one segment. One AND instruction answers 'is this berth free for this journey'.">
   <SegmentMask />
@@ -148,7 +186,48 @@ pull in opposite directions.
 
 Every correct booking does three things: find a berth whose mask fits, set the bits, insert the
 passenger rows. The question is how to stop two transactions from both finding the same berth
-free.
+free. That needs three database ideas, which the separate page on locking covers in depth and which
+are worth having straight before the strategies.
+
+**A transaction** groups statements so that they all commit or none do. It does not, by itself,
+stop other transactions from changing what you read. At the default isolation level of PostgreSQL
+(**read committed**), every statement sees the data committed at the moment it starts, so between
+your `SELECT` and your `UPDATE` another transaction can commit a change to the same row, and your
+`UPDATE` will not notice unless you make it check.
+
+**A row lock** is a mark the database puts on a row on behalf of one transaction, held until that
+transaction commits or rolls back. An `UPDATE` takes it automatically on every row it changes.
+`SELECT ... FOR UPDATE` takes the same lock while reading. Any other transaction that tries to
+update or lock that row **waits** until the lock is released. A plain `SELECT` takes no lock and
+waits for nobody: in PostgreSQL and MySQL InnoDB, readers never block writers and writers never
+block readers.
+
+**Pessimistic and optimistic locking** are two bets about collisions, built from those pieces:
+
+- **Pessimistic** bets that a collision is likely, so it locks the row *before* reading the value it
+  will decide on (`SELECT ... FOR UPDATE`). The second transaction queues behind the first and,
+  when its turn comes, reads the new value. Nobody ever decides on stale data; the price is
+  waiting.
+- **Optimistic** bets that a collision is rare, so it reads without a lock and checks at write time
+  that nothing it depended on has changed. The classic check is a **version column**:
+  `UPDATE berth SET mask = ..., version = 8 WHERE id = 23 AND version = 7` changes one row if the
+  berth is still at version 7, and zero rows if someone else committed version 8 in between. Zero
+  rows means "you lost; read again and retry". Nobody waits; the price is retries.
+
+<Figure caption="The same two transactions, three ways. Without locking, both read 'free' and both commit: a lost update. Pessimistic: the second waits for the lock and then sees the berth sold. Optimistic: both read, both try a conditional write, and the second learns from '0 rows' that it lost.">
+  <TwoTransactions />
+</Figure>
+
+| | Pessimistic | Optimistic |
+|---|---|---|
+| Lock taken | Before reading, until commit | Only during the final `UPDATE`, until commit |
+| The loser | Waits, then reads the new value | Gets 0 rows, re-reads and retries |
+| Cheap when | Collisions are frequent and the work inside is short | Collisions are rare |
+| Hurts when | Work inside the lock is slow: the queue grows; multi-row locks can deadlock | Many requests want the same row: retries pile up and repeat work |
+
+The booking problem sits in the awkward middle: at most times of day collisions are rare, and at
+10:00:00 thousands of transactions want the same few hundred rows. Keep that table in mind for the
+four strategies below.
 
 **Wrong: read, work, write.** Read a fitting berth, compute the fare and build passenger rows, then
 write `mask = mask | need`. Under the default isolation level of PostgreSQL and MySQL (read
@@ -162,14 +241,15 @@ There are four correct ways to write the transaction. Here they are racing on th
 
 <LockRaceSim />
 
-**1. Lock the coach (or the class).** `SELECT ... FROM berth WHERE coach = 'B2' FOR UPDATE` locks
+**1. Lock the coach (pessimistic).** `SELECT ... FROM berth WHERE coach = 'B2' FOR UPDATE` locks
 every row the query reads; the next transaction blocks until the first commits. Never oversells,
 and is the first thing most people write. Its cost is that the coach becomes a single-file queue:
 with 15 ms of work inside the transaction, the 12th request waits about 165 ms before it even
 starts, and at Tatkal volume the queue grows faster than it drains. The lock scope is the whole coach for a decision
 that touches one row.
 
-**2. Conditional update.** Do the slow work first, then make the check and the take one statement:
+**2. Conditional update (optimistic).** Do the slow work first, then make the check and the take one
+statement:
 
 ```sql
 UPDATE berth SET mask = mask | $need
@@ -177,7 +257,11 @@ WHERE train_date = $1 AND coach = $2 AND berth_no = $3
   AND mask & $need = 0;          -- 1 row: it is yours. 0 rows: someone beat you; pick again.
 ```
 
-This is the conditional-update form of **optimistic concurrency**. It is safe under read committed
+This is optimistic locking with a better check than a version column. A version column fails the
+write whenever *anything* on the berth changed, including a booking of different segments, Mathura
+to Agra, that does not touch ours at all. The condition `mask & $need = 0` fails only if one of
+*our* segments was taken in between, so unrelated bookings on the same berth never cause a retry.
+It is safe under read committed
 for a reason worth knowing: in PostgreSQL, when an `UPDATE` finds that the row was changed by a
 transaction that committed after its snapshot, it re-evaluates the `WHERE` clause against the new
 version of the row before updating it; in MySQL InnoDB, `UPDATE` always reads the latest committed
@@ -188,8 +272,8 @@ is held only from the `UPDATE` to `COMMIT`, which is microseconds if nothing slo
 between. The cost shows in the sim: everyone's first choice is the same "best" berth, so the losers
 retry, and retries grow with the number of concurrent requests for the same journey.
 
-**3. `FOR UPDATE SKIP LOCKED`.** Ask for a free berth and lock it, skipping rows other transactions
-have locked:
+**3. `FOR UPDATE SKIP LOCKED` (pessimistic, without the queue).** Ask for a free berth and lock it,
+skipping rows other transactions have locked instead of waiting for them:
 
 ```sql
 SELECT coach, berth_no FROM berth
@@ -205,19 +289,33 @@ someone else, the query returns nothing, so a request can be told "sold out" whi
 have had is held by a transaction that is about to roll back. And the berth you get is "the first
 unlocked one", not the best one, which matters a lot in the next section.
 
-**4. A single writer per train-date.** Route every write for one train and date to one thread that
-owns that shard's masks in memory, and append each decision to a durable log before replying. No
-row locks exist, because nothing else can write. The arithmetic: an allocation is a scan of a few
-hundred integers, around a microsecond or two; one thread could do hundreds of thousands per second,
-and the whole train has 1,300 berths. The bottleneck becomes the durable write, which you batch:
-fsync every 2 ms with all decisions made in that window (**group commit**), so 500 bookings cost
-one disk flush. Failover needs a standby that replays the log. This is the design we would choose
+**4. A single writer per train-date (no locks at all).** Locks exist because many threads may
+change the same rows at once. Remove that and the locks go with it: route every write for one train
+and date to one thread that owns that shard's masks in memory, and let it process requests one at a
+time from a queue. No two decisions can interleave, so there is nothing to lock.
+
+Memory alone is lost in a crash, so before replying "booked", the thread appends the decision to a
+**durable log**: a file of decisions in order, from which the masks can be rebuilt by replaying it.
+"Durable" has a precise meaning. Writing to a file only puts the bytes in the operating system's
+memory; they reach the disk later. The system call `fsync` forces them onto the disk and waits until
+the disk confirms, which takes far longer than a mask scan. The arithmetic: an allocation is a scan
+of a few hundred integers, around a microsecond or two, so one thread could decide hundreds of
+thousands of bookings a second, and the whole train has 1,300 berths. The bottleneck is the fsync.
+The fix is **group commit**: collect every decision made in the last 2 ms, write them together, call
+fsync once, then reply to all of them. If 500 bookings arrive in those 2 ms, they cost one disk
+flush instead of 500, and each waits at most 2 ms longer. For failover, a standby server reads the
+same log and replays it, so it holds the same masks and can take over. This is the design we would choose
 for the shard in the architecture diagram, because the contention is naturally per train and this
 removes it rather than managing it.
 
-**What about `SERIALIZABLE`?** At the serializable level, PostgreSQL's serializable snapshot
-isolation would catch the read-work-write race itself and abort one of the two transactions with a
-serialization failure. It is correct, and it lets you write the naive code. The cost appears under
+**What about `SERIALIZABLE`?** **Serializable** is the strictest isolation level: the database
+promises that the result of running transactions concurrently equals the result of running them
+one after another in some order. PostgreSQL keeps that promise with serializable snapshot
+isolation: it lets transactions run without blocking, records which rows each one read and wrote,
+and at commit aborts any transaction whose reads and writes cannot fit into a one-at-a-time order.
+Two bookings that both read berth 23 as free and both wrote it cannot be put in any order (whichever
+went second would have seen the berth sold), so one of them is aborted with a serialization
+failure. It is correct, and it lets you write the naive code. The cost appears under
 exactly this workload: every transaction that read the same coach is a conflict candidate, so at
 10:00 most of them abort and retry, and each retry repeats the slow work. Serializable is a good
 default for low-contention business logic; for a known hot spot, an explicit conditional update
@@ -247,8 +345,10 @@ clears the bits in a new short transaction. Locks are for milliseconds; holds ar
 The lock strategies above decide *whether* two requests collide. Allocation decides *which* berth
 each one gets, and it has three goals that conflict.
 
-**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it,
-like a best-fit memory allocator. A Mathura–Agra passenger should go on a berth that is already sold
+**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it.
+This is the **best-fit** rule that memory allocators use: given free gaps of 8 KB, 3 KB and 20 KB,
+a 3 KB request goes into the 3 KB gap, so the 20 KB gap stays whole for a large request later.
+Here the gaps are runs of free segments on each berth. A Mathura–Agra passenger should go on a berth that is already sold
 New Delhi–Mathura and Agra onwards, not on an empty berth, which it would split into two shorter
 pieces nobody may want. Here is the cost of ignoring it, on the same journeys:
 
@@ -350,8 +450,13 @@ date, and on keeping the read side close to the truth.
 ([All India Radio, 2024](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days)).
 With a few thousand reserved train services a day (illustrative), that is a few hundred thousand
 live train-dates at any time, each a few hundred kilobytes of masks and waitlists. That fits in the
-memory of a modest cluster. Map train-dates to shards with consistent hashing, so adding a shard
-moves only a small share of them, and keep a routing table that the booking servers cache.
+memory of a modest cluster. The obvious mapping, `hash(train-date) mod N`, has a flaw: change N
+from 4 shards to 5 and the remainder changes for about four in five train-dates, so most of them
+move at once. **Consistent hashing** avoids that. Picture the range of hash values as a circle;
+each shard is placed at a few points on it, and each train-date belongs to the next shard point
+clockwise from its own hash. Adding a fifth shard only takes over the train-dates that now fall right
+before its new points, about one in five, and the rest stay put. Keep the result in a routing table
+that the booking servers cache.
 
 **Hot shards are expected, not a bug.** At 10:00 the train-dates for tomorrow's popular trains are
 hot, and everything else is quiet. Because each train-date is one owner, a hot one cannot be split
@@ -361,7 +466,8 @@ landing on one weak shard; assign tomorrow's known popular trains to separate sh
 before, which the railway can do because it knows its own timetable.
 
 **Keeping the read model fresh.** The shard publishes every committed change (berth, bits, quota)
-to a change stream. The read model applies them and recomputes availability only for the journeys
+to a **change stream**: an ordered feed of changes that other systems can read from, such as a
+Kafka topic or the database's own change log. Here it can be the durable log itself. The read model applies them and recomputes availability only for the journeys
 people actually search: computing all 780 station pairs per class per train on every change is
 wasted work, while computing "AGC→BPL, 3A, TQ" when someone searches it, then caching it for a
 second or two, costs one scan. Under the Tatkal spike, the cache absorbs thousands of identical
@@ -398,9 +504,11 @@ room.
 ### Payments: when money leaves but no ticket arrives
 
 The berth is in the railway's database; the money is in the passenger's bank. No transaction spans
-both, so the booking is a small **saga**: hold the berth (local commit), take the payment (remote),
-confirm or release (local commit), with a refund as the compensation when the last step cannot
-happen.
+both. When one business action spans systems that cannot share a transaction, the pattern is a
+**saga**: a sequence of steps, each committed on its own, where every step that can be undone has a
+**compensating step** that undoes it if a later step fails. The booking is a small saga: hold the
+berth (local commit), take the payment (remote), confirm or release (local commit), with a refund as
+the compensation when the last step cannot happen.
 
 <Figure caption="The hold and the payment run on two clocks. If the bank's confirmation lands after the hold expired and the bits were given to someone else, money has moved and the berth has not, until reconciliation settles it.">
   <PaymentGap />

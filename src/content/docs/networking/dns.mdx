@@ -6,7 +6,7 @@ difficulty: intermediate
 track: networking
 prerequisites: [how-the-web-works]
 next: [tcp-vs-udp, tls, cdn-and-edge-caching, load-balancing, service-discovery, caching-strategies]
-lastReviewed: 2026-10-22
+lastReviewed: 2026-10-23
 sidebar:
   order: 1
 ---
@@ -34,15 +34,51 @@ differently, and which numbers decide it?
 
 The answer is that a DNS answer is a **lease**: a copy that a cache may keep for a fixed time, that
 you cannot revoke, and that every layer between you and the user may shorten, stretch or ignore.
-This page assumes the lookup walk from the root down and starts where it stops: what happens to those leases
-during migrations, outages and load balancing.
+The next section sets out what a lease is made of, in one pass; the rest of the page is about what
+happens to those leases during migrations, outages and load balancing.
 
 ## Why this problem exists
 
-An **authoritative server** holds the real records for a zone. A **recursive resolver** (your
-ISP's, `1.1.1.1`, `8.8.8.8`, CoreDNS in a cluster) answers users by asking authoritative servers
-and caching what it learns for the record's **TTL** (time to live, in seconds). That cache is the
-whole reason DNS scales, and it means the authoritative server only ever sees cache misses.
+DNS data lives in **zones**. A zone is the part of the name tree that one operator runs from one set
+of servers: `example.in` and every name under it. Each piece of data in a zone is a **record**,
+written one per line with five fields:
+
+```text title="one record, in zone-file form"
+shop.example.in.   300   IN      A      192.0.2.10
+; name             TTL   class   type   value
+```
+
+The type says what the value means: `A` is an IPv4 address, `AAAA` an IPv6 one, `CNAME` says "this
+name is an alias, ask for that other name instead", `NS` names the servers that run a zone, `SOA`
+holds the zone's own settings and `TXT` is free text. The class is always `IN`. All records with the
+same name and type, say three `A` records for `shop`, form one set that is fetched, cached and
+expired as a unit. The **TTL** (time to live) is how many seconds anyone who receives that set may
+keep using it without asking again.
+
+Two kinds of server handle records. An **authoritative server** holds a zone's records and answers
+only for its own zones; it never asks anyone else. A **recursive resolver** holds no zones: it is
+the server your machine is configured to ask (your ISP's, `1.1.1.1`, `8.8.8.8`, CoreDNS in a
+cluster), and it finds answers by asking authoritative servers and caching what it learns. Your
+program talks to neither directly. It calls the operating system's `getaddrinfo()`, a small library
+(the *stub resolver*) that sends the question to the resolver listed in `/etc/resolv.conf` and
+returns the addresses.
+
+A resolver with an empty cache, asked for `shop.example.in`, starts at the root, whose server
+addresses it ships with, and follows **referrals**: replies that say "not mine, ask these servers".
+
+| Step | Resolver asks | Reply |
+|---|---|---|
+| 1 | a root server | a referral: "ask the `.in` servers" |
+| 2 | a `.in` server | a referral: "ask `ns1.example.in`, at 192.0.2.53" |
+| 3 | `ns1.example.in` | the answer: `192.0.2.10`, TTL 300 |
+
+Referrals are cached too, for their own TTLs (the root hands out its referrals with 172,800 s, two
+days), so the next lookup for any `.in` name starts at step 2. A second user who asks the same
+resolver for `shop.example.in` 120 seconds later gets the answer from memory, with a TTL of 180: a
+resolver hands on only the time its copy has left. That user waits only for the round trip to the
+resolver (12–20 ms from our test network to `1.1.1.1`, against 105–141 ms for a miss), and `ns1`
+never hears about them, or about the next ten thousand, until the 300 seconds run out. That cache is
+the whole reason DNS scales, and it means the authoritative server only ever sees cache misses.
 
 So one number sets the load on your name servers. Each cache asks at most once per TTL, so a
 popular name costs about *number of caches ÷ TTL* queries. With 5,000 resolver caches asking for
@@ -178,7 +214,9 @@ seconds" so often ends with traffic on the old server an hour later.
 ### What each layer does to a TTL
 
 **Resolvers cap TTLs, in both directions.** Resolver software clamps positive and negative TTLs to
-configured limits. Defaults, as of October 2026:
+configured limits. A *negative* TTL is how long a resolver keeps a "no such name" answer, and
+*serve-stale* means answering from an expired copy when the authoritative servers cannot be reached;
+each has its own section below. Defaults, as of October 2026:
 
 | Resolver | Longest positive TTL kept | Longest negative TTL kept | Serve-stale |
 |---|---|---|---|
@@ -251,8 +289,14 @@ as many queries. That is why the TTL goes back up once the move is done. The ful
    is pinned clients: find them in its access log.
 5. Switch it off and raise the TTL again.
 
-**Changing name servers is slower still**, because the delegation lives in two places. The parent
-zone holds NS records that point to your provider, and your own zone holds its own copy:
+**Changing name servers is slower still.** Look inside the referral from step 2 above. A parent
+zone does not store your records. Where `example.in` begins, the `.in` zone stores only a
+**delegation**: NS records naming the servers that run the child zone. When those servers have
+names inside the child zone, there is a loop: to find the address of `ns1.example.in` you must ask
+the `example.in` servers, which means `ns1`. So the parent also hands out their addresses, called
+**glue**. (A zone hosted at a DNS provider names the provider's servers, which live in the
+provider's own zone, so it needs no glue.) The delegation therefore lives in two places: the parent
+zone holds NS records that point to your servers, and your own zone holds its own copy:
 
 <Figure caption="The parent zone holds only the delegation: NS records and the glue address of a name server inside the child zone. The child zone holds the real records, including its own copy of the NS records. The two copies have separate TTLs and can disagree.">
   <Delegation />
@@ -268,18 +312,37 @@ for at least two days, and update the NS records in both zones.
 
 ### Negative caching: "no" is cached, and so is "I could not find out"
 
-A resolver that asks for a name that does not exist gets one of two negative answers:
+Every DNS reply starts with a header carrying a **result code**, the way an HTTP response carries a
+status, followed by sections, among them the *answer* (records for the question) and the
+*authority* (records about who is responsible). Three codes matter here: NOERROR (0), SERVFAIL (2, "I could not get an
+answer") and NXDOMAIN (3, "no such name"). A resolver that asks for a name that does not exist gets
+one of two negative answers:
 
 - **NXDOMAIN** (result code 3): the name does not exist, for any type.
 - **NODATA**: the name exists but has no records of the type asked for. There is no code for it:
   the answer is NOERROR with an empty answer section.
 
-Both carry the zone's SOA record, and the resolver caches the "no" for the smaller of the SOA
-record's TTL and its last field, the *minimum*
-([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308)), capped by its own limit from the table
-above. Real values are long: in October 2026, `example.com` allowed a negative answer to be cached
-for 1,800 s and `wikipedia.org` for 3,600 s. Our toy zone uses 5 seconds; the demo asks for a name
-a moment before the operator creates it:
+Caching "no" exists because most of these questions repeat: typos, scanners, retries, and the
+search-suffix lookups covered under Kubernetes below would otherwise all be cache misses. A "no"
+has no record to carry a TTL, so it borrows one from the zone's **SOA** (start of authority)
+record. Every zone has exactly one SOA, at its top, holding the zone's settings, and the
+authoritative server puts it in the authority section of every negative answer:
+
+```text title="a negative answer for beta.example.in (illustrative, in dig's format)"
+;; ->>HEADER<<- status: NXDOMAIN
+;; ANSWER SECTION: (empty)
+;; AUTHORITY SECTION:
+example.in.  3600  IN  SOA  ns1.example.in. hostmaster.example.in. 2026102301 7200 900 1209600 300
+; SOA TTL 3600, then: primary server, contact, serial, refresh, retry, expire, minimum (300)
+```
+
+Serial, refresh, retry and expire tell secondary servers when to copy the zone. The last field is
+the *minimum*, and the resolver caches the "no" for the smaller of the SOA record's TTL and that
+minimum ([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308)): here min(3,600, 300) = 300 seconds,
+capped by its own limit from the table above. Many real zones use far longer values: in October
+2026, `example.com` allowed a negative answer to be cached for 1,800 s and `wikipedia.org` for
+3,600 s. Our toy zone uses 5 seconds; the demo asks for a name a moment before the operator
+creates it:
 
 ```text title="python ttl_cache.py (output, part 2)"
 t=4.1s  lookup beta.shop.example.test.: NXDOMAIN, cached for 5.0 s more
@@ -295,12 +358,17 @@ Two less known rules make negative answers reach further than the name you asked
 - **An NXDOMAIN covers everything below it.** If `beta.example.in` does not exist, nothing under it
   can, so a resolver may answer NXDOMAIN for `api.beta.example.in` from that one cached answer
   ([RFC 8020](https://www.rfc-editor.org/rfc/rfc8020)).
-- **In a signed zone, one "no" covers a range of names.** DNSSEC proves non-existence with an
-  **NSEC** record that says "there is nothing between `alpha` and `gamma`". Resolvers that use
-  those proofs aggressively ([RFC 8198](https://www.rfc-editor.org/rfc/rfc8198); on by default
-  since BIND 9.12, per [APNIC](https://blog.apnic.net/2018/02/06/aggressive-nsec-caching-bind-9-12/))
-  answer NXDOMAIN for *any* name in that range without asking. Create `beta` and a resolver that
-  cached the `alpha`–`gamma` proof can deny it to users who never asked for it before.
+- **In a signed zone, one "no" covers a range of names.** DNSSEC, covered at the end of this
+  section, signs records so a resolver can check they came from the zone's owner. A signature can
+  only cover data that exists, so to sign a "no" the zone sorts its names and signs the gaps
+  between them as **NSEC** records. A zone holding `alpha`, `gamma` and `zulu` publishes `alpha
+  NSEC gamma` ("there is nothing between `alpha` and `gamma`") and `gamma NSEC zulu`, and a
+  question about `beta` gets the first one as its proof. Resolvers that use those proofs
+  aggressively ([RFC 8198](https://www.rfc-editor.org/rfc/rfc8198); on by default since BIND 9.12,
+  per [APNIC](https://blog.apnic.net/2018/02/06/aggressive-nsec-caching-bind-9-12/)) answer
+  NXDOMAIN for *any* name in that range without asking: `beta`, `delta` and `fox` all come from
+  that one cached record. Create `beta` and a resolver that cached the `alpha`–`gamma` proof can
+  deny it to users who never asked for it before.
 
 Failures are cached as well. When a resolver cannot get an answer at all (timeouts, SERVFAIL, a
 DNSSEC validation failure), [RFC 9520](https://www.rfc-editor.org/rfc/rfc9520.html) (December
@@ -326,11 +394,15 @@ the share of users failing grows roughly as *time since the outage ÷ TTL*: all 
 TTL.
 
 **Serve-stale** ([RFC 8767](https://www.rfc-editor.org/rfc/rfc8767)) changes that: when the
-authoritative servers cannot be reached, the resolver hands out the expired copy, with a TTL of 30
-seconds so clients ask again soon, and keeps trying to refresh in the background. The RFC suggests
-keeping expired data for one to three days. It is off by default in BIND and Unbound (the table
-above); large public resolvers use some form of it, which is part of why outages look different
-from different networks.
+authoritative servers cannot be reached, the resolver hands out the expired copy instead of an
+error, and keeps trying to refresh in the background. In numbers: a resolver fetched
+`api.example.in` (TTL 300) at 10:00:00, and your name servers went down at 10:03. At 10:06 a user
+asks; the copy expired at 10:05 and the refresh times out. Without serve-stale the user gets
+SERVFAIL. With it, the user gets the old address with a TTL of 30 seconds, so the client asks again
+at 10:06:30, and the same thing repeats until a refresh succeeds or the stale window runs out; the
+RFC suggests keeping expired data for one to three days. It is off by default in BIND and Unbound
+(the table above); large public resolvers use some form of it, which is part of why outages look
+different from different networks.
 
 <OutageSim kind="unreachable" />
 
@@ -369,8 +441,10 @@ Resolvers keep a running round-trip time for each server address and mostly pref
 not exclusively. Unbound picks at random among all servers within 400 ms of the fastest, assumes
 376 ms for a server it knows nothing about, and remembers what it learned for 15 minutes
 ([Unbound docs](https://unbound.docs.nlnetlabs.nl/en/latest/reference/history/info-timeout-server-selection.html)).
-Measured across the internet, most resolvers send some queries to every listed name server over
-time, and only about half show a preference for the faster ones
+With three name servers measured at 20, 90 and 600 ms, the band runs up to 420 ms: queries are
+spread at random over the first two, and the 600 ms server gets none until Unbound forgets its
+measurement and tries it again. Measured across the internet, most resolvers send some queries to
+every listed name server over time, and only about half show a preference for the faster ones
 ([Müller et al., IMC 2017](https://ant.isi.edu/~johnh/PAPERS/Mueller17b.pdf)).
 
 Three consequences:
@@ -431,25 +505,39 @@ location sees where the *question* came from:
 </Figure>
 
 A user in Chennai whose public resolver reaches you from Singapore is sent to Singapore. **EDNS
-Client Subnet** (ECS, [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871)) lets the resolver pass on
-the first 24 bits of the user's IPv4 address, which fixes the answer and splits the cache: each
-answer is now valid only for one subnet. One CDN's measurements found the cache needed for ECS
-answers grew by up to an order of magnitude, with hit rates under half of the normal ones
+Client Subnet** (ECS, [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871)), one of the optional
+extras a query can carry (EDNS, explained in the next section), lets the resolver pass on the first
+24 bits of the user's IPv4 address: for a user at 198.51.100.86 it sends `198.51.100.0/24`. That
+fixes the answer and splits the cache: each answer is now valid only for one subnet, so a resolver
+serving users from 1,000 subnets may hold 1,000 copies of one name. One CDN's measurements found
+the cache needed for ECS answers grew by up to an order of magnitude, with hit rates under half of the normal ones
 ([Al-Dalky, Rabinovich and Schomp, 2019](https://akamai.com/site/en/documents/research-paper/a-look-at-the-ecs-behavior-of-dns-resolvers.pdf)).
 Use DNS to pick a region; let a load balancer pick the server.
 
 ### Size limits: UDP, truncation and TCP
 
-DNS answers travel over UDP on port 53 by default, one packet each way. The original standard
-capped UDP answers at 512 bytes. **EDNS(0)** ([RFC 6891](https://www.rfc-editor.org/rfc/rfc6891))
-lets the client advertise a bigger buffer, but packets above the path's limit get split into IP
-fragments, which many networks drop and which have been used to inject forged data. Since
-[DNS Flag Day 2020](https://www.dnsflagday.net/2020/) major resolvers advertise 1,232 bytes: IPv6's
-guaranteed 1,280-byte packet minus 48 bytes of headers.
+DNS answers travel over UDP on port 53 by default: one packet for the question, one for the
+answer, no connection. The original standard capped UDP answers at 512 bytes, which is plenty for
+addresses: an answer with one A record measured 72 bytes in our tests. **EDNS(0)**
+([RFC 6891](https://www.rfc-editor.org/rfc/rfc6891)) is the extension mechanism added later. The
+client appends a small pseudo-record, OPT, to its query, and one of its fields says how large a UDP
+answer the client can accept; `dig` prints it as `; EDNS: version: 0, flags: do; udp: 1232`, where
+`do` asks for DNSSEC signatures and `udp: 1232` is the buffer size. ECS above travels in the same
+OPT record.
+
+A bigger buffer has a catch. A packet larger than a link can carry (1,500 bytes on Ethernet, less
+over tunnels and VPNs) is split into IP **fragments** that travel separately and are put back
+together at the end. Lose one fragment and the whole answer is lost. Only the first fragment
+carries the UDP ports, so many firewalls drop the rest, and an attacker who times it right can
+substitute a forged later fragment. Since [DNS Flag Day 2020](https://www.dnsflagday.net/2020/)
+major resolvers advertise 1,232 bytes, a size that never needs fragmenting: IPv6 guarantees that
+every link carries 1,280-byte packets, minus 40 bytes of IPv6 header and 8 of UDP header.
 
 An answer that does not fit is not sent in part. The server replies with only the header and the
 **TC** (truncated) flag, and the client asks again over TCP, which costs at least one more round
-trip for the TCP handshake. What pushes answers past the line:
+trip for the TCP handshake. What pushes answers past the line is mostly DNSSEC, the next section:
+a zone's public keys (its DNSKEY set) are large with RSA keys, and while a key is being replaced the
+old and new keys are published together.
 
 <Figure caption="Answer sizes against the two UDP limits. Plain address records are tiny; signed key sets with RSA keys cross 1,232 bytes, especially during a key rollover when two keys are published; long TXT records cross it by far. Everything right of the red line needs TCP.">
   <SizeBudget />
@@ -475,14 +563,38 @@ of addresses, no long TXT records on the name your API clients look up.
 ### DNSSEC: what it buys and what it costs
 
 Without signatures, a resolver accepts any answer whose 16-bit ID, source port and question match
-its query. An attacker who gets a forged answer accepted poisons that cache for every user of it,
-for the whole TTL. **DNSSEC** ([RFC 4033](https://www.rfc-editor.org/rfc/rfc4033)) signs each set
-of records (an **RRSIG** made with the zone's **DNSKEY**), and each parent vouches for its child's
-key with a **DS** record, down from the root's key, which validating resolvers have built in:
+its query. An attacker who knows a resolver is about to ask can flood it with forged replies, each
+guessing a different ID and port out of 65,536 IDs times tens of thousands of ports. One hit
+poisons that cache for every user of it, for the whole TTL.
+
+**DNSSEC** ([RFC 4033](https://www.rfc-editor.org/rfc/rfc4033)) adds public-key signatures. A zone
+has a key pair: the private key stays with whoever signs the zone, and the public key is published
+in the zone as a **DNSKEY** record. Each record set gets a signature, an **RRSIG** record, computed
+over the set with the private key; anyone holding the public key can check that the set is exactly
+what the owner signed. A signed answer arrives as the set plus its signature:
+
+```text title="a signed answer (illustrative, in dig's format, signature shortened)"
+shop.example.in.  300  IN  A      192.0.2.10
+shop.example.in.  300  IN  RRSIG  A 13 3 300 20261106000000 20261023000000 41520 example.in. Mg5r...
+;                                 ^ covers the A set, algorithm 13 (ECDSA P-256),
+;                                   valid 23 Oct to 6 Nov 2026, made with key 41520 of example.in
+```
+
+That leaves one question: why trust the DNSKEY? Whoever can forge the A record can forge a key too.
+So the parent vouches for it. The `.in` zone publishes a **DS** record holding a hash of
+`example.in`'s key and signs it with its own key; `.in`'s key is vouched for by a DS in the root;
+and the root's key is built into every validating resolver. Checking a name means walking that
+chain:
 
 <Figure caption="Each parent publishes a hash of its child's key, and each zone signs its own records. A validating resolver checks every link from the root down; if any link fails, it answers SERVFAIL rather than an answer it cannot verify.">
   <DnssecChain />
 </Figure>
+
+Keys are replaced from time to time, a **key rollover**: publish the new DNSKEY next to the old
+one, wait at least one DNSKEY TTL so every cache holds both, sign with the new key, and remove the
+old one later. Most zones run two keys. The key-signing key (**KSK**) signs only the zone's DNSKEY
+set and is the one the parent's DS points to, so replacing it means changing the DS at the parent;
+the zone-signing key signs everything else and can be replaced without the parent.
 
 It protects only users whose resolver validates: in 2025 about 36% of users sat behind
 validating resolvers, while only about 7% of domains had a signed delegation
@@ -497,19 +609,19 @@ What it costs:
   validating resolver's users, while every server is up. On 5 May 2026 DENIC, the `.de` registry,
   rolled its signing key with a new system that generated a different key on each of three
   hardware security modules but published only one. Validating resolvers returned SERVFAIL for
-  `.de` names, including unsigned domains, whose proofs of being unsigned also failed, and the
+  `.de` names, including unsigned domains (for those, `.de` serves a signed proof that no DS record
+  exists, an NSEC-style "no" like the ones above, and those signatures failed too), and the
   failure grew for about three hours as cached answers expired, until operators such as Cloudflare
   switched validation off for `.de` ([DENIC](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/),
-  [Cloudflare](https://blog.cloudflare.com/de-tld-outage-dnssec/)). The foundations page covers
-  Slack's 2021 version of the same trap, where a DS record cached for 24 hours outlived a rollback.
+  [Cloudflare](https://blog.cloudflare.com/de-tld-outage-dnssec/)).
 - **Validation itself can be attacked.** KeyTrap (CVE-2023-50387, patched in February 2024) was a
   flaw in the specification: a zone with many keys and signatures made the validator try every
   combination, and one crafted packet could stall BIND for up to 16 hours
   ([ISC advisory](https://kb.isc.org/docs/cve-2023-50387),
   [research paper](https://arxiv.org/pdf/2406.03133)).
 
-The root key itself was replaced this month: as of October 2026, KSK-2024 signs the root zone from
-11 October 2026 ([ICANN](https://www.icann.org/resources/pages/ksk-rollover-en)).
+The root's own KSK was replaced this month: as of October 2026, KSK-2024 signs the root's key set
+from 11 October 2026 ([ICANN](https://www.icann.org/resources/pages/ksk-rollover-en)).
 
 :::note[From the trenches]
 If you sign, sign through a DNS provider that automates key rollovers, use ECDSA P-256 (algorithm
@@ -526,7 +638,7 @@ Almost every DNS decision an application team makes is a TTL. Where I would star
 |---|---|---|
 | API or app endpoint you control | 300 s; 60 s from one old TTL before planned work | Moves are planned; load and outage survival matter the rest of the time |
 | Health-checked failover or weighted records | 30–60 s | Their whole job is to change fast; pay the query cost |
-| Apex and `www` behind a CDN | whatever the CDN sets, often 300 s | The CDN's own names change behind it |
+| Apex (`example.in` itself) and `www` behind a CDN | whatever the CDN sets, often 300 s | The CDN's own names change behind it |
 | MX, TXT, CAA, verification records | 1 hour to 1 day | Rarely change; long TTLs ride out a provider outage |
 | NS records in your own zone | 1–2 days, to match the parent | Short child NS TTLs only add load |
 | SOA minimum (negative TTL) | 60–300 s | A name tested too early heals within minutes |
