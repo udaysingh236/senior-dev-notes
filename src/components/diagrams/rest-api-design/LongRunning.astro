@@ -1,0 +1,44 @@
+---
+// A long-running operation: the server answers 202 with an operation to poll, instead of holding
+// the request open past every timeout on the path.
+const steps = [
+  { from: 'c', label: 'POST /reports', y: 64 },
+  { from: 's', label: '202, Location: /operations/7', y: 104 },
+  { from: 'c', label: 'GET /operations/7', y: 158 },
+  { from: 's', label: '200 done: false, 40%', y: 198 },
+  { from: 'c', label: 'GET /operations/7 (later)', y: 252 },
+  { from: 's', label: '200 done: true, /reports/91', y: 292 },
+];
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="rad-lr-t rad-lr-d">
+  <title id="rad-lr-t">A long-running operation with 202 and polling</title>
+  <desc id="rad-lr-d">
+    A client on the left and a server on the right. The client sends POST /reports. The server
+    answers at once with 202 Accepted and a Location header pointing to /operations/7. The client
+    polls GET /operations/7 and gets done false with progress 40. Later it polls again and gets done
+    true with a link to the result, /reports/91.
+  </desc>
+  <defs>
+    <marker id="rad-lr-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  <g font-size="17" font-weight="700" text-anchor="middle">
+    <rect x="4" y="4" width="96" height="36" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="52" y="28" style="fill: var(--viz-ink)">client</text>
+    <rect x="290" y="4" width="96" height="36" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="338" y="28" style="fill: var(--viz-ink)">server</text>
+  </g>
+  <line x1="52" y1="42" x2="52" y2="320" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  <line x1="338" y1="42" x2="338" y2="320" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  {
+    steps.map((s) => (
+      <g>
+        <line x1={s.from === 'c' ? 54 : 336} y1={s.y} x2={s.from === 'c' ? 332 : 58} y2={s.y} stroke-width="2"
+          stroke-dasharray={s.from === 's' ? '6 4' : undefined} style="stroke: var(--viz-flow)" marker-end="url(#rad-lr-a)" />
+        <text x="58" y={s.y - 8} font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{s.label}</text>
+      </g>
+    ))
+  }
+</svg>

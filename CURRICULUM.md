@@ -39,7 +39,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 2 | TCP vs UDP | tcp-vs-udp | 59 | published (2026-10-18) |
 | 3 | TLS and encryption in transit | tls | 49, 51 | published (2026-10-18) |
 | 4 | HTTP/1.1 → HTTP/2 → HTTP/3 | http-evolution | 58 | planned |
-| 5 | REST API design | rest-api-design | new | planned |
+| 5 | REST API design | rest-api-design | new | published (2026-10-23) |
 | 6 | API versioning | api-versioning | 77 | planned |
 | 7 | Pagination | pagination | new | planned |
 | 8 | gRPC | grpc | 57 | planned |
