@@ -1,0 +1,35 @@
+---
+// Little's law as a box: what goes in per second, how long each stays, how many are inside.
+const dots = Array.from({ length: 20 }, (_, i) => ({ cx: 128 + (i % 10) * 15, cy: 64 + Math.floor(i / 10) * 18 }));
+---
+
+<svg viewBox="0 0 400 252" width="100%" role="img" aria-labelledby="lvt-ll-t lvt-ll-d">
+  <title id="lvt-ll-t">Little's law: in flight equals throughput times latency</title>
+  <desc id="lvt-ll-d">
+    Requests enter a box on the left at 1,000 a second and leave on the right; each stays 200 ms
+    inside. The box holds 200 requests at any moment: 1,000 per second times 0.2 seconds. Below,
+    the same law used for sizing: 200 requests in flight need 200 threads or connections, and a
+    pool of 50 connections with 20 ms queries can do at most 2,500 queries a second.
+  </desc>
+  <defs>
+    <marker id="lvt-ll-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  <rect x="112" y="44" width="176" height="52" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  {dots.map((d) => <circle cx={d.cx} cy={d.cy} r="5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="1.5" />)}
+  <line x1="16" y1="70" x2="106" y2="70" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lvt-ll-a)" />
+  <line x1="294" y1="70" x2="384" y2="70" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lvt-ll-a)" />
+  <g font-size="15" style="fill: var(--viz-ink)">
+    <text x="16" y="58">1,000/s in</text>
+    <text x="300" y="58">1,000/s out</text>
+    <text x="200" y="118" text-anchor="middle">each stays 200 ms</text>
+    <text x="200" y="36" text-anchor="middle" font-weight="700">200 inside at any moment</text>
+  </g>
+  <rect x="4" y="134" width="392" height="44" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="162" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">in flight = throughput × latency</text>
+  <g font-size="15" style="fill: var(--viz-muted)">
+    <text x="4" y="206">1,000/s × 0.2 s = 200 threads busy</text>
+    <text x="4" y="230">50 connections ÷ 0.02 s = at most 2,500 queries/s</text>
+  </g>
+</svg>

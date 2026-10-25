@@ -1,0 +1,35 @@
+---
+// Closed load test: each virtual user waits for its response before sending again, so a slow
+// server is sent less. Open: requests arrive on schedule regardless.
+const ticks = (xs: number[]) => xs;
+const closedFast = ticks([10, 40, 70, 100, 130, 160, 190, 220, 250, 280, 310, 340, 370]);
+const closedSlow = ticks([10, 100, 190, 280, 370]);
+const open = ticks([10, 40, 70, 100, 130, 160, 190, 220, 250, 280, 310, 340, 370]);
+---
+
+<svg viewBox="0 0 400 252" width="100%" role="img" aria-labelledby="lvt-oc-t lvt-oc-d">
+  <title id="lvt-oc-t">Closed and open load tests when the server slows down</title>
+  <desc id="lvt-oc-d">
+    Three timelines of requests sent by a load tester. Closed model, server fast: thirteen requests in
+    the window. Closed model, server three times slower: only five, because each virtual user waits
+    for its slow response before sending the next, so the test backs off exactly when the server
+    struggles and the measured latency stays low. Open model, server slow: still thirteen requests
+    on schedule; they queue, and the measured latency shows the real slowdown.
+  </desc>
+  {
+    [
+      { label: 'closed, server fast', xs: closedFast, y: 40, tone: 'ok' },
+      { label: 'closed, server slow', xs: closedSlow, y: 108, tone: 'warn' },
+      { label: 'open, server slow', xs: open, y: 176, tone: 'bad' },
+    ].map((r) => (
+      <g>
+        <text x="4" y={r.y - 12} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{r.label}: {r.xs.length} sent</text>
+        <line x1="4" y1={r.y + 14} x2="392" y2={r.y + 14} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+        {r.xs.map((x) => (
+          <rect x={x} y={r.y} width="16" height="28" rx="3" stroke-width="1.5" style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+        ))}
+      </g>
+    ))
+  }
+  <text x="4" y="244" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">closed tests send less exactly when it matters</text>
+</svg>

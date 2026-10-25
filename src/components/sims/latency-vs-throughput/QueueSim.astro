@@ -1,0 +1,19 @@
+---
+// One server, random arrivals: latency against utilisation. See queue-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="queue-latency"
+  title="One server, random arrivals: where the latency comes from"
+  description="At the top, requests waiting in a queue in front of one server that takes 10 ms per request on average. Below, a chart of mean latency against utilisation: the blue curve is the queueing formula for the current variability, and the amber dot is the mean latency measured in this run so far."
+  watchFor="At 80% utilisation with fully random service times, each request takes about 50 ms on average, five times the 10 ms of work it needs; the rest is waiting. Drag utilisation to 50% and the dot drops to about 20 ms; drag it to 95% and the queue regularly holds 20 or more. Then set variability to 0%: at the same utilisation the waiting roughly halves. The dot is the average since the start of the run, which begins with 30 simulated seconds of warm-up. Under the sim, 'average in system' and 'throughput × latency' stay equal: that is Little's law."
+  viewBox="0 0 400 320"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createQueueModel } from './queue-model';
+
+  mountAll('queue-latency', createQueueModel);
+</script>
