@@ -1,0 +1,62 @@
+---
+// The three decisions every cache makes: where it sits, how reads and writes reach it, what it keeps.
+---
+
+<svg viewBox="0 0 400 326" width="100%" role="img" aria-labelledby="cs-ov-t cs-ov-d">
+  <title id="cs-ov-t">The three decisions behind every cache</title>
+  <desc id="cs-ov-d">
+    An app process with an in-process cache sits at the top, a shared remote cache in the middle
+    and the database at the bottom. Decision one is where the cache sits: in the process, about a
+    hundred nanoseconds away, or across the network, a fraction of a millisecond away, in front of
+    a database that answers in milliseconds. Decision two is the path: a read misses down to the
+    database and fills the cache on the way back; a write goes to the database and then tells the
+    cache by deleting, setting or marking the key. Decision three is what stays: when the cache is
+    full, the eviction policy picks a victim and the admission policy decides whether a new key
+    gets in at all.
+  </desc>
+  <defs>
+    <marker id="cs-ov-a-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="cs-ov-a-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+    <marker id="cs-ov-a-warn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+  </defs>
+
+  <!-- app with its in-process cache -->
+  <rect x="96" y="8" width="208" height="70" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="112" y="32" font-size="17" font-weight="700" style="fill: var(--viz-ink)">app</text>
+  <rect x="160" y="40" width="132" height="28" rx="5" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="226" y="59" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">in-process cache</text>
+
+  <!-- remote cache -->
+  <rect x="96" y="132" width="208" height="56" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="157" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">remote cache</text>
+  <text x="200" y="178" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">full: evict, or refuse to admit</text>
+
+  <!-- database cylinder -->
+  <path d="M120 248 v40 a80 12 0 0 0 160 0 v-40" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <ellipse cx="200" cy="248" rx="80" ry="12" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="284" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">database</text>
+
+  <!-- read path: left -->
+  <path d="M118 80 L118 128" stroke-width="2" marker-end="url(#cs-ov-a-flow)" style="stroke: var(--viz-flow)" />
+  <path d="M130 128 L130 80" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#cs-ov-a-ok)" style="stroke: var(--viz-ok)" />
+  <path d="M138 190 L138 234" stroke-width="2" marker-end="url(#cs-ov-a-flow)" style="stroke: var(--viz-flow)" />
+  <path d="M150 234 L150 190" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#cs-ov-a-ok)" style="stroke: var(--viz-ok)" />
+  <text x="4" y="104" font-size="15" style="fill: var(--viz-flow)">read: miss</text>
+  <text x="4" y="122" font-size="15" style="fill: var(--viz-ok)">fill on return</text>
+  <text x="4" y="216" font-size="15" style="fill: var(--viz-flow)">miss</text>
+
+  <!-- write path: right -->
+  <path d="M296 80 C 360 120, 360 220, 282 252" fill="none" stroke-width="2" marker-end="url(#cs-ov-a-flow)" style="stroke: var(--viz-flow)" />
+  <path d="M262 80 L262 128" stroke-width="2" marker-end="url(#cs-ov-a-warn)" style="stroke: var(--viz-warn)" />
+  <text x="396" y="208" font-size="15" text-anchor="end" style="fill: var(--viz-flow)">1 write</text>
+  <text x="270" y="110" font-size="15" style="fill: var(--viz-warn)">2 delete,</text>
+  <text x="270" y="126" font-size="15" style="fill: var(--viz-warn)">set or mark</text>
+
+  <text x="200" y="320" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">where it sits · how reads and writes reach it · what it keeps</text>
+</svg>

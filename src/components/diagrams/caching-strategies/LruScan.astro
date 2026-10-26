@@ -1,0 +1,57 @@
+---
+// An LRU list of eight before and after a batch job reads eight keys once each.
+const before = [
+  { k: 'A', n: '9k' }, { k: 'B', n: '4k' }, { k: 'C', n: '3k' }, { k: 'D', n: '2k' },
+  { k: 'E', n: '2k' }, { k: 'F', n: '1k' }, { k: 'G', n: '900' }, { k: 'H', n: '800' },
+];
+const after = ['s8', 's7', 's6', 's5', 's4', 's3', 's2', 's1'];
+const w = 44;
+const gap = 5.7;
+---
+
+<svg viewBox="0 0 400 262" width="100%" role="img" aria-labelledby="cs-lru-t cs-lru-d">
+  <title id="cs-lru-t">A scan flushes an LRU cache</title>
+  <desc id="cs-lru-d">
+    An LRU cache of eight slots, most recently used on the left. Before: keys A to H, each read
+    hundreds or thousands of times in the last hour. A batch job then reads eight keys, s1 to s8,
+    once each. Every new key is inserted as most recently used and pushes the oldest key out, so
+    after eight reads the cache holds only s1 to s8, which will never be read again, and the next
+    reads of A to H all miss.
+  </desc>
+  <defs>
+    <marker id="cs-lru-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+  <text x="4" y="20" font-size="16" font-weight="700" style="fill: var(--viz-ink)">before: reads in the last hour</text>
+  {
+    before.map((b, i) => {
+      const x = 4 + i * (w + gap);
+      return (
+        <g>
+          <rect x={x} y="32" width={w} height="44" rx="5" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+          <text x={x + w / 2} y="53" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{b.k}</text>
+          <text x={x + w / 2} y="70" font-size="13" text-anchor="middle" style="fill: var(--viz-muted)">{b.n}</text>
+        </g>
+      );
+    })
+  }
+  <text x="4" y="96" font-size="14" style="fill: var(--viz-muted)">most recent</text>
+  <text x="396" y="96" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">next to evict</text>
+  <path d="M100 106 L100 136" stroke-width="1.5" marker-end="url(#cs-lru-a)" style="stroke: var(--viz-muted)" />
+  <text x="112" y="126" font-size="15" style="fill: var(--viz-ink)">batch job reads s1 … s8 once</text>
+  <text x="4" y="160" font-size="16" font-weight="700" style="fill: var(--viz-ink)">after: eight keys nobody will read again</text>
+  {
+    after.map((k, i) => {
+      const x = 4 + i * (w + gap);
+      return (
+        <g>
+          <rect x={x} y="172" width={w} height="44" rx="5" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+          <text x={x + w / 2} y="193" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{k}</text>
+          <text x={x + w / 2} y="210" font-size="13" text-anchor="middle" style="fill: var(--viz-muted)">1</text>
+        </g>
+      );
+    })
+  }
+  <text x="4" y="248" font-size="15" style="fill: var(--viz-bad)">the next reads of A to H all miss</text>
+</svg>

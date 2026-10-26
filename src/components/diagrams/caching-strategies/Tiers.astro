@@ -1,0 +1,41 @@
+---
+// One shared remote cache against one in-process copy per pod.
+const pods = [0, 1, 2, 3, 4];
+---
+
+<svg viewBox="0 0 400 268" width="100%" role="img" aria-labelledby="cs-tiers-t cs-tiers-d">
+  <title id="cs-tiers-t">In-process caches multiply, a remote cache is shared</title>
+  <desc id="cs-tiers-d">
+    Five app pods each hold their own in-process copy of the hot data, about a hundred nanoseconds
+    away. All five also talk to one remote cache over the network, a fraction of a millisecond
+    away. A write must reach every in-process copy, five here and fifty in a larger service, but
+    only one remote entry. A deploy restarts every pod with an empty in-process cache, while the
+    remote cache stays warm.
+  </desc>
+  <defs>
+    <marker id="cs-tiers-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">in-process: one copy per pod</text>
+  {
+    pods.map((k) => {
+      const x = 4 + k * 79;
+      return (
+        <g>
+          <rect x={x} y="32" width="70" height="66" rx="12" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+          <text x={x + 35} y="54" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">pod {k + 1}</text>
+          <rect x={x + 8} y="64" width="54" height="24" rx="4" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+          <text x={x + 35} y="81" font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">copy</text>
+          <path d={`M${x + 35} 100 L${200 + (k - 2) * 30} 150`} stroke-width="1.5" marker-end="url(#cs-tiers-a)" style="stroke: var(--viz-flow)" />
+        </g>
+      );
+    })
+  }
+  <text x="396" y="124" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">network hop</text>
+  <rect x="100" y="154" width="200" height="50" rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="176" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">remote cache</text>
+  <text x="200" y="195" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">one copy, shared</text>
+  <text x="4" y="232" font-size="15" style="fill: var(--viz-ink)">a write: 5 copies to invalidate here, 1 there</text>
+  <text x="4" y="254" font-size="15" style="fill: var(--viz-ink)">a deploy: 5 empty caches here, 0 there</text>
+</svg>

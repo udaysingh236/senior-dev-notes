@@ -1,0 +1,19 @@
+---
+// Four eviction policies on the same traffic. See eviction-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="cache-eviction"
+  title="Four eviction policies, one cache size, the same requests"
+  description="Four lanes run the same stream of 10,000 requests a second over 2,000 keys with Zipf popularity, each through a cache of the same size with a different eviction policy: LRU, LFU without aging, W-TinyLFU and S3-FIFO. Each lane plots its hit ratio on the normal traffic over the last 20 seconds, with a dashed line at the hit ratio of the best possible static cache. The stats show each policy's database reads relative to the best lane. Sliders set the cache size, how skewed popularity is, and how many extra one-time reads a batch job adds. The button flips popularity so the coldest keys become the hottest."
+  watchFor="At the defaults the three frequency-aware policies sit close to the dashed line and LRU sends about a quarter more reads to the database. Move 'Batch job reads' to 100%: LRU drops by several points, because every one-time key is inserted as most recently used and pushes a popular key towards the end; the others barely move, since a key seen once never gets past their filter. Reset and press 'Flip popularity': LRU and the two newer policies dip and recover within seconds, while LFU without aging collapses and stays down, because the old keys' counts are still higher than any new key can reach."
+  viewBox="0 0 400 324"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createEvictionModel } from './eviction-model';
+
+  mountAll('cache-eviction', createEvictionModel);
+</script>

@@ -85,7 +85,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Caching strategies | caching-strategies | 6 | planned |
+| 1 | Caching strategies | caching-strategies | 6 | published (2026-10-26) |
 | 2 | Cache invalidation | cache-invalidation | 7 | planned |
 | 3 | Cache stampede (thundering herd) | cache-stampede | new | planned |
 | 4 | Hot keys | hot-keys | new | planned |

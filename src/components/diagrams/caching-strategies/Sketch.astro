@@ -1,0 +1,55 @@
+---
+// A count-min sketch estimating one key's frequency, and the admission duel it decides.
+const rows = [
+  [2, 0, 5, 1, 0, 3, 0, 1],
+  [0, 4, 1, 0, 2, 0, 6, 0],
+  [1, 0, 0, 3, 0, 2, 0, 7],
+  [0, 3, 0, 0, 4, 0, 1, 2],
+];
+const hit = [5, 1, 3, 4]; // column the key hashes to in each row
+const cw = 30;
+const x0 = 70;
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="cs-sk-t cs-sk-d">
+  <title id="cs-sk-t">A count-min sketch and the admission decision</title>
+  <desc id="cs-sk-d">
+    Four rows of eight small counters. The key product:42 is hashed once per row and lands on one
+    counter in each: 3, 4, 3 and 4. Other keys share some of those counters, so each one can only
+    overcount. The estimate is the smallest, 3. Below, the admission decision: a candidate leaving
+    the window, estimated at 1, against the victim the main area would evict, estimated at 3. The
+    candidate is dropped and the victim stays.
+  </desc>
+  <text x="4" y="20" font-size="16" font-weight="700" style="fill: var(--viz-ink)">estimate for product:42</text>
+  {
+    rows.map((row, r) => (
+      <g>
+        <text x="4" y={52 + r * 34} font-size="14" style="fill: var(--viz-muted)">hash {r + 1}</text>
+        {row.map((c, k) => {
+          const on = hit[r] === k;
+          return (
+            <g>
+              <rect x={x0 + k * cw} y={32 + r * 34} width={cw - 4} height="28" rx="4" stroke-width={on ? 2.5 : 1.2}
+                style={on ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: none; stroke: var(--viz-stroke)'} />
+              <text x={x0 + k * cw + (cw - 4) / 2} y={52 + r * 34} font-size="15" text-anchor="middle" font-weight={on ? 700 : 400}
+                style={on ? 'fill: var(--viz-ink)' : 'fill: var(--viz-muted)'}>{c}</text>
+            </g>
+          );
+        })}
+      </g>
+    ))
+  }
+  <text x="320" y="70" font-size="15" style="fill: var(--viz-ink)">min of</text>
+  <text x="320" y="90" font-size="15" style="fill: var(--viz-ink)">3, 4, 3, 4</text>
+  <text x="320" y="116" font-size="20" font-weight="700" style="fill: var(--viz-flow)">= 3</text>
+
+  <text x="4" y="196" font-size="16" font-weight="700" style="fill: var(--viz-ink)">who gets the slot?</text>
+  <rect x="4" y="208" width="170" height="56" rx="6" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="89" y="230" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">candidate from window</text>
+  <text x="89" y="252" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">estimate 1</text>
+  <text x="200" y="242" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">vs</text>
+  <rect x="226" y="208" width="170" height="56" rx="6" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="311" y="230" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">victim in main area</text>
+  <text x="311" y="252" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">estimate 3</text>
+  <text x="4" y="290" font-size="15" style="fill: var(--viz-ink)">1 is not more than 3: candidate dropped, victim stays</text>
+</svg>

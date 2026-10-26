@@ -1,0 +1,19 @@
+---
+// Cache-aside writes racing reads on one key. See race-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="cache-race"
+  title="Set, delete or version: one hot key under reads and writes"
+  description="Three lanes share the same database and the same reads and writes on one key; only the cache command after each write differs. Lane one sets the new value, lane two deletes the key, lane three writes a versioned marker that refuses older fills. A reader that misses reads the database and then fills the cache with what it read. Each lane shows a strip of the last 5 seconds, green while the cache is fresh, grey while it is empty and red while it holds a version older than one a writer has already told it about, and the share of time it has been stale so far. The stats count how many times each cache became outdated and the longest stretch."
+  watchFor="At the defaults, delete on write turns red about once a second: right after a delete, readers miss, and when the next write commits while one of them is still reading, that reader fills the version it read, which is now old. Set on write goes red only a few times a minute, when two writers' cache commands arrive in the wrong order. The versioned marker never goes red. Raise writes to 30 a second and the delete lane goes red several times a second; raise 'DB read time' and it gets worse again, because a longer read is a wider window for a commit to land in. Drop writes to 1 a second: the races get rare, but each one now lasts until the next write."
+  viewBox="0 0 400 244"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRaceModel } from './race-model';
+
+  mountAll('cache-race', createRaceModel);
+</script>
