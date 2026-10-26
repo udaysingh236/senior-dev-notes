@@ -1,0 +1,98 @@
+ PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+
+== 1. Sizes: heap pages, rows per page, B-tree levels
+ heap_pages | rows_per_page | pk_pages | pk_levels 
+------------+---------------+----------+-----------
+      86168 |            58 |    13712 |         3
+
+== 2. Point lookup by primary key (warm): 3 index levels + 1 heap page
+ plan_used  | pages | heap_fetches |  ms  
+------------+-------+--------------+------
+ Index Scan |     4 |              | 0.00
+
+== 3. customer_id = 31337, no index, then with one
+ plan_used | pages | heap_fetches |   ms   
+-----------+-------+--------------+--------
+ Seq Scan  | 86168 |              | 383.10
+
+ plan_used  | pages | heap_fetches |  ms  
+------------+-------+--------------+------
+ Index Scan |     8 |              | 0.01
+
+== 4. Selectivity sweep. customer_id is uncorrelated, created_at follows the physical order
+     col     | rows  |  planner_chose   | index_pages | index_ms | bitmap_pages | bitmap_ms | seq_pages | seq_ms 
+-------------+-------+------------------+-------------+----------+--------------+-----------+-----------+--------
+ customer_id | 0.01% | Bitmap Heap Scan |         505 |     0.13 |          505 |      0.27 |     86168 | 324.40
+ customer_id | 0.1%  | Bitmap Heap Scan |        4920 |     1.57 |         4801 |      2.95 |     86168 | 306.65
+ customer_id | 1%    | Bitmap Heap Scan |       50074 |   129.93 |        38063 |    125.92 |     86168 | 329.63
+ customer_id | 2%    | Bitmap Heap Scan |      100077 |   267.10 |        59401 |    214.05 |     86168 | 362.79
+ customer_id | 5%    | Bitmap Heap Scan |      249351 |   663.26 |        82015 |    463.14 |     86168 | 359.04
+ customer_id | 25%   | Bitmap Heap Scan |     1250946 |  3291.58 |        87582 |    567.68 |     86168 | 475.70
+ created_at  | 0.01% | Index Scan       |          13 |     0.06 |           13 |      0.07 |     86168 | 388.91
+ created_at  | 0.1%  | Index Scan       |         104 |     0.69 |          103 |      0.61 |     86168 | 389.04
+ created_at  | 1%    | Index Scan       |        1016 |     6.39 |         1001 |      6.23 |     86168 | 400.36
+ created_at  | 2%    | Index Scan       |        2030 |    13.95 |         2000 |     13.38 |     86168 | 419.46
+ created_at  | 5%    | Index Scan       |        5054 |    33.39 |         4995 |     36.54 |     86168 | 414.49
+ created_at  | 25%   | Index Scan       |       25286 |   224.92 |        24960 |    251.32 |     86168 | 542.64
+
+== 5. Composite column order: June 2025 (432,000 rows), country IN (24,023 rows), index only
+                test                | pages |   ms   
+------------------------------------+-------+--------
+ IN + June on (country, created_at) |    96 |   3.95
+ June only on (country, created_at) | 19161 | 208.12
+
+             test             |    plan_used    | pages 
+------------------------------+-----------------+-------
+ planner, unforced, June only | Index Only Scan | 19161
+
+                test                | pages |  ms   
+------------------------------------+-------+-------
+ IN + June on (created_at, country) |  1659 | 16.45
+
+ heap_pages 
+------------
+      86168
+
+== 6. Covering index and the visibility map: sum(amount_cents) for 1% of customers
+       test        |    plan_used     | pages | heap_fetches |   ms   
+-------------------+------------------+-------+--------------+--------
+ customer_id index | Bitmap Heap Scan | 38063 |              | 140.12
+
+          test          |    plan_used    | pages | heap_fetches |  ms  
+------------------------+-----------------+-------+--------------+------
+ covering, after vacuum | Index Only Scan | 14422 |            0 | 8.87
+
+             test             |    plan_used    | pages | heap_fetches |   ms   
+------------------------------+-----------------+-------+--------------+--------
+ covering, 5% of rows updated | Index Only Scan | 64523 |        50017 | 138.03
+
+           test           |    plan_used    | pages | heap_fetches |  ms  
+--------------------------+-----------------+-------+--------------+------
+ covering, vacuumed again | Index Only Scan | 14508 |            0 | 8.36
+
+== 7. Predicates that cannot use the index, and the fixes (customers: 500,000 rows)
+            test            | plan_used  | pages | heap_fetches |   ms   
+----------------------------+------------+-------+--------------+--------
+ email = ...                | Index Scan |     4 |              |   0.01
+ lower(email) = ...         | Seq Scan   |  4166 |              | 144.68
+ created_at::date = ...     | Seq Scan   |  4166 |              |  32.64
+ created_at half-open range | Index Scan |    19 |              |   0.30
+ email like 'User4242%'     | Seq Scan   |  4166 |              |  28.40
+
+              test              | plan_used  | pages | heap_fetches |  ms  
+--------------------------------+------------+-------+--------------+------
+ lower(email), expression index | Index Scan |     4 |              | 0.01
+ like, text_pattern_ops index   | Index Scan |    25 |              | 0.05
+
+== 8. Partial index: pending orders (2% of rows) against a full index on created_at
+       index        |  size   
+--------------------+---------
+ orders_created_idx | 107 MB
+ orders_pending_idx | 2200 kB
+ orders_pkey        | 107 MB
+
+== 9. Write cost: insert 500,000 rows into a 1,000,000-row table
+primary key only           1.51 s  107 MB WAL
++ 1 secondary index        3.41 s  160 MB WAL
++ 3 secondary indexes      4.57 s  227 MB WAL
++ 6 secondary indexes      7.53 s  381 MB WAL

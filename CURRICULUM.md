@@ -67,7 +67,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 |---|---|---|---|---|
 | 1 | SQL vs NoSQL | sql-vs-nosql | new | planned |
 | 2 | ACID and isolation levels | acid-and-isolation-levels | new | planned |
-| 3 | Database indexing (scan vs seek) | database-indexing | 20 | planned |
+| 3 | Database indexing (scan vs seek) | database-indexing | 20 | published (2026-10-26) |
 | 4 | Storage engines: B-trees vs LSM trees | b-trees-vs-lsm-trees | new | planned |
 | 5 | Write-ahead log | write-ahead-log | new | planned |
 | 6 | Query optimization | query-optimization | 21 | planned |

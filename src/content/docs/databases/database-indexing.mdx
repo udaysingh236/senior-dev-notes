@@ -1,0 +1,738 @@
+---
+title: Database Indexing
+description: Scan vs seek, measured on 5 million rows. What a B-tree index stores, why 1% of the rows can cost 44% of the pages, how correlation, column order, covering indexes and the visibility map change that cost, which predicates cannot use an index, and what every index costs on writes.
+tagline: An index is a sorted copy of a few columns with a pointer back to each row. Whether it helps depends on how many pages those pointers lead to.
+difficulty: intermediate
+track: databases
+prerequisites: [latency-vs-throughput, acid-and-isolation-levels]
+next: [query-optimization, b-trees-vs-lsm-trees, n-plus-one-queries]
+lastReviewed: 2026-10-26
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import Overview from '../../../components/diagrams/database-indexing/Overview.astro';
+import HeapVsClustered from '../../../components/diagrams/database-indexing/HeapVsClustered.astro';
+import Composite from '../../../components/diagrams/database-indexing/Composite.astro';
+import IndexOnly from '../../../components/diagrams/database-indexing/IndexOnly.astro';
+import ScanSim from '../../../components/sims/database-indexing/ScanSim.astro';
+
+## The question
+
+Find one order by its id in a table of 5 million and PostgreSQL reads 4 pages. Ask for 1% of the
+orders by customer, through an index on `customer_id`, and it reads 38,063 of the table's 86,168
+pages. Ask for 5% and it reads 82,015, nearly all of them, taking as long as reading the whole
+table without the index. Ask for 1% by `created_at` instead, same table, same kind of index, and
+it reads 1,016. Why does the same 1% cost 37 times more on one column than on the other, and when
+is ignoring an index the right decision?
+
+## Why this problem exists
+
+Databases do not read rows. They read **pages**: fixed-size blocks, 8 KB in PostgreSQL and 16 KB by
+default in MySQL's InnoDB, that are the unit of reading from disk and of caching in memory. To look
+at one row, the database reads the whole page it lives on.
+
+Every number on this page comes from one table we built in PostgreSQL 16: 5,000,000 orders of about
+100 bytes each, 58 rows to a page, 86,168 pages, 673 MB. The scripts and our full output are in
+[`examples/database-indexing`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/database-indexing).
+PostgreSQL stores a table as a **heap**: rows go wherever there is room, which for a table that is
+only inserted into means roughly insert order.
+
+Without an index, the only way to find the orders of customer 31337 is to read every page and test
+every row. That is a **sequential scan** (or full table scan): 86,168 pages, about 0.3 s with the
+whole table already in memory, to return 5 rows. The cost grows with the table, not with the
+answer. And it is paid by every query: 100 of these a second would need 30 CPU cores, and each one
+pushes useful pages out of the cache.
+
+The alternative is a **seek**: go straight to the rows you want and read only their pages. Seeking
+needs the data sorted by what you search for, and a table can only be stored in one order. An
+**index** is a second copy of a few columns, kept sorted, with a pointer back to each row. With an
+index on `customer_id`, the same query reads 8 pages and takes 0.01 ms.
+
+Two terms carry the rest of the page. **Selectivity** is the share of rows a condition matches;
+`customer_id = 31337` matches 0.0001%, `status = 'delivered'` matches 90%. And not every page read
+costs the same. A **sequential read** fetches the next page in order, which disks, SSDs and the
+operating system all serve fastest, because they read ahead. A **random read** jumps somewhere else.
+PostgreSQL's planner, the part of the database that chooses how to run a query, charges 1 for a
+sequential page (`seq_page_cost`) and 4 for a random one (`random_page_cost`), as of PostgreSQL 18.
+
+## The obvious fix, and why it breaks
+
+"Every slow query gets an index on the columns in its `WHERE` clause." It works for the first few
+queries, then four things go wrong.
+
+**An index on a column most rows share is never used.** 90% of our orders are `delivered`. Reading
+90% of the rows through an index means fetching nearly every page, in random order, plus the index
+itself. The planner reads the table instead, and the index only costs writes. (A smaller index on
+the rare values can still pay off; see partial indexes below.)
+
+**Two single-column indexes are not one two-column index.** For `country = 'IN' AND created_at in
+June`, an index on `country` and another on `created_at` each find a large set (all of India, all of
+June) that then has to be intersected. One index on `(country, created_at)` holds exactly the rows
+wanted side by side and reads 96 pages.
+
+**The index exists and the query cannot use it.** `WHERE lower(email) = $1` and
+`WHERE created_at::date = $1` both read the whole table next to a perfectly good index, because the
+index is sorted by `email` and `created_at`, not by what the functions return.
+
+**Every index is paid for on every write.** Inserting 500,000 rows into our table took 1.5 s with
+only the primary key and 7.5 s with six more indexes.
+
+Three neighbours get mixed up with indexes. A **primary key** or **unique constraint** is a rule;
+the database enforces it with an index, which is why creating one creates an index. A **cache**
+keeps answers outside the database; an index makes the database's own work smaller, and the
+[caching page](/caching/caching-strategies/) warns against hiding a missing index behind a cache.
+**Partitioning** splits a table so a query can skip whole partitions; it has its own page (coming
+soon) and works alongside indexes.
+
+## The core idea
+
+An index is a sorted copy of some columns, stored as a tree of pages, where every entry points to
+its row. A query that uses it pays for three things: walking down the tree (3 or 4 pages), walking
+along the bottom level for the range of matching keys (one page per few hundred entries), and then
+fetching the table page of every match. The first two are small. The third decides whether the
+index wins, because it depends on how many rows match and how scattered their pages are. The
+planner estimates all three, compares them with reading the whole table, and picks the cheaper
+plan, which sometimes means not using the index at all.
+
+<Figure caption="A seek reads one page per level of the index and then the one table page the leaf entry points to: 4 pages out of 86,168. Leaf pages are linked, so a range of keys is read by walking sideways along them.">
+  <Overview />
+</Figure>
+
+## How it works, piece by piece
+
+### Pages and the B-tree
+
+Start from binary search. In a sorted list of 5,000,000 keys, halving the range each time finds any
+key in about 23 comparisons. On disk, each comparison could be a separate page read, 23 reads for
+one row. A **B-tree** (the variant databases use is a B+tree, with all row pointers in the bottom
+level) packs hundreds of keys into each page, so one page read narrows the search hundreds of times
+instead of two.
+
+The bottom level holds the **leaf pages**: every key in sorted order, each with the row's address.
+In PostgreSQL that address is a **TID** (tuple ID), a page number and a slot on that page, 6 bytes.
+The levels above hold **internal pages**: each entry is a key range and a pointer to the page below.
+The number of entries per page is the **fanout**.
+
+Our primary key index on a `bigint` id measures: 16 bytes per entry, about 365 entries per leaf
+page, 13,712 leaf pages (107 MB), 48 internal pages of about 286 entries each, one root, 3 levels.
+Each level multiplies the reach by the fanout: with full pages of about 367 entries, 3 levels
+cover 367 × 367 × 365 ≈ 49 million keys and 4 levels about 18 billion. An index on a real table is
+almost never deeper than 4 or 5 levels, and its top levels are
+read so often that they stay in memory.
+
+Here is the seek for id 4,242,424, as in the figure. The root says the key falls in the range
+4.17M to 4.27M (each of the 48 internal pages covers about 104,000 ids); that internal page points
+to a leaf; the leaf holds `4242424 → (73111, 28)`; the
+database reads table page 73,111 and takes slot 28. `EXPLAIN (ANALYZE, BUFFERS)` reports
+`Buffers: shared hit=4`. Leaf pages are linked to their neighbours, so `WHERE id BETWEEN 1000 AND
+2000` costs one descent and then a walk along about 3 leaf pages.
+
+Keeping the tree sorted has a cost on inserts: a new key must go into the right leaf, and a full
+leaf splits into two. How that works, and the log-structured alternative, is on the B-trees vs LSM
+trees page (coming soon).
+
+### Four ways to read a table
+
+PostgreSQL has four plans for reading rows from one table, and `EXPLAIN` names them:
+
+- **Seq Scan**: every page, in order. Cost is the table size, whatever the answer.
+- **Index Scan**: walk the index in key order, and for each matching entry fetch its table page.
+  Rows come out sorted by the index key.
+- **Bitmap Heap Scan** (fed by a Bitmap Index Scan): first collect the addresses of all matching
+  rows from the index into a **bitmap**, a set of page numbers with the matching slots marked, then
+  read each marked page once, in page order. If the bitmap outgrows `work_mem`, it keeps only page
+  numbers ("lossy" pages) and rechecks every row on them.
+- **Index Only Scan**: answer from the index without touching the table, covered further down.
+
+The question that decides between them: how many table pages hold at least one matching row? With
+matches spread at random and 58 rows to a page, a page escapes only if none of its 58 rows match.
+At 1% selectivity, the chance of that is 0.99<sup>58</sup> = 0.56, so 44% of all pages hold a match.
+At 5%, it is 0.95<sup>58</sup> = 0.05: 95% of pages must be read to find 5% of the rows.
+
+We ran `customer_id <= N` (random customer ids, so matching rows are scattered) under each plan.
+Pages counts the page visits each plan made; times are the best of three, warm cache, one process:
+
+| Rows matched | Index scan | Bitmap heap scan | Seq scan | Planner chose |
+|---|---|---|---|---|
+| 0.01% | 505 pages, 0.1 ms | 505, 0.3 ms | 86,168, 324 ms | bitmap |
+| 0.1% | 4,920, 1.6 ms | 4,801, 3.0 ms | 86,168, 307 ms | bitmap |
+| 1% | 50,074, 130 ms | 38,063, 126 ms | 86,168, 330 ms | bitmap |
+| 5% | 249,351, 663 ms | 82,015, 463 ms | 86,168, 359 ms | bitmap |
+| 25% | 1,250,946, 3,292 ms | 87,582, 568 ms | 86,168, 476 ms | bitmap |
+
+The index scan visits a table page once per matching row, 50,074 visits for 50,000 rows at 1%,
+many of them to pages it read a moment earlier. The bitmap scan reads each page once, which is why
+it holds out longer, but by 5% it reads almost the whole table anyway, in a slower pattern. The
+planner switched to a sequential scan at about 25% of rows. On this machine, with everything in
+memory, the bitmap and sequential scans swapped places at 5% from one run to the next, and at 25%
+the sequential scan was faster every time. On a disk where random reads really cost four times
+more, the planner's line sits closer to right.
+
+A rough rule falls out of the cost model. An index scan over scattered rows pays one random read
+per row; a full scan pays one sequential read per page. The index scan is cheaper only while
+`selectivity < 1 / (rows per page × random_page_cost)`: 1 / (58 × 4) = 0.43% of the rows here, and
+1.6% with `random_page_cost` at 1.1. The bitmap scan moves the line further, but not past the point
+where most pages hold a match.
+
+The simulation runs all three plans over the same table of 120 pages. Change how many rows match,
+how closely the rows follow index order, and what a random read costs, and watch which plan
+finishes first.
+
+<ScanSim />
+
+The thing to take from it is that "rows matched" is the wrong unit. What the plan pays for is pages
+touched and how they are reached, and the next section is about the setting that changes that the
+most.
+
+### Correlation: the same 1%, 37 times cheaper
+
+**Correlation** is how closely the physical order of the rows follows the order of the index,
+measured from −1 to 1. PostgreSQL keeps it per column in `pg_stats.correlation`. Our orders were
+inserted in time order, so `created_at` has a correlation of 1.0. Customer ids are random, so
+`customer_id` has −0.001.
+
+The same sweep on `created_at`: 1% of rows read 1,016 pages in 6 ms, and 25% read 25,286 pages in
+225 ms, with the planner choosing a plain index scan every time and beating the sequential scan at
+every step. Consecutive index entries point to the same table page, and the scan keeps the page it
+already holds, so 1% of the rows costs about 1% of the pages, read in order.
+
+Correlation comes for free with data that is written in the order it is read: logs, events,
+orders, anything with a creation timestamp or an increasing id. It does not survive updates well:
+in PostgreSQL an updated row is written as a new version, and if its page is full the new version
+lands on another page. `CLUSTER` rewrites a table once in an index's order, but PostgreSQL does not
+keep that order afterwards. InnoDB takes the other path and always keeps rows in primary key order.
+
+### Heap tables and clustered indexes
+
+That difference is a design choice with consequences. In PostgreSQL every index, the primary key
+included, is a separate tree whose entries point to TIDs in the heap. In InnoDB the table itself
+is a B-tree ordered by the primary key, with whole rows stored in its leaves: a **clustered
+index**. A secondary index entry in InnoDB stores the primary key value instead of a physical
+address, so a lookup walks the secondary index and then the primary key tree
+([MySQL 8.4 manual](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html)). If a table
+has no primary key, InnoDB uses the first unique non-null index, or generates a hidden row id.
+
+<Figure caption="In PostgreSQL an index entry holds the row's physical address: one tree walk, then one page. In InnoDB it holds the primary key: one tree walk to find the key, a second to find the row.">
+  <HeapVsClustered />
+</Figure>
+
+What follows from the InnoDB layout:
+
+- Primary key ranges are perfectly correlated forever, because the table is the index.
+- Every secondary index carries a copy of the primary key. A 16-byte UUID key makes every
+  secondary index bigger than an 8-byte integer would; the manual recommends short primary keys.
+- A secondary index on `(email)` is internally `(email, id)`, so a query that needs only `email`
+  and `id` never touches the table (MySQL calls this index extensions).
+
+And the primary key choice matters for inserts, in both engines. A random **UUIDv4** key sends each
+insert to a random leaf of the primary key tree, so the whole tree must stay in memory to insert
+fast, and splits leave pages half empty. In InnoDB that random order is also the table's physical
+order. A **UUIDv7** starts with a 48-bit millisecond timestamp
+([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562), 2024), so new keys land at the right edge of
+the tree, like an increasing integer. PostgreSQL 18 generates them natively with `uuidv7()`.
+
+### Composite indexes: column order is the design
+
+A **composite index** (or multicolumn index) is sorted by its first column, then by the second
+among rows with the same first value, and so on. A phone directory sorted by surname then first
+name works the same way: finding "Sharma, Priya" is fast, finding every Sharma is fast, and finding
+every Priya means reading the whole directory, because the Priyas are spread under every surname.
+The analogy stops at one point: some databases can now skip through the surnames, which we come to
+below.
+
+From the sort order comes the rule. The index can seek on equality conditions for its leading
+columns, then on one range condition for the next column. Columns after a range can only filter:
+the database reads those entries and discards the ones that do not match. So the order is
+**equality columns first, then the one range or sort column.**
+
+We measured `country = 'IN' AND created_at in June 2025` (24,023 rows out of the 432,000 June
+orders), counting only index pages, so the heap does not blur the picture:
+
+<Figure caption="The same query, two column orders. Equality first puts the wanted rows in one short run of the index. Range first reads every June entry and filters out the other countries. A query on the second column alone finds its rows in every group.">
+  <Composite />
+</Figure>
+
+- `(country, created_at)`: one seek to "IN, 1 June", one walk to "IN, 30 June". 96 pages, 4 ms.
+- `(created_at, country)`: one seek to "1 June", then all 432,000 June entries, keeping 1 in 18.
+  1,659 pages, 16 ms.
+- `(country, created_at)` asked for June alone: June is in every country's group, so PostgreSQL 16
+  reads the whole index, 19,161 pages, 208 ms. The planner picks this on its own for a `count(*)`,
+  because the whole 150 MB index is still smaller than the 673 MB table.
+
+This is the **leftmost prefix** rule: an index on `(a, b, c)` serves conditions on `a`, on `a` and
+`b`, and on all three, but not on `b` alone
+([MySQL 8.4 manual](https://dev.mysql.com/doc/refman/8.4/en/multiple-column-indexes.html)). Two
+engines have softened it. MySQL since 8.0.13 and PostgreSQL since 18 (September 2025) can **skip
+scan**: when the leading column has few distinct values, the index is probed once per value, ten
+probes for our ten countries ([PostgreSQL 18 release notes](https://www.postgresql.org/docs/release/18/)).
+With thousands of distinct leading values, the probes add up and the rule is back.
+
+Column order also decides whether the database has to sort. For the most common query in any app,
+"the latest 20 orders of this customer", an index on `(customer_id, created_at)` holds that
+customer's orders already in time order. The database reads the last 20 entries and stops. With an
+index on `customer_id` alone it fetches all of the customer's orders and sorts them before taking
+20. The code section below shows the difference in SQLite's own words.
+
+### Covering indexes and index-only scans
+
+If an index holds every column a query needs, the database can answer from the index and skip the
+table. Such an index is a **covering index** for that query. PostgreSQL (since 11) lets you add
+columns with `INCLUDE`: they are stored in the leaf entries as payload, not sorted and not
+searchable, only there to be returned.
+
+```sql
+create index orders_customer_cov_idx on orders (customer_id) include (amount_cents);
+```
+
+There is a catch in PostgreSQL, and it needs one building block first. PostgreSQL keeps old
+versions of changed rows for a while, so that each transaction sees the data as of its own
+snapshot. Whether a row version is visible to your transaction is recorded only in the table row,
+not in the index entry. An index entry alone cannot say "this row exists for you". The fix is the
+**visibility map**: one bit per table page, set by `VACUUM` when every row on that page is visible
+to every transaction, and cleared by any change to the page. An **index-only scan** checks the bit
+for each entry's page. Set: answer from the index. Clear: read the table page to check.
+
+<Figure caption="An index-only scan trusts the index only for pages whose visibility bit is set. A page with a recent change has its bit cleared, and every entry pointing to it costs a table read.">
+  <IndexOnly />
+</Figure>
+
+We measured `sum(amount_cents)` for 1% of customers (50,017 rows):
+
+- Plain index on `customer_id`: bitmap heap scan, 38,063 pages, 140 ms.
+- Covering index, freshly vacuumed: index-only scan, `Heap Fetches: 0`, 8.9 ms.
+- After updating 1 row in 20: with 58 rows to a page, almost every page now has a change and a
+  cleared bit. `Heap Fetches: 50,017`, one per row, 138 ms. No better than the plan it replaced.
+- After `VACUUM`: 8.4 ms again.
+
+A covering index on a busy table is only as good as autovacuum's pace. Watch the `Heap Fetches`
+line in `EXPLAIN`; when it approaches the row count, the index-only scan has quietly become an
+index scan. InnoDB has no visibility map; its secondary indexes check row versions differently, but
+the same idea of covering applies, with the primary key always included for free.
+
+### Predicates the index can use
+
+A condition the database can turn into a seek is called **sargable**, from "search argument". The
+pattern is the bare indexed column compared with a value: `=`, `<`, `>`, `BETWEEN`, `IN`, and
+`LIKE 'prefix%'`. Anything that changes the column before comparing it hides it from the index,
+because the index is sorted by the column and not by the result of the function. On a 500,000-row
+`customers` table:
+
+| Predicate | Plan | Pages | Fix | Pages after |
+|---|---|---|---|---|
+| `lower(email) = 'user4242@example.com'` | Seq Scan, 145 ms | 4,166 | expression index on `lower(email)` | 4 |
+| `created_at::date = '2024-03-01'` | Seq Scan, 33 ms | 4,166 | `created_at >= '2024-03-01' and created_at < '2024-03-02'` | 19 |
+| `email like 'User4242%'` | Seq Scan, 28 ms | 4,166 | index with `text_pattern_ops` | 25 |
+| `email like '%4242@Example.com'` | Seq Scan | 4,166 | none in a B-tree | — |
+
+The third row surprised us. Our database's collation was `C.UTF-8`, and PostgreSQL uses a plain
+B-tree for `LIKE 'prefix%'` only under the `C` collation; otherwise the index needs the
+`text_pattern_ops` operator class
+([PostgreSQL docs](https://www.postgresql.org/docs/current/indexes-opclass.html)). MySQL has its
+own version of the trap: comparing a string column with a number converts the column, and the
+index cannot be used ([MySQL 8.4 manual](https://dev.mysql.com/doc/refman/8.4/en/type-conversion.html)).
+
+Two index shapes fix what a rewrite cannot:
+
+- An **expression index** stores the result of an expression, for example
+  `create index on customers (lower(email))`. The query must use the same expression.
+- A **partial index** stores only the rows matching a condition, for example
+  `create index on orders (created_at) where status = 'pending'`. Our pending orders are 2% of the
+  table, and the index is 2.2 MB against 107 MB for a full index on `created_at`. It serves exactly
+  the query a worker loop runs every few seconds. The query must include the same condition.
+
+### What every index costs
+
+On writes, each index is one more tree to update. We inserted 500,000 rows into a 1,000,000-row
+copy of `orders`:
+
+| Indexes | Insert time | WAL written |
+|---|---|---|
+| primary key only | 1.51 s | 107 MB |
+| + 1 secondary (`customer_id`) | 3.41 s | 160 MB |
+| + 3 secondary | 4.57 s | 227 MB |
+| + 6 secondary | 7.53 s | 381 MB |
+
+Times moved by up to a third between our runs; the WAL volume stayed within 1%.
+
+The **WAL** (write-ahead log) is the log every change is written to before it reaches the table;
+it is also what replicas replay and backups archive, so every extra megabyte is paid for again
+there. Not every index
+costs the same. An index on an increasing column (`created_at`, the id) inserts at its right edge,
+where the pages are already in memory. An index on a random column (`customer_id`) inserts into a
+random leaf, which must be found and read first.
+
+Updates have their own cost in PostgreSQL. An update writes a new version of the row, and normally
+every index gets an entry for it. The exception is a **HOT update** (heap-only tuple): if no indexed
+column changed and the new version fits on the same page, the indexes are left alone. Adyen counted
+what that means: on a table with 10 indexes, a normal update touches 11 pages and a HOT update 1
+([Adyen, 2022](https://www.adyen.com/knowledge-hub/postgresql-hot-updates)). Indexing a column that
+changes on every write, such as `last_seen_at` or `updated_at`, turns every update on that table
+into the expensive kind. Lowering the table's `fillfactor` leaves free space on each page so that
+more updates can be HOT.
+
+Indexes also take memory from the table: our primary key index is 107 MB and the
+`(country, created_at)` index 150 MB, next to a 673 MB table, all competing for the same cache.
+PostgreSQL counts how often each index is used in `pg_stat_user_indexes.idx_scan`; an index at zero
+for weeks, on the primary and on every replica,
+is a candidate to drop. MySQL 8 can mark an index **invisible** first, so the planner ignores it
+while it is still maintained, and making it visible again is instant.
+
+## Choosing between them
+
+The four plans, by what they read:
+
+| Plan | Reads | Wins when | `EXPLAIN` node |
+|---|---|---|---|
+| Sequential scan | every page, in order | a large share of rows match, or the table is small | `Seq Scan` |
+| Index scan | tree, leaves, then one table page per row, in key order | few rows, or rows stored in index order; output must be sorted | `Index Scan` |
+| Bitmap scan | tree, leaves, then each matching page once, in page order | a few % of scattered rows; combining two indexes | `Bitmap Heap Scan` |
+| Index-only scan | tree and leaves; table pages only where the visibility bit is clear | the index covers the query and the table is vacuumed | `Index Only Scan` |
+
+The index shapes, by what they are for. B-tree is the default and the subject of this page; the
+other types answer different questions:
+
+| Index | For | Example |
+|---|---|---|
+| B-tree, one column | equality, ranges and sorting on one column | `(customer_id)` |
+| Composite | several conditions, or a filter plus a sort | `(customer_id, created_at)` |
+| Covering (`INCLUDE`) | skipping the table for a hot query | `(customer_id) include (amount_cents)` |
+| Partial | a small, frequently queried subset | `(created_at) where status = 'pending'` |
+| Expression | conditions on a computed value | `(lower(email))` |
+| GIN, GiST, BRIN, hash | arrays, JSON and full-text search; geometry; very large naturally ordered tables; equality only | `using gin (tags)` |
+
+How to choose an index: start from the query, not the column. Put the equality columns first, then
+the one range or sort column, then `INCLUDE` whatever the query returns if it runs often enough to
+deserve it. Then check with `EXPLAIN (ANALYZE, BUFFERS)` and read the page count, not only the time:
+a plan that reads a third of the table's pages is a table scan in disguise.
+
+## Build it yourself
+
+Two pieces: watching a query plan change as the index improves, and the page arithmetic behind the
+crossover. Both use only the standard library; SQLite comes with Python and, since 22.5, with Node.
+The Postgres scripts behind every measurement on this page are in
+[`examples/database-indexing/postgres`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/database-indexing/postgres).
+
+The plan for "latest 20 orders of a customer" on 200,000 rows, with a helper that a test suite can
+use to fail when a query scans:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="plan_guard.py (excerpt)"
+# runnable version: examples/database-indexing/python/plan_guard.py
+QUERY = """SELECT id, created_at, amount_cents FROM orders
+           WHERE customer_id = ? ORDER BY created_at DESC LIMIT 20"""
+
+def plan(conn: sqlite3.Connection, sql: str, params=()) -> list[str]:
+    """The detail column of EXPLAIN QUERY PLAN: 'SCAN orders', 'SEARCH orders USING INDEX ...'."""
+    return [row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params)]
+
+def assert_uses_index(conn: sqlite3.Connection, sql: str, params=()) -> None:
+    """For a test suite: fail if the plan reads a whole table or index, or sorts in a temp B-tree."""
+    bad = [step for step in plan(conn, sql, params) if step.startswith("SCAN") or "TEMP B-TREE" in step]
+    if bad:
+        raise AssertionError(f"query plan has {bad}")
+
+for label, ddl in STEPS:  # no index, (customer_id), (customer_id, created_at), + amount_cents
+    conn.execute("DROP INDEX IF EXISTS idx")
+    if ddl:
+        conn.execute(ddl)
+    print(f"{label}: {ms_per_query(conn, QUERY, (1234,)):.3f} ms")
+    for step in plan(conn, QUERY, (1234,)):
+        print(f"    {step}")
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="plan-guard.mjs (excerpt)"
+// runnable version: examples/database-indexing/js/plan-guard.mjs
+const QUERY = `SELECT id, created_at, amount_cents FROM orders
+               WHERE customer_id = ? ORDER BY created_at DESC LIMIT 20`;
+
+/** The detail column of EXPLAIN QUERY PLAN: 'SCAN orders', 'SEARCH orders USING INDEX ...'. */
+const plan = (db, sql, params = []) => db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params).map((row) => row.detail);
+
+/** For a test suite: fail if the plan reads a whole table or index, or sorts in a temp B-tree. */
+function assertUsesIndex(db, sql, params = []) {
+  const bad = plan(db, sql, params).filter((step) => step.startsWith('SCAN') || step.includes('TEMP B-TREE'));
+  if (bad.length) throw new Error(`query plan has [${bad.map((s) => `'${s}'`).join(', ')}]`);
+}
+
+for (const [label, ddl] of STEPS) { // no index, (customer_id), (customer_id, created_at), + amount_cents
+  db.exec('DROP INDEX IF EXISTS idx');
+  if (ddl) db.exec(ddl);
+  console.log(`${label}: ${msPerQuery(db, QUERY, [1234]).toFixed(3)} ms`);
+  for (const step of plan(db, QUERY, [1234])) console.log(`    ${step}`);
+}
+```
+  </TabItem>
+</Tabs>
+
+Both print the same plans (timings vary by machine):
+
+```text
+no index: 6.778 ms
+    SCAN orders
+    USE TEMP B-TREE FOR ORDER BY
+index on (customer_id): 0.067 ms
+    SEARCH orders USING INDEX idx (customer_id=?)
+    USE TEMP B-TREE FOR ORDER BY
+index on (customer_id, created_at): 0.018 ms
+    SEARCH orders USING INDEX idx (customer_id=?)
+covering: (customer_id, created_at, amount_cents): 0.015 ms
+    SEARCH orders USING COVERING INDEX idx (customer_id=?)
+guard: range on created_at uses the index
+guard: substr(created_at, 1, 7) fails: query plan has ['SCAN orders USING COVERING INDEX orders_created']
+```
+
+Read it top to bottom: the full scan and sort disappear first, then the sort, then the table
+lookups. The last line is the guard catching a function on the column: SQLite reads the entire
+`created_at` index (`SCAN ... USING COVERING INDEX`) because it cannot seek into it. Put a check
+like this next to the queries your hottest endpoints run, and a refactor that wraps a column in a
+function fails a test instead of paging someone.
+
+The page arithmetic, and the crossover rule from the cost model:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="pages_touched.py (excerpt)"
+# runnable version: examples/database-indexing/python/pages_touched.py
+def pages_touched(selectivity: float, rows_per_page: int = 58) -> float:
+    """Share of pages holding at least one matching row, when the matches are spread at random."""
+    return 1 - (1 - selectivity) ** rows_per_page  # a page escapes only if none of its rows match
+
+def crossover(rows_per_page: int, random_page_cost: float) -> float:
+    """Selectivity below which an uncorrelated index scan costs less than reading every page."""
+    return 1 / (rows_per_page * random_page_cost)
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="pages-touched.mjs (excerpt)"
+// runnable version: examples/database-indexing/js/pages-touched.mjs
+/** Share of pages holding at least one matching row, when the matches are spread at random. */
+const pagesTouched = (selectivity, rowsPerPage = 58) => 1 - (1 - selectivity) ** rowsPerPage;
+
+/** Selectivity below which an uncorrelated index scan costs less than reading every page. */
+const crossover = (rowsPerPage, randomPageCost) => 1 / (rowsPerPage * randomPageCost);
+```
+  </TabItem>
+</Tabs>
+
+```text
+rows matched   pages touched   of 86,168
+       0.01%           0.6%         498
+        0.1%           5.6%       4,858
+          1%          44.2%      38,063
+          2%          69.0%      59,471
+          5%          94.9%      81,769
+         25%         100.0%      86,168
+
+random_page_cost   index scan loses above
+             4.0                  0.43% of rows
+             2.0                  0.86% of rows
+             1.1                  1.57% of rows
+```
+
+The formula predicts 38,063 pages at 1%; PostgreSQL's bitmap scan read 38,004 table pages plus 59
+index pages. Random placement is a good model for a column like `customer_id`, and a terrible one
+for `created_at`.
+
+## How real systems do it
+
+**PostgreSQL** (18 is the current major version as of October 2026; 19 is at release candidate)
+uses B-trees by default and chooses among the four plans above with a cost model whose page costs
+you can change per database or per session. Since version 13, B-tree indexes store a repeated key
+once with a list of row addresses (**deduplication**); Cybertec measured an index with many
+duplicates shrinking from 408 MB to 126 MB
+([Cybertec, 2020](https://www.cybertec-postgresql.com/en/b-tree-index-deduplication/)). Version 18
+added skip scan and `uuidv7()`. `CREATE INDEX CONCURRENTLY` builds an index without blocking writes,
+at the price of two passes over the table.
+
+**MySQL with InnoDB** (8.4 is the long-term release) stores every table as a clustered index on
+the primary key, in 16 KB pages by default, with secondary indexes that carry the primary key.
+MySQL 8 added invisible indexes, real descending indexes and skip scan. Its `EXPLAIN` shows
+`type: ALL` for a full scan, `ref` or `range` for an index seek, and `Using index` when the index
+covers the query.
+
+**SQLite**, embedded in most phones and many services, stores ordinary tables as a B-tree keyed by the
+`rowid`, which an `INTEGER PRIMARY KEY` becomes, so those tables are clustered like InnoDB's.
+`WITHOUT ROWID` tables are clustered on their declared primary key. Its `EXPLAIN QUERY PLAN` says
+`SCAN` for a full pass over a table or index and `SEARCH` for a seek, which makes it the clearest
+plan output of the three for learning.
+
+## Gotchas and war stories
+
+:::danger[The plan can change with no deploy]
+The planner's choice depends on statistics that are refreshed by `ANALYZE`, and autovacuum runs
+`ANALYZE` on its own. On 19 February 2026, an automatic `ANALYZE` at Clerk changed the statistics
+enough for the planner to pick a worse plan for a hot query. Database load rose, more than 95% of
+requests were rejected with 429s, and the outage lasted about 90 minutes, until someone ran
+`ANALYZE` by hand and the old plan came back
+([Clerk postmortem](https://clerk.com/blog/2026-02-19-system-outage-postmortem)). PlanetScale
+describes a customer whose CPU went to 100% with no deploy, traced to one query whose latency rose
+from milliseconds to its 10-second timeout as the planner abandoned an index
+([PlanetScale, 2026](https://planetscale.com/blog/when-the-postgres-query-planner-goes-rogue)).
+Track latency per query (`pg_stat_statements`), log the plans of slow queries (`auto_explain`), and
+alert on a query whose mean time jumps.
+:::
+
+:::danger[Plain CREATE INDEX blocks writes for the whole build]
+On a large table, `CREATE INDEX` holds a lock that blocks inserts, updates and deletes until it
+finishes, which can be many minutes. Use `CREATE INDEX CONCURRENTLY` on anything live. If a
+concurrent build fails, it leaves an `INVALID` index that the planner ignores but every write still
+maintains; find it in `pg_index` (`indisvalid = false`), drop it and build again.
+:::
+
+:::caution[Foreign keys are not indexed for you]
+PostgreSQL requires an index on the referenced column (the parent's key), not on the referencing
+one. Deleting a customer then means scanning `orders` for rows that point to it, inside the delete's
+transaction, with locks held. Index the referencing column of any foreign key whose parent rows are
+deleted or updated.
+:::
+
+:::caution[A planner tuned for spinning disks]
+`random_page_cost` defaults to 4, a ratio chosen when random reads on hard disks really were that
+much slower. On SSDs and with most of the data cached, it makes index plans look more expensive
+than they are. Values around 1.1 to 1.5 are common on SSD-backed databases
+([pganalyze, 2022](https://pganalyze.com/blog/5mins-postgres-tuning-random-page-cost)); change it per
+session first, compare plans with `EXPLAIN (ANALYZE, BUFFERS)`, then per database.
+:::
+
+:::caution[An index on a column that never stops changing]
+An index on `updated_at` or a counter changes on every write, so no update to that table can be
+HOT any more: every one writes a new entry into every index. If the column is only used to sort a
+small admin page, it may be cheaper to scan.
+:::
+
+## Trade-offs and when not to use it
+
+An index trades write cost, memory and disk for read speed on specific queries. It does not help
+queries that return a large share of the table, and it does nothing for a table of a few pages,
+which the database reads faster in one pass than through any tree. Analytical queries that
+aggregate most rows of a wide table are a different problem; column-oriented stores answer it by
+storing each column separately, not by adding indexes.
+
+Each index is also a promise to maintain it on every insert, on every update to its columns, in
+the WAL, on every replica and in every backup. On a write-heavy table, such as an event log that is
+read rarely, two or three well-chosen composite indexes usually beat ten single-column ones. The
+question for each index is which query it serves, and whether that query runs often enough to pay
+for it.
+
+## Interview corner
+
+Indexing shows up as soon as a design has a database, usually as "how would you make this query
+fast?" A strong answer talks about pages and plans, not only "add an index".
+
+- **"This query is slow. What do you do?"** Run `EXPLAIN (ANALYZE, BUFFERS)`. Compare pages read
+  with rows returned. Check for a sequential scan, a predicate that cannot use the index, or a plan
+  that reads most of the table through an index. Fix the query or the index, then measure again.
+- **"Why is the database not using my index?"** The condition matches too large a share of rows,
+  the rows are scattered (low correlation), the predicate wraps the column in a function or a cast,
+  the index's leading column is not in the query, or the statistics are out of date.
+- **"Design the indexes for 'a user's latest orders' and 'pending orders older than an hour'."**
+  `(user_id, created_at)`, so the query reads 20 entries already sorted; and a partial index on
+  `(created_at) where status = 'pending'`.
+- **"Clustered or non-clustered?"** InnoDB clusters on the primary key, so primary key ranges are
+  cheap and secondary lookups are two walks; PostgreSQL uses a heap and physical addresses. Mention
+  what that means for UUIDv4 keys.
+
+Quantify once: "1% of the rows can mean 44% of the pages" is the sentence that shows you know why
+indexes stop helping.
+
+## Check yourself
+
+<details>
+<summary>1. A table has 10,000 pages of 100 rows each. A query matches 2% of the rows, spread at random. About how many pages hold a match, and is an index likely to help?</summary>
+
+A page escapes with probability 0.98<sup>100</sup> ≈ 0.13, so about 87% of pages, 8,700 of them,
+hold a match. An index scan would make about 20,000 random page visits; even a bitmap scan reads
+most of the table. A sequential scan is likely the better plan.
+
+</details>
+
+<details>
+<summary>2. The query is `WHERE status = 'pending' AND created_at < now() - interval '1 hour' ORDER BY created_at LIMIT 100`. Index on (status, created_at) or (created_at, status)?</summary>
+
+`(status, created_at)`. Equality first puts all pending rows in one run, already sorted by
+`created_at`, so the database reads the first 100 entries of that run and stops. With
+`(created_at, status)` it walks every row older than an hour, of every status, to find the pending
+ones. A partial index on `(created_at) where status = 'pending'` is smaller still.
+
+</details>
+
+<details>
+<summary>3. An index-only scan ran in 8 ms in the morning and 130 ms by the afternoon. Nothing was deployed. What do you check?</summary>
+
+The `Heap Fetches` line in `EXPLAIN ANALYZE`. Updates during the day clear visibility-map bits, so
+the scan has to read table pages again. If autovacuum is not keeping up with the table, tune it for
+that table, or look for a long-running transaction that stops vacuum from marking pages
+all-visible.
+
+</details>
+
+<details>
+<summary>4. `WHERE created_at::date = '2026-10-26'` reads the whole table, though `created_at` has an index. Why, and what are two fixes?</summary>
+
+The index is sorted by `created_at`, and the cast produces a different value the index does not
+store, so the database cannot seek. Rewrite as a half-open range
+(`created_at >= '2026-10-26' AND created_at < '2026-10-27'`), or create an expression index on the
+cast. The rewrite is better: it keeps one index serving both kinds of query.
+
+</details>
+
+<details>
+<summary>5. An InnoDB table uses a random UUIDv4 primary key and has five secondary indexes. Name two costs of that choice.</summary>
+
+Inserts go to random leaf pages of the clustered index, so the whole tree must stay in memory for
+fast inserts and page splits leave pages half full. And each of the five secondary indexes stores
+the 16-byte key in every entry, making all of them bigger. A time-ordered UUIDv7, or an integer key
+with the UUID as a separate unique column, avoids both.
+
+</details>
+
+## Recap
+
+- Cost is in pages, not rows. With matches spread at random, 1% of the rows can sit on 44% of the
+  pages, and past a few percent the full scan wins.
+- A B-tree seek costs one page per level, 3 or 4 levels for billions of keys, plus one table page
+  per matching row. That last part decides the plan.
+- Correlation between index order and physical order changes the cost by orders of magnitude; time
+  ordered data has it, random keys do not.
+- Composite indexes: equality columns first, then one range or sort column. The leftmost prefix
+  rule still holds except where skip scan helps (PostgreSQL 18, MySQL 8.0.13+).
+- Covering indexes skip the table, but in PostgreSQL only for pages the visibility map marks
+  all-visible; watch `Heap Fetches`.
+- Functions and casts on a column hide it from the index. Every index costs every write, the WAL
+  and HOT updates; build them `CONCURRENTLY`.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'query-optimization', why: 'How the planner estimates rows from statistics, reads EXPLAIN in depth, and what to do when the estimate is wrong.' },
+  { slug: 'b-trees-vs-lsm-trees', why: 'Inside the tree: page splits, write amplification, and the log-structured design that trades read cost for cheaper writes.' },
+  { slug: 'n-plus-one-queries', why: 'The other classic cause of a slow endpoint: a hundred fast queries where one would do.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [PostgreSQL 18 release notes](https://www.postgresql.org/docs/release/18/) (2025) — B-tree skip scan and `uuidv7()`.
+- [PostgreSQL docs: Indexes](https://www.postgresql.org/docs/current/indexes.html) (living docs, checked October 2026) — multicolumn, partial, expression and covering indexes, index-only scans and the visibility map.
+- [PostgreSQL docs: operator classes](https://www.postgresql.org/docs/current/indexes-opclass.html) (living docs, checked October 2026) — why `LIKE 'prefix%'` needs `text_pattern_ops` outside the C collation.
+- [MySQL 8.4 manual: clustered and secondary indexes](https://dev.mysql.com/doc/refman/8.4/en/innodb-index-types.html) (living docs, checked October 2026) — the clustered layout and why secondary indexes carry the primary key.
+- [MySQL 8.4 manual: multiple-column indexes](https://dev.mysql.com/doc/refman/8.4/en/multiple-column-indexes.html) (living docs, checked October 2026) — the leftmost prefix rule.
+- [MySQL 8.4 manual: type conversion in expression evaluation](https://dev.mysql.com/doc/refman/8.4/en/type-conversion.html) (living docs, checked October 2026) — comparing a string column with a number.
+- [RFC 9562: Universally Unique IDentifiers](https://www.rfc-editor.org/rfc/rfc9562) (2024) — UUIDv7 and its timestamp prefix.
+
+**Engineering writing**
+
+- [Clerk: 2026-02-19 system outage postmortem](https://clerk.com/blog/2026-02-19-system-outage-postmortem) (2026) — a plan flip after an automatic ANALYZE.
+- [PlanetScale: When the Postgres query planner goes rogue](https://planetscale.com/blog/when-the-postgres-query-planner-goes-rogue) (2026) — a planner abandoning an index as data grew.
+- [PlanetScale: B-trees and database indexes](https://planetscale.com/blog/btrees-and-database-indexes) (2024) — B-tree mechanics and why primary key choice matters, from the InnoDB side.
+- [Adyen: PostgreSQL HOT updates](https://www.adyen.com/knowledge-hub/postgresql-hot-updates) and [part 2](https://www.adyen.com/knowledge-hub/postgresql-hot-updates-part2) (2022) — write amplification, HOT updates and fillfactor, with monitoring.
+- [Cybertec: B-tree index deduplication](https://www.cybertec-postgresql.com/en/b-tree-index-deduplication/) (2020) — what PostgreSQL 13 changed in index size.
+- [pganalyze: tuning random_page_cost](https://pganalyze.com/blog/5mins-postgres-tuning-random-page-cost) (2022) — the default, SSDs and a production example.
+- [pganalyze docs: Bitmap Heap Scan](https://pganalyze.com/docs/explain/scan-nodes/bitmap-heap-scan) (living docs, checked October 2026) — exact and lossy pages, and `work_mem`.
