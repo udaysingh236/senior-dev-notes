@@ -1,0 +1,19 @@
+---
+// Many balancers, stale and partial views. See fleet-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="lb-fleet"
+  title="Four picking rules, one pool, the same traffic"
+  description="Four lanes run the same requests against eight backends that each serve one request at a time, 10 ms of work on average. Bars show how many requests each backend has in flight right now; the first backend, outlined in amber, is slower. Lane one picks the backend with the fewest in flight from a shared table; lane two picks the smaller of two random backends from the same table; lane three compares two random backends by the balancer's own in-flight requests; lane four compares two by the balancer's latency estimate multiplied by its in-flight count plus one. Each lane shows its p99 latency over the last three seconds."
+  watchFor="With the table refreshed live and one balancer, all four do well and 'least loaded' is best. Slide the refresh to 500 ms: every request in the same half second goes to the same 'least loaded' backend, its bar shoots up, then the next one does, and p99 climbs into seconds, while two choices on the same stale table also gets worse but stays under a second. Now set refresh back to 0 and raise balancers to 50: each balancer now sends about 10 requests a second and its own counts are almost always zero, so 'two choices, own counts' slides towards random and its p99 rises from about 120 ms to several hundred. The latency estimate remembers what the counts forget, and stays far lower."
+  viewBox="0 0 400 400"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createFleetModel } from './fleet-model';
+
+  mountAll('lb-fleet', createFleetModel);
+</script>

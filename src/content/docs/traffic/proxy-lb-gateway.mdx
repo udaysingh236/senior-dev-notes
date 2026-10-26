@@ -675,7 +675,7 @@ limit at the edge or gateway, which knows the caller's identity, not only their 
 
 <NextTopics items={[
   { slug: 'reverse-proxies', why: 'Buffering, TLS termination, caching and the headers a proxy must get right.' },
-  { slug: 'load-balancing', why: 'Algorithms in depth: least requests, power of two choices, consistent hashing, health checks.' },
+  { slug: 'load-balancing', why: 'The picking rules in depth: why least loaded herds on stale data, why least request goes blind behind many sidecars, subsetting, zones and outlier ejection.' },
   { slug: 'api-gateways', why: 'Auth, per-caller limits, routing and backends for frontends.' },
   { slug: 'latency-vs-throughput', why: 'Why a backend queue explodes near capacity, why one shared queue beats round robin, and Little\'s law for sizing pools.' },
   { slug: 'timeouts', why: 'Deadlines that shrink inward, and how to pass them between services.' },

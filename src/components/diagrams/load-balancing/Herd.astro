@@ -1,0 +1,56 @@
+---
+// One stale snapshot, eight requests: the minimum against the better of two random backends.
+const names = ['A', 'B', 'C', 'D'];
+const snapshot = [3, 0, 2, 4];
+const minimum = [3, 8, 2, 4];
+const two = [4, 4, 5, 4];
+const unit = 8; // height per request
+const panels = [
+  { title: 'pick the minimum', x: 4, after: minimum, verdict: 'B: 0 → 8', tone: 'bad' },
+  { title: 'better of two random', x: 210, after: two, verdict: '4, 4, 5, 4', tone: 'ok' },
+];
+const base = 200;
+---
+
+<svg viewBox="0 0 400 278" width="100%" role="img" aria-labelledby="lb-herd-t lb-herd-d">
+  <title id="lb-herd-t">The herd effect on a stale snapshot</title>
+  <desc id="lb-herd-d">
+    A snapshot taken 500 ms ago shows four backends with 3, 0, 2 and 4 requests in flight. Eight
+    requests arrive before the next refresh. Picking the minimum sends all eight to backend B, which
+    goes from 0 to 8, now the busiest. Picking the better of two random backends sends four to B,
+    three to C and one to A, ending at 4, 4, 5 and 4.
+  </desc>
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">snapshot, 500 ms old</text>
+  {
+    snapshot.map((n, k) => (
+      <g>
+        <rect x={4 + k * 34} y={70 - n * unit} width="26" height={Math.max(n * unit, 1)} rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+        <text x={17 + k * 34} y="88" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{names[k]} {n}</text>
+      </g>
+    ))
+  }
+  <text x="160" y="56" font-size="15" style="fill: var(--viz-ink)">8 requests arrive before</text>
+  <text x="160" y="76" font-size="15" style="fill: var(--viz-ink)">the next refresh</text>
+  {
+    panels.map((p) => (
+      <g>
+        <text x={p.x} y="122" font-size="16" font-weight="700" style="fill: var(--viz-ink)">{p.title}</text>
+        {p.after.map((n, k) => {
+          const added = n - snapshot[k];
+          return (
+            <g>
+              <rect x={p.x + k * 46} y={base - snapshot[k] * unit} width="34" height={Math.max(snapshot[k] * unit, 1)} rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+              {added > 0 && (
+                <rect x={p.x + k * 46} y={base - n * unit} width="34" height={added * unit} rx="3" stroke-width="1.5"
+                  style={p.tone === 'bad' ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'} />
+              )}
+              <text x={p.x + 17 + k * 46} y={base + 20} font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{names[k]} {n}</text>
+            </g>
+          );
+        })}
+        <text x={p.x} y="252" font-size="16" font-weight="700" style={`fill: var(--viz-${p.tone})`}>{p.verdict}</text>
+      </g>
+    ))
+  }
+  <text x="4" y="272" font-size="14" style="fill: var(--viz-muted)">blue: in flight at the snapshot; coloured: the 8 new requests</text>
+</svg>

@@ -5,7 +5,7 @@ tagline: Latency explodes long before a server is full. The reason is a queue yo
 difficulty: beginner
 track: foundations
 prerequisites: [how-the-web-works]
-next: [percentiles-and-tail-latency, back-of-the-envelope-estimation, connection-pooling, load-shedding, backpressure, autoscaling]
+next: [percentiles-and-tail-latency, back-of-the-envelope-estimation, load-balancing, connection-pooling, load-shedding, backpressure, autoscaling]
 lastReviewed: 2026-10-25
 sidebar:
   order: 3
@@ -623,6 +623,7 @@ arrival rate.
 <NextTopics items={[
   { slug: 'percentiles-and-tail-latency', why: 'Why averages lie, what p99 means, and why fan-out makes the tail everyone\'s problem.' },
   { slug: 'back-of-the-envelope-estimation', why: 'Turning these relationships into quick capacity numbers before you build.' },
+  { slug: 'load-balancing', why: 'Spreading requests over many queues when every balancer sees only part of the traffic.' },
   { slug: 'connection-pooling', why: 'Little\'s law applied to the scarcest resource in most services: database connections.' },
   { slug: 'load-shedding', why: 'What to do when arrivals exceed capacity: bounded queues and rejecting early.' },
   { slug: 'backpressure', why: 'Slowing producers down instead of letting queues grow without limit.' },

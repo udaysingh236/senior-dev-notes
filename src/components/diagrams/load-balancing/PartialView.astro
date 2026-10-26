@@ -1,0 +1,58 @@
+---
+// What each balancer sees: its own in-flight counts, against the true totals.
+const rows = [
+  { label: 'sidecar 1', counts: [0, 0, 1, 0, 0, 0, 0, 0] },
+  { label: 'sidecar 2', counts: [0, 0, 0, 0, 0, 1, 0, 0] },
+  { label: 'sidecar 3', counts: [0, 0, 0, 0, 0, 0, 0, 0] },
+  { label: '47 more', counts: null },
+];
+const total = [7, 1, 2, 0, 1, 2, 1, 0];
+const x0 = 120;
+const w = 34;
+---
+
+<svg viewBox="0 0 400 260" width="100%" role="img" aria-labelledby="lb-pv-t lb-pv-d">
+  <title id="lb-pv-t">Each balancer sees only its own requests in flight</title>
+  <desc id="lb-pv-d">
+    A table of requests in flight to eight backends. Sidecar 1 sees one request on backend 3 and
+    zeros elsewhere; sidecar 2 one on backend 6; sidecar 3 sees all zeros; 47 more sidecars are not
+    shown. The true totals across all fifty are 7, 1, 2, 0, 1, 2, 1 and 0: backend 1 has a queue of
+    seven, which no single sidecar can see.
+  </desc>
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">requests in flight, per backend</text>
+  {
+    total.map((_, k) => (
+      <text x={x0 + k * w + w / 2} y="60" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">{k + 1}</text>
+    ))
+  }
+  {
+    rows.map((r, i) => {
+      const y = 70 + i * 34;
+      return (
+        <g>
+          <text x="4" y={y + 22} font-size="16" style="fill: var(--viz-ink)">{r.label}</text>
+          {r.counts
+            ? r.counts.map((c, k) => (
+                <g>
+                  <rect x={x0 + k * w + 2} y={y + 2} width={w - 4} height="28" rx="4" stroke-width="1.5"
+                    style={c ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: none; stroke: var(--viz-stroke)'} />
+                  <text x={x0 + k * w + w / 2} y={y + 22} font-size="16" text-anchor="middle" style={c ? 'fill: var(--viz-ink)' : 'fill: var(--viz-muted)'}>{c}</text>
+                </g>
+              ))
+            : <text x={x0 + 4} y={y + 22} font-size="16" style="fill: var(--viz-muted)">… each also sees mostly zeros</text>}
+        </g>
+      );
+    })
+  }
+  <line x1="4" y1="210" x2="396" y2="210" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <text x="4" y="242" font-size="16" font-weight="700" style="fill: var(--viz-ink)">true total</text>
+  {
+    total.map((c, k) => (
+      <g>
+        <rect x={x0 + k * w + 2} y="220" width={w - 4} height="30" rx="4" stroke-width={k === 0 ? 2.5 : 1.5}
+          style={k === 0 ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'} />
+        <text x={x0 + k * w + w / 2} y="241" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{c}</text>
+      </g>
+    ))
+  }
+</svg>

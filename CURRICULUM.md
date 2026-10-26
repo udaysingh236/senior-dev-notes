@@ -54,7 +54,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | Reverse proxies | reverse-proxies | 3 | planned |
-| 2 | Load balancing | load-balancing | 8 | planned |
+| 2 | Load balancing | load-balancing | 8 | published (2026-10-26) |
 | 3 | API gateways | api-gateways | 9 | planned |
 | 4 | Reverse proxy vs load balancer vs API gateway | proxy-lb-gateway | new | published (2026-10-22) |
 | 5 | CDNs and edge caching | cdn-and-edge-caching | 84, 85 | planned |
