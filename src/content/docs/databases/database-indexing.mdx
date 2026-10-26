@@ -5,7 +5,7 @@ tagline: An index is a sorted copy of a few columns with a pointer back to each 
 difficulty: intermediate
 track: databases
 prerequisites: [latency-vs-throughput, acid-and-isolation-levels]
-next: [query-optimization, b-trees-vs-lsm-trees, n-plus-one-queries]
+next: [query-optimization, b-trees-vs-lsm-trees, n-plus-one-queries, connection-pooling]
 lastReviewed: 2026-10-26
 sidebar:
   order: 3
@@ -713,6 +713,7 @@ with the UUID as a separate unique column, avoids both.
   { slug: 'query-optimization', why: 'How the planner estimates rows from statistics, reads EXPLAIN in depth, and what to do when the estimate is wrong.' },
   { slug: 'b-trees-vs-lsm-trees', why: 'Inside the tree: page splits, write amplification, and the log-structured design that trades read cost for cheaper writes.' },
   { slug: 'n-plus-one-queries', why: 'The other classic cause of a slow endpoint: a hundred fast queries where one would do.' },
+  { slug: 'connection-pooling', why: 'Once each query is cheap, the limit becomes how many run at once: sizing the pool and the connection budget.' },
 ]} />
 
 ## Further reading
