@@ -1,0 +1,44 @@
+---
+// A pipeline: throughput is set by the slowest stage, latency is the sum of the stages plus the
+// queue in front of the bottleneck.
+const stages = [
+  { name: 'parse', cap: '2,000/s', ms: '0.5 ms', x: 4 },
+  { name: 'database', cap: '300/s', ms: '3 ms', x: 138, slow: true },
+  { name: 'render', cap: '900/s', ms: '1 ms', x: 272 },
+];
+---
+
+<svg viewBox="0 0 400 214" width="100%" role="img" aria-labelledby="lvt-bn-t lvt-bn-d">
+  <title id="lvt-bn-t">Throughput is the slowest stage, latency is the sum</title>
+  <desc id="lvt-bn-d">
+    Three stages in a row: parse handles 2,000 a second at 0.5 ms each, the database 300 a second at
+    3 ms, render 900 a second at 1 ms. The whole pipeline does 300 a second, the slowest stage.
+    Latency is at least 0.5 plus 3 plus 1, 4.5 ms, plus whatever waits in the queue that forms in
+    front of the database. Making parse or render faster changes nothing.
+  </desc>
+  <defs>
+    <marker id="lvt-bn-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  {
+    stages.map((s) => (
+      <g>
+        <rect x={s.x} y="40" width="124" height="70" rx="8" stroke-width="2"
+          style={s.slow ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'} />
+        <text x={s.x + 62} y="66" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{s.name}</text>
+        <text x={s.x + 62} y="86" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{s.cap}</text>
+        <text x={s.x + 62} y="104" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">{s.ms} each</text>
+      </g>
+    ))
+  }
+  <line x1="129" y1="75" x2="136" y2="75" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lvt-bn-a)" />
+  <line x1="263" y1="75" x2="270" y2="75" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lvt-bn-a)" />
+  {[0, 1, 2, 3, 4].map((i) => <rect x={146 + i * 14} y="16" width="10" height="16" rx="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" stroke-width="1.5" />)}
+  <text x="222" y="30" font-size="14" style="fill: var(--viz-warn)">queue</text>
+  <g font-size="16">
+    <text x="4" y="146" font-weight="700" style="fill: var(--viz-ink)">throughput = slowest stage = 300/s</text>
+    <text x="4" y="172" style="fill: var(--viz-ink)">latency ≥ 0.5 + 3 + 1 = 4.5 ms, plus the queue</text>
+    <text x="4" y="200" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">a faster parse or render changes neither</text>
+  </g>
+</svg>

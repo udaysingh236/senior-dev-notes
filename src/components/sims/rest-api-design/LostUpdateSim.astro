@@ -1,0 +1,19 @@
+---
+// Read-modify-write edits through an HTTP API, written back three ways. See lost-update-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="lost-update"
+  title="Editors racing on one product, three ways to write back"
+  description="Three lanes run the same editors against one product. Each edit GETs the product, waits, then writes one field as the value it read plus one. Each lane shows a bar of edits that were answered 200 OK: green for edits still in the product, red and dashed for edits that were answered 200 OK but later overwritten. Under the bar, a row of circles shows each editor, filled while it holds a copy it read earlier."
+  watchFor="With the defaults, the blind PUT lane loses more than half of the edits it answered 200 OK, and nothing ever reported an error. If-Match loses none but pays in 412 retries, even when two editors changed different fields. Merge PATCH loses only edits to the shared field: set the shared-field slider to 0% and it loses nothing; set it to 100% and it is as bad as the blind PUT."
+  viewBox="0 0 400 298"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createLostUpdateModel } from './lost-update-model';
+
+  mountAll('lost-update', createLostUpdateModel);
+</script>

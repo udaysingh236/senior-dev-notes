@@ -1,0 +1,48 @@
+---
+// Four servers at 80% each: four separate queues against one shared queue (numbers from
+// examples/latency-vs-throughput, 200,000 simulated requests each).
+const sep = [3, 0, 5, 1];
+---
+
+<svg viewBox="0 0 400 236" width="100%" role="img" aria-labelledby="lvt-sq-t lvt-sq-d">
+  <title id="lvt-sq-t">Four separate queues against one shared queue</title>
+  <desc id="lvt-sq-d">
+    Left: four servers, each with its own queue; the queues are uneven, one empty while another holds
+    five. Mean latency 49.6 ms. Right: the same four servers taking from one shared queue, so no
+    server sits idle while requests wait elsewhere. Mean latency 17.4 ms, at the same 80%
+    utilisation and the same 10 ms of work per request.
+  </desc>
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">a queue each</text>
+  <text x="214" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one shared queue</text>
+  {
+    sep.map((n, i) => {
+      const y = 34 + i * 36;
+      return (
+        <g>
+          {Array.from({ length: 5 }, (_, k) => (
+            <rect x={8 + k * 18} y={y + 6} width="14" height="18" rx="2" stroke-width="1.5"
+              style={k >= 5 - n ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: none; stroke: var(--viz-stroke)'} />
+          ))}
+          <rect x="112" y={y} width="58" height="30" rx="5" stroke-width="2"
+            style={n === 0 ? 'fill: none; stroke: var(--viz-stroke)' : 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'} />
+          <text x="141" y={y + 20} font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">{n === 0 ? 'idle' : 'busy'}</text>
+        </g>
+      );
+    })
+  }
+  {Array.from({ length: 5 }, (_, k) => (
+    <rect x={218 + k * 18} y="94" width="14" height="18" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  ))}
+  {[0, 1, 2, 3].map((i) => (
+    <g>
+      <path d={`M310 103 L330 ${49 + i * 36}`} fill="none" stroke-width="1.5" style="stroke: var(--viz-flow)" />
+      <rect x="332" y={34 + i * 36} width="58" height="30" rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+      <text x="361" y={54 + i * 36} font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">busy</text>
+    </g>
+  ))}
+  <g font-size="17" font-weight="700">
+    <text x="4" y="202" style="fill: var(--viz-bad)">mean 49.6 ms</text>
+    <text x="214" y="202" style="fill: var(--viz-ok)">mean 17.4 ms</text>
+  </g>
+  <text x="4" y="228" font-size="15" style="fill: var(--viz-muted)">same servers, same 80% load, same 10 ms of work</text>
+</svg>

@@ -1,0 +1,682 @@
+---
+title: Load Balancing
+description: How a load balancer actually picks a backend, and what each picking rule can see. Smooth weighted round robin, why "least loaded" herds on a stale table while two random choices does not, why least-request goes blind behind fifty sidecars, latency-aware picking with peak EWMA and Google's Prequal, subsetting, zone-aware routing, outlier ejection and panic mode.
+tagline: Every balancer decides with a partial, slightly old view of the pool. The algorithms that work are the ones built for that.
+difficulty: intermediate
+track: traffic
+prerequisites: [proxy-lb-gateway, latency-vs-throughput]
+next: [consistent-hashing, health-checks-and-probes, service-discovery]
+lastReviewed: 2026-10-26
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import Pipeline from '../../../components/diagrams/load-balancing/Pipeline.astro';
+import Herd from '../../../components/diagrams/load-balancing/Herd.astro';
+import PartialView from '../../../components/diagrams/load-balancing/PartialView.astro';
+import Subsets from '../../../components/diagrams/load-balancing/Subsets.astro';
+import Zones from '../../../components/diagrams/load-balancing/Zones.astro';
+import FleetSim from '../../../components/sims/load-balancing/FleetSim.astro';
+import EjectSim from '../../../components/sims/load-balancing/EjectSim.astro';
+
+## The question
+
+Fifty sidecar proxies sit in front of the same eight backends, and every one of them runs
+least-request: send each request to the backend with the fewest requests in flight. One backend
+turns three times slower. Each sidecar sends about ten requests a second, so at any moment it has,
+on average, a fifth of a request in flight across all eight backends. Its counts read zero, zero,
+zero, zero. What is least-request actually deciding on? And if you give every sidecar a shared
+table of the true counts, refreshed twice a second, why does latency get worse, not better?
+
+## Why this problem exists
+
+The [comparison page](/traffic/proxy-lb-gateway/) covers what a balancer can read at layer 4 and
+layer 7, and why balancing per request beats balancing per connection. This page is about the
+decision itself: given a request and a pool of backends, which one gets it.
+
+The goal is not equal CPU or equal request counts. It is that no request waits in a queue it could
+have avoided. Waiting is the expensive part: on the [latency page](/foundations/latency-vs-throughput/),
+a server at 80% utilisation with random arrivals makes the average request wait four times its own
+work. Two backends at 60% and 100% average 80%, but the second one's queue grows without limit.
+Imbalance is paid for in queueing, and queueing grows much faster than load.
+
+Imbalance has three independent causes, and each picking rule handles a different subset of them:
+
+- **Requests differ.** A cached read might take 2 ms and a report 2 s on the same endpoint. Round
+  robin equalises the number of requests, not the work.
+- **Servers differ.** Mixed instance types, a noisy neighbour on the same host, a garbage
+  collection pause, a cold cache after a deploy. The same request costs more on some backends.
+- **Views differ.** The balancer is rarely one box. It is often many: every replica of an L7
+  proxy tier, or one sidecar per client pod, or a library inside every client process. Each one
+  makes its own decisions from what it alone has seen.
+
+The third cause is the one most explanations skip, and it decides which algorithms work at scale.
+A balancer instance can observe four things:
+
+1. **Its own requests in flight** to each backend: sent, response not yet back. Exact and current,
+   but only for its own traffic.
+2. **The latencies it has measured** from each backend. A record of the past, only from its own
+   requests.
+3. **The errors it has seen**: failed connections, 5xx responses, timeouts.
+4. **What backends report** about themselves: CPU, queue length, a weight, often in a response header
+   or from a central controller. Covers all traffic, but is as old as the last report.
+
+Everything a picking rule does is some combination of these four, so their freshness and coverage
+are the real design constraints.
+
+## The obvious fix, and why it breaks
+
+"Give every balancer the full picture." Keep one table of true in-flight counts per backend, in
+shared memory or a fast store, and have every balancer read it and pick the minimum.
+
+The live version costs too much. Every request now needs a read before it is sent and two writes
+(increment on send, decrement on response). At 50,000 requests a second that is 150,000 operations a
+second on one table, a network round trip added to every request, and a new component whose
+failure stops all traffic.
+
+So the table gets refreshed periodically instead: every 100 ms, every second. And then it fails in
+a way that surprises people. Between two refreshes, every balancer sees the same "least loaded"
+backend, and every one of them sends everything to it. By the next refresh that backend is the most
+loaded, and the stampede moves to the next one. This is the **herd effect**: correct information,
+applied by everyone at once, after it has stopped being true.
+
+In our simulation (eight backends, one 3× slower, 70% load, [examples/load-balancing](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/load-balancing)),
+the p99 latency of "pick the minimum" goes from 78 ms with a live table to 173 ms with a 20 ms old
+table, 552 ms at 100 ms and 3.3 s at 500 ms. The information did not get much worse. The rule did.
+
+Three neighbouring ideas get mixed up with load balancing. **Service discovery** decides who is in
+the pool; the balancer decides who gets this request. **Autoscaling** changes how many backends
+there are; it cannot fix a picking rule that overloads some while others idle. **Consistent hashing**
+sends the same key to the same backend on purpose, trading balance for locality; it has its own
+page (coming soon).
+
+## The core idea
+
+A load balancer is a filter followed by a choice, run on every request, with results fed back. The
+filter removes backends that should not be considered: unhealthy, ejected, in another zone, outside
+this client's subset. The choice uses a signal that is fresh and local where possible, adds
+randomness so many balancers do not move together, and corrects for speed with weights or measured
+latency. Every response updates the signals for the next decision.
+
+The analogy is a supermarket with many checkouts and shoppers who can only see the two nearest
+queues. The analogy works until you add a big screen showing every queue length, updated once a
+minute: suddenly every shopper walks to the same "shortest" queue.
+
+<Figure caption="The decision a load balancer makes for each request. Each stage removes backends from consideration, and the last stage picks one using signals that each balancer measures itself. The responses feed those signals, and errors feed the ejection filter.">
+  <Pipeline />
+</Figure>
+
+## How it works, piece by piece
+
+### Weights, spread smoothly
+
+A **weight** is a number per backend that says how much of the traffic it should get: weight 2 means
+twice the share of weight 1. Weights come from instance size (a 16-core machine next to 4-core
+ones), from a slow-start ramp after a deploy, or from a controller that measures load (Dropbox's,
+below). They are the one signal that needs no measurement at request time.
+
+The naive weighted round robin sends each backend `weight` requests in a row. With weights
+a = 5, b = 1, c = 1 the order is `a a a a a b c`: five requests land on `a` back to back, which is a
+burst on `a` while `b` and `c` sit idle.
+
+nginx spreads them out with a **counter per backend**. On every pick it adds each backend's weight to
+that backend's counter, sends the request to the backend with the highest counter, and subtracts
+the total weight (7 here) from the winner's counter. The winner drops to the back; everyone else
+creeps up. Run it for one cycle of 7 picks:
+
+| Pick | Counters after adding weights (a, b, c) | Highest | After subtracting 7 |
+|---|---|---|---|
+| 1 | 5, 1, 1 | a | −2, 1, 1 |
+| 2 | 3, 2, 2 | a | −4, 2, 2 |
+| 3 | 1, 3, 3 | b | 1, −4, 3 |
+| 4 | 6, −3, 4 | a | −1, −3, 4 |
+| 5 | 4, −2, 5 | c | 4, −2, −2 |
+| 6 | 9, −1, −1 | a | 2, −1, −1 |
+| 7 | 7, 0, 0 | a | 0, 0, 0 |
+
+The order is `a a b a c a a`: the same 5 : 1 : 1 shares, interleaved, and the counters are back at
+zero, so the cycle repeats. Ties go to the first backend listed. Envoy reaches the same result with
+a different structure: it gives each backend a "deadline" that advances by 1 / weight per pick and
+always serves the earliest deadline ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
+
+Weights fix servers that differ in a known, stable way. They do nothing for requests that differ,
+and nothing for a backend that slows down for reasons nobody configured.
+
+### Least loaded from a shared table, and the herd
+
+**Least loaded** means: look at a load number for every backend and pick the smallest. With a live,
+exact number it is close to optimal. The herd shows up as soon as the number is old and many
+requests decide on it.
+
+Count what happens in one refresh period. With a table refreshed every 500 ms and 513 requests a
+second arriving, about 256 requests decide from the same snapshot. If backend 4 showed the lowest
+count, all 256 go to backend 4, which serves 100 a second. Half a second later it holds a queue
+of about 200, and the next snapshot sends the next 256 somewhere else.
+
+**Two random choices** (also called P2C, power of two choices) fixes this without fresher data.
+Instead of the minimum over all backends, pick two backends at random and take the less loaded of
+those two. The least loaded backend now wins only when it is one of the two sampled. With 8
+backends, the chance that a particular backend is in a random pair is 1 − (7/8 × 6/7) = 25%. So on a
+stale table, the "best" backend gets at most about a quarter of new requests instead of all of
+them, and the rest still go to backends that were lighter than the alternative they were compared
+with. The randomness throws away a little accuracy and buys immunity to stampedes.
+
+<Figure caption="The same stale snapshot, used two ways. 'Pick the minimum' sends every request in the refresh period to the backend that looked emptiest, which overloads it. 'Better of two random' spreads them, because the emptiest backend wins only when it is sampled.">
+  <Herd />
+</Figure>
+
+In the same simulation, P2C on the 500 ms old table has a p99 of 665 ms against 3.3 s for the
+minimum. With a live table the minimum is better (78 ms against 121 ms): randomness costs
+something when the information is perfect. The crossover is already at a 20 ms old table: 173 ms for
+the minimum against 150 ms for P2C. Real tables are always older than that.
+
+### Least request, and the view each balancer has
+
+**Least request** (Envoy's name; others say least outstanding or least connections) uses signal 1:
+each balancer's own count of requests in flight to each backend. That count is exact and current,
+so there is no herd. Envoy implements it as P2C over those counts by default
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
+
+The count is also partial, and how partial depends on how many balancers share the traffic.
+Little's law (number in flight = arrival rate × time each request spends in flight) gives the number.
+A balancer that sends 10 requests a second with 20 ms latency has, on average, 10 × 0.02 = 0.2
+requests in flight, spread over all backends. Most of the time every count it sees is zero.
+Comparing zero with zero tells it nothing, and least request quietly turns into random.
+
+<Figure caption="Three balancers share the same eight backends. Each knows only its own requests in flight, so each sees mostly zeros, while backend 1 has a queue of seven that no single balancer can see.">
+  <PartialView />
+</Figure>
+
+The same rule that is excellent behind one central proxy is close to random behind fifty sidecars.
+In the simulation, P2C on own counts has a p99 of 121 ms with one balancer and 986 ms with fifty.
+Same backends, same total traffic, same algorithm. Only the view changed. This is the answer to the
+opening question: the sidecars are deciding on almost nothing, and the stale shared table makes it
+worse by adding a herd.
+
+### Latency-aware picking
+
+A balancer with little traffic of its own still has a memory: the latencies it measured. That is
+signal 2, and it carries information across time where in-flight counts do not.
+
+The building block is an **exponentially weighted moving average** (EWMA): a running average that
+gives recent samples more weight. Each new sample moves the estimate part of the way towards it:
+`estimate = estimate + α × (sample − estimate)`. With α = 0.3, an estimate of 10 ms and a 40 ms
+sample becomes 10 + 0.3 × 30 = 19 ms. No history needs storing: one number per backend is enough.
+
+**Peak EWMA**, used by Finagle and by Linkerd's proxy ([Linkerd docs](https://linkerd.io/docs/reference/load-balancing/)),
+changes two things:
+
+- **Up at once, down slowly.** A sample slower than the estimate replaces it immediately (10 → 40,
+  not 10 → 19); faster samples ease it down (40 → 31 → 24.7 → 20.3 on three 10 ms samples). One slow
+  response is enough to steer away; recovery needs a run of fast ones.
+- **It fades without samples.** Between samples the estimate decays towards zero (in our code, by
+  a factor of e ≈ 2.7 per second), so a backend that was slow and got no traffic soon looks worth
+  trying again. Without this, a backend that was slow once would never be sampled again.
+
+The cost of a backend is `estimate × (in flight + 1)`: roughly how long a new request would wait if
+it joined this backend's queue. A backend with a 12 ms estimate and 3 requests in flight costs 48; an
+idle one with a 40 ms estimate costs 40 and wins. Combine it with P2C, compare two random backends
+by cost, and the herd problem stays solved.
+
+Run the four rules side by side here. The first two lanes share a table whose age you control; the
+last two use only what each balancer sees.
+
+<FleetSim />
+
+In the example program (60 simulated seconds; the widget draws different random numbers, so its
+values differ a little but rank the same), with fifty balancers peak EWMA keeps p99 at about 390 ms
+where own-count P2C reaches 986 ms, and it sends the slow backend 5.3% of requests, close to its fair 4.5% share of
+capacity. With one balancer, peak EWMA gets 98 ms. The gap between one balancer and fifty is the
+price of the partial view; latency memory recovers most of it.
+
+Envoy's least-request policy uses weights and in-flight counts together when weights differ: each
+backend's effective weight is `weight / (in flight + 1) ^ bias`, with bias 1.0 by default. A
+backend of weight 3 with 5 in flight gets 3 / 6 = 0.5; a backend of weight 1 with none gets 1. The
+small idle backend now gets twice the share of the big busy one until the counts change.
+
+Google's **Prequal** ([NSDI 2024](https://www.usenix.org/conference/nsdi24/presentation/wydrowski))
+goes a step further, and its title is the lesson: "load is not what you should balance". It does not
+balance CPU at all. Each client sends small asynchronous **probes** to a few backends and keeps a pool
+of recent answers: the backend's requests in flight (RIF, counted at the backend, so it covers every
+client's traffic) and its recent latency. It splits the probed backends into "hot" (RIF above a
+threshold) and "cold", picks the lowest latency among the cold ones, and falls back to the lowest RIF
+if every candidate is hot. Probes give each client a fresh, whole-traffic view of a few backends,
+which is exactly what both a shared table (whole but stale) and own counts (fresh but partial) lack.
+Google reports it ran on YouTube for over two years and cut tail latency, errors and resource use
+enough to run machines at higher utilisation.
+
+### Subsetting
+
+Every client so far could reach every backend. In a large service that is a **full mesh**: 300
+client tasks and 300 backends need 90,000 connections, each with a TLS session and buffers, and if
+every client health-checks every backend every 5 seconds, the backends receive 18,000 checks a
+second between them, 60 each. A **subset** limits each client to k backends. With k = 10 the mesh
+drops to 3,000 connections and each backend sees about 2 checks a second.
+
+The question is how to choose the k without making the backends uneven. Count how many clients
+pick each backend:
+
+- **Stable random** (each client keeps the k backends with the highest hash of client and backend,
+  called rendezvous hashing): each backend gets 10 clients on average, but in our run between 2 and
+  20. The backend with 20 clients gets twice the traffic of an average one, and ten times the
+  unluckiest.
+- **Deterministic subsetting**: group clients into rounds of 30 (300 backends / 10 per subset).
+  Every client in a round shuffles the backend list with the same seed, the round number, and takes
+  its own slice of 10. Within a round, every backend is in exactly one slice, so every backend ends
+  up with exactly 10 clients.
+
+<Figure caption="Each client connects to a subset of the backends. Random subsets leave some backends with twice the clients of others; deterministic subsets deal every backend to exactly one client per round.">
+  <Subsets />
+</Figure>
+
+Deterministic subsetting has a cost that only shows when the pool changes. Remove one backend and
+the round size changes, every round reshuffles, and in our run 2,821 of the 3,000 connections
+move to different backends. Rendezvous hashing moves 14: only the clients that lost the removed
+backend open one new connection each. Balance or stability, pick one, with the simple algorithms.
+
+Google ran deterministic subsetting as its default for over a decade and published its replacement
+in 2022, "Rocksteady", built to keep subsets balanced while changing few connections when backends
+are added or removed ([ACM Queue, 2022](https://queue.acm.org/detail.cfm?id=3570937)). Pool changes
+are constant under autoscaling and rolling deploys, so connection churn was causing real incidents.
+
+Subsetting interacts with everything above. A client that sees 10 of 300 backends has a smaller
+view, so its per-backend counts are larger and least request works better; but a slow backend in its
+subset is 10% of its choices, not 0.3%.
+
+### Zones and locality
+
+Cloud regions are split into **zones**: separate data centres a few milliseconds apart. Traffic
+between zones adds latency and, on AWS, is billed per gigabyte in each direction
+([AWS networking blog](https://aws.amazon.com/blogs/networking-and-content-delivery/optimizing-data-transfer-costs-when-using-aws-network-load-balancer)).
+So balancers prefer backends in their own zone. The danger is that "prefer local" ignores how much
+capacity is local.
+
+AWS Network Load Balancers show the trap with defaults. Each zone gets a balancer node, DNS spreads
+clients roughly evenly over the nodes, and cross-zone balancing is off by default for NLBs (always
+on for Application Load Balancers)
+([ELB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html),
+as of October 2026). Put 2 targets in zone A and 8 in zone B: each zone node takes half the traffic
+and shares it among its local targets, so each zone A target gets 25% and each zone B target 6.25%.
+Four times the load, from a deployment detail.
+
+Envoy's **zone-aware routing** compares two shares: the share of calling proxies in a zone and the
+share of backends there. If zone A has 50% of the callers but 30% of the backends, Envoy keeps 30/50 =
+60% of zone A's requests local and spills the other 40% to zones with spare backends. If a zone has
+at least its share of backends, everything stays local. It turns itself off below 6 backends
+(`min_cluster_size`), where one host failing would swing the shares too far
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/load_balancing_policies/common/v3/common.proto)).
+
+<Figure caption="Zone A has half the callers but only 30% of the backends. Zone-aware routing keeps 60% of zone A's requests local and spills the rest, so every backend gets the same load. Pure 'stay local' would put 67% more load on each zone A backend.">
+  <Zones />
+</Figure>
+
+Kubernetes Services gained a similar preference with `trafficDistribution: PreferClose`, and the
+proposal behind it says the trap out loud: endpoints in the preferred zone can become overloaded
+when zones are uneven ([KEP-4444](https://www.kubernetes.dev/resources/keps/4444/)).
+
+### Ejection, and the panic guard
+
+**Outlier detection** is the error signal turned into a filter: a backend that fails several
+requests in a row is **ejected**, removed from the pool for a while. Envoy's defaults: 5 consecutive
+5xx responses or connection failures, ejection for 30 s multiplied by the number of times this
+backend has been ejected, and never more than 10% of the pool ejected at once (but always at least
+one) ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/outlier_detection.proto),
+as of October 2026). Health checks, active and passive, are covered on the
+[comparison page](/traffic/proxy-lb-gateway/) and in depth on their own page (coming soon).
+
+The 10% cap looks timid until you count. Ten backends at 80% load carry 800 requests a second with
+1,000 of capacity. A bad deploy makes three fail. Eject all three and seven backends must carry 800
+with 700 of capacity: they are now at 114%, their queues grow until requests time out, the timeouts
+count as failures, and they are ejected too. Ejection protects against one bad backend and amplifies
+a capacity problem into an outage.
+
+The second guard is **panic mode**: when fewer than a threshold share of backends are left (Envoy's
+default is 50%), stop trusting the filter and send to all of them, ejected or not
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold)).
+The reasoning: if half the pool looks broken at once, the checks are more likely wrong than half the
+machines, and some requests failing beats all of them failing.
+
+<EjectSim />
+
+Notice two things in the sim. First, the cascade outlives its cause: when the bad deploy ends, each
+host that comes back gets the whole load alone and is ejected again. Second, while the bad hosts
+are in the pool they attract traffic, because a host that fails in 1 ms always has nothing in
+flight. Fast failure looks like spare capacity to every in-flight or latency-based rule.
+
+## Choosing between them
+
+| Rule | Signal | Needs coordination | Herd on stale data | Slow backend | Many balancers |
+|---|---|---|---|---|---|
+| Round robin | none | no | no | blind | fine (equally blind) |
+| Smooth weighted RR | configured weights | no | no | blind unless weights change | fine |
+| Least loaded (full scan) | a shared table | yes | severe | good if live | herds |
+| P2C least request | own in-flight counts | no | no | good | weak: counts go to zero |
+| P2C peak EWMA | own latency × in-flight | no | no | good | good: latency remembers |
+| Probing (Prequal) | backend-reported RIF and latency | probes only | no | good | good |
+
+How to choose: behind one or a few central L7 proxies, P2C least request is the default for a reason
+and is hard to beat. With many balancers, sidecars or client libraries, add latency awareness
+(peak EWMA) or probing, since each instance's counts are too thin. Use weights for known capacity
+differences and for slow start, and never "pick the global minimum" from data you did not measure
+yourself a moment ago. Then add the filters: zone preference with spillover, outlier ejection with a
+cap, and a panic threshold.
+
+## Build it yourself
+
+Three pieces in a few lines each: smooth weighted round robin, P2C with peak EWMA, and a stable
+subset. The full programs, including the fleet simulation that produced this page's numbers, are in
+[`examples/load-balancing`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/load-balancing).
+
+Smooth weighted round robin; with `trace` on it prints the counters at every pick, the table above, and the order `a a b a c a a`:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="weighted.py (excerpt)"
+# runnable version: examples/load-balancing/python/weighted.py
+def smooth(weights: dict[str, int], picks: int, trace: bool = False) -> list[str]:
+    total = sum(weights.values())
+    current = {name: 0 for name in weights}
+    order = []
+    for _ in range(picks):
+        for name, w in weights.items():
+            current[name] += w
+        best = max(current, key=current.get)  # ties go to the first listed
+        if trace:
+            print("  counters", "  ".join(f"{n}={c:>2}" for n, c in current.items()), " ->", best)
+        current[best] -= total
+        order.append(best)
+    return order
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="weighted.mjs (excerpt)"
+// runnable version: examples/load-balancing/js/weighted.mjs
+function smooth(weights, picks, trace = false) {
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
+  const current = Object.fromEntries(Object.keys(weights).map((name) => [name, 0]));
+  const order = [];
+  for (let i = 0; i < picks; i++) {
+    for (const [name, w] of Object.entries(weights)) current[name] += w;
+    let best = null; // ties go to the first listed
+    for (const name of Object.keys(current)) if (best === null || current[name] > current[best]) best = name;
+    if (trace) {
+      const counters = Object.entries(current).map(([n, c]) => `${n}=${String(c).padStart(2)}`).join('  ');
+      console.log('  counters', counters, ' ->', best);
+    }
+    current[best] -= total;
+    order.push(best);
+  }
+  return order;
+}
+```
+  </TabItem>
+</Tabs>
+
+P2C with peak EWMA. Each balancer keeps one estimate and one in-flight count per backend; the pick
+compares two random backends by estimate × (in flight + 1):
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="fleet.py (excerpt)"
+# runnable version: examples/load-balancing/python/fleet.py
+class PeakEwma:
+    TAU_MS, ALPHA = 1000.0, 0.3
+
+    def __init__(self) -> None:
+        self.value, self.at = SERVICE_MS, 0.0
+
+    def read(self, now: float) -> float:  # fades towards zero between samples
+        return self.value * math.exp(-(now - self.at) / self.TAU_MS)
+
+    def observe(self, sample: float, now: float) -> None:
+        current = self.read(now)  # up at once, down slowly
+        self.value = sample if sample > current else current + self.ALPHA * (sample - current)
+        self.at = now
+
+def pick_peak_ewma(ewma: list[PeakEwma], own: list[int], now: float, rng: Rng) -> int:
+    a, b = two(rng)  # two different random backends
+    cost = lambda i: ewma[i].read(now) * (own[i] + 1)
+    return a if cost(a) <= cost(b) else b
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="fleet.mjs (excerpt)"
+// runnable version: examples/load-balancing/js/fleet.mjs
+class PeakEwma {
+  static TAU_MS = 1000;
+  static ALPHA = 0.3;
+  value = SERVICE_MS;
+  at = 0;
+  read(now) { // fades towards zero between samples
+    return this.value * Math.exp(-(now - this.at) / PeakEwma.TAU_MS);
+  }
+  observe(sample, now) {
+    const current = this.read(now); // up at once, down slowly
+    this.value = sample > current ? sample : current + PeakEwma.ALPHA * (sample - current);
+    this.at = now;
+  }
+}
+
+function pickPeakEwma(ewma, own, now, r) {
+  const [a, b] = two(r); // two different random backends
+  const cost = (i) => ewma[i].read(now) * (own[i] + 1);
+  return cost(a) <= cost(b) ? a : b;
+}
+```
+  </TabItem>
+</Tabs>
+
+A stable subset by rendezvous hashing: score every backend by a hash of (client, backend) and keep
+the top k. A removed backend only changes the subsets that contained it:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="subsets.py (excerpt)"
+# runnable version: examples/load-balancing/python/subsets.py
+def rendezvous_subset(frontend: int, backends: list[int]) -> set[int]:
+    return set(sorted(backends, key=lambda b: mix(frontend * 100_003 + b), reverse=True)[:K])
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="subsets.mjs (excerpt)"
+// runnable version: examples/load-balancing/js/subsets.mjs
+function rendezvousSubset(frontend, backends) {
+  const score = (b) => mix(frontend * 100_003 + b);
+  return new Set([...backends].sort((a, b) => score(b) - score(a)).slice(0, K));
+}
+```
+  </TabItem>
+</Tabs>
+
+`fleet` prints the p99 table quoted throughout this page (50 balancers: P2C own counts 986 ms, peak
+EWMA 390 ms), and `subsets` prints the balance and churn numbers (10–10 and 2,821 connections moved
+for deterministic, 2–20 and 14 for rendezvous). Python and JavaScript print identical output.
+
+## How real systems do it
+
+**Envoy** (as of October 2026) offers round robin and least request, both weighted with
+earliest-deadline scheduling, plus ring hash, Maglev and random. Least request is P2C by default
+(`choice_count` 2) and switches to `weight / (in flight + 1) ^ bias` when weights differ. Around the
+choice sit zone-aware routing, outlier detection (5 consecutive errors, 30 s base ejection, 10% cap)
+and the 50% panic threshold. Every number in those last two sections is a default you inherit when
+you install Istio or Envoy Gateway, so it is worth knowing what they do.
+
+**Linkerd** balances with peak EWMA over P2C and documents its main failure mode: a backend that
+answers 429 Too Many Requests fast looks fast, so EWMA sends it more traffic, which earns more 429s.
+Linkerd 2.20 (June 2026) added rate-limit-aware balancing that replaces the latency of a 429 with a
+penalty, longer if the server sends `Retry-After`
+([Linkerd docs](https://linkerd.io/docs/tasks/rate-limit-aware-load-balancing/)).
+
+**Google** runs two of the ideas on this page at very large scale: Prequal's probing on YouTube (NSDI
+2024) and Rocksteady subsetting across its RPC stack (2022). Both papers say the same thing in
+different words: the hard part is not the formula, it is what each client can know.
+
+**Dropbox** built Robinhood, its in-house balancing service, around weights instead of in-flight
+counts. Each backend reports utilisation, and a PID controller per backend (a feedback loop that
+raises or lowers an output based on the error, its accumulation and its rate of change) adjusts that
+backend's weight to push its utilisation towards the fleet average. The weights are then normalised
+and pushed to clients ([Dropbox, 2024](https://dropbox.tech/infrastructure/robinhood-in-house-load-balancing-service)).
+This is signal 4 used carefully: backend reports cover all traffic, and the controller damps them so
+the weights do not swing with every report.
+
+## Gotchas and war stories
+
+:::caution[Fast errors look like capacity]
+Every rule that prefers low latency or few requests in flight prefers a backend that fails
+instantly. A process that returns 500 in a millisecond after losing its database connection
+attracts more traffic than its healthy neighbours. Count errors as slow (Linkerd's penalty
+approach) or eject on error rate, and never let only successes feed the latency estimate.
+:::
+
+:::danger[A health check that tests your dependencies takes down the whole pool]
+If `/healthz` checks the database and the database stalls, every backend fails its check at the same
+moment, and the balancer removes all of them, turning a slow database into a total outage. Check
+only what the process itself controls, and keep a panic threshold so that "everyone is unhealthy"
+is treated as a broken check. The health checks page (coming soon) covers check design.
+:::
+
+:::caution[New backends get nothing on long-lived connections]
+A client with HTTP/2 or gRPC connections already open keeps using them. Scale from 10 backends to 20
+and the 10 new ones receive only connections that clients happen to open later, which may be never.
+gRPC servers can set a maximum connection age (`MaxConnectionAge` in grpc-go, infinite by default,
+with ±10% jitter so all clients do not reconnect together); the server sends GOAWAY and the client
+reconnects and rebalances ([grpc-go keepalive](https://pkg.go.dev/google.golang.org/grpc/keepalive)).
+:::
+
+:::caution[Feedback loops oscillate]
+Weights computed from reported CPU swing: a backend reports high CPU, loses weight, cools down,
+regains weight, heats up. The faster the loop and the staler the reports, the bigger the swing, the
+same mechanism as the herd. Damp it (Dropbox's PID controller, smoothing, a maximum change per
+interval), or use local signals that react per request instead.
+:::
+
+## Trade-offs and when not to use it
+
+Smarter picking costs state and complexity. Peak EWMA keeps a number per backend per balancer and
+can be fooled by fast errors; probing costs extra RPCs; zone awareness needs topology data from
+discovery. Each filter that removes backends is a way to concentrate load on the rest, which is why
+ejection and locality both need caps.
+
+Load balancing also cannot fix three things. It cannot create capacity: when the pool is at 114% the
+best rule picks which requests time out. That is the job of load shedding and autoscaling (both coming soon). It cannot make one expensive request cheaper: a single 2 s report request occupies
+whichever backend gets it. And it fights with affinity: when a backend holds per-user state or a warm
+cache for some keys, sending a user anywhere else costs a cache miss or a lost session, and
+consistent hashing (coming soon) is the better tool.
+
+Skip the clever rules when there are few balancers and similar backends: round robin or P2C least
+request behind one proxy tier is fine for most services. The rules on this page start paying off
+with many balancers, uneven machines or long-tail requests.
+
+## Interview corner
+
+Load balancing comes up in nearly every system design interview, usually as one box on the
+whiteboard. The strong answer is the one that opens the box.
+
+- **"How does the load balancer decide?"** Name the signal and the view, not only the algorithm:
+  P2C over the balancer's own in-flight counts, why P2C instead of the minimum (no herd, no full
+  scan), and what changes if there are many balancer instances.
+- **"One backend is slow. What happens?"** Round robin keeps feeding it; least request and EWMA
+  steer away; outlier detection ejects it only if it errors. Mention the cap on ejection and why.
+- **"We added servers and latency did not improve."** Long-lived connections not rebalancing, a
+  zone with too few backends, or a subset that does not include the new servers.
+- **"Design the balancing for a service mesh with 2,000 pods."** Client-side balancing in each
+  sidecar, subsetting to bound connections, peak EWMA because each sidecar's counts are thin, zone
+  awareness with spillover, outlier detection with a panic threshold.
+
+A strong answer quantifies at least once: the 25% sampling chance for P2C with 8 backends, or the
+Little's law estimate of how many requests each balancer has in flight.
+
+## Check yourself
+
+<details>
+<summary>1. Why does "send to the least loaded backend" get worse as the load table gets older, while two random choices barely changes?</summary>
+
+Every request between two refreshes sees the same minimum and goes to the same backend, which
+overloads it before the next refresh (the herd effect). With two random choices the least loaded
+backend only wins when it is sampled, about 2 in N of the time, so stale data spreads traffic over
+many backends instead of piling it on one.
+
+</details>
+
+<details>
+<summary>2. A sidecar sends 20 requests a second with 25 ms average latency. How many requests does it have in flight, and what does that mean for least request?</summary>
+
+Little's law: 20 × 0.025 = 0.5 requests in flight on average, across all backends. Most of its
+per-backend counts are zero most of the time, so comparing them says little, and least request
+behaves almost like random. Latency estimates (peak EWMA) or backend-reported counts are needed.
+
+</details>
+
+<details>
+<summary>3. Weights a = 3, b = 1 with smooth weighted round robin. What is the order of the first four picks?</summary>
+
+Counters after adding weights: (3, 1) → a, then a = 3 − 4 = −1. (2, 2) → a (tie, first listed),
+a = −2. (1, 3) → b, b = −1. (4, 0) → a, a = 0. Order `a a b a`, and the counters are back at (0, 0).
+
+</details>
+
+<details>
+<summary>4. Ten backends at 75% load, outlier ejection with no cap. Two backends start failing every request. What happens, and what would a 10% cap change?</summary>
+
+With both ejected, eight backends carry 750 requests a second with 800 of capacity, 94%: slow but
+stable, so no cascade. With three failing it would be 107% and cascade. A 10% cap ejects only one;
+the other keeps receiving traffic, and because it fails fast it attracts more than its share, so
+the error rate is higher than 10% while the deploy lasts, but there is no cascade.
+
+</details>
+
+<details>
+<summary>5. Why can deterministic subsetting be worse than random subsets during a rolling deploy?</summary>
+
+Deterministic subsetting gives every backend exactly the same number of clients, but its subsets
+depend on the total backend count. Each time a backend is added or removed, most clients get a
+different subset and reconnect: in this page's example 2,821 of 3,000 connections moved for one
+removed backend. Stable random subsets (rendezvous hashing) move only the connections to the removed
+backend, at the cost of uneven client counts.
+
+</details>
+
+## Recap
+
+- The goal is minimum waiting, not equal load. Imbalance comes from requests that differ, servers
+  that differ and balancers that each see only part of the traffic.
+- Least loaded on a shared, periodically refreshed table herds: everyone picks the same backend
+  until the next refresh. Two random choices avoids it, because the best backend wins only when sampled.
+- A balancer's own in-flight counts are fresh but thin: by Little's law, a balancer sending 10
+  requests a second at 20 ms has 0.2 in flight. Behind many balancers least request drifts to random.
+- Peak EWMA (latency estimate × (in flight + 1), up at once, down slowly, fading over time) carries
+  information across time; probing (Prequal) gets fresh whole-traffic signals from a few backends.
+- Subsetting bounds connections; deterministic subsets are perfectly even but churn on every pool
+  change, rendezvous subsets are stable but uneven.
+- Every filter concentrates load: zone preference needs spillover by backend share, ejection needs a
+  cap, and a panic threshold treats "half the pool is down" as a broken check.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'consistent-hashing', why: 'When the same key must reach the same backend: ring hashing, Maglev, and bounded loads.' },
+  { slug: 'health-checks-and-probes', why: 'Designing the checks that feed the ejection filter, and liveness against readiness.' },
+  { slug: 'service-discovery', why: 'Where the pool comes from, and how fast it learns about new and dead backends.' },
+]} />
+
+## Further reading
+
+**Papers and engineering writing**
+
+- [Wydrowski et al.: Load is not what you should balance, introducing Prequal](https://www.usenix.org/conference/nsdi24/presentation/wydrowski) (NSDI 2024) — probing, requests in flight and latency on YouTube.
+- [Ward, Wankadia, Guliani: Reinventing backend subsetting at Google](https://queue.acm.org/detail.cfm?id=3570937) (ACM Queue, 2022) — deterministic subsetting, connection churn and Rocksteady.
+- [Dropbox: What's new with Robinhood, our in-house load balancing service](https://dropbox.tech/infrastructure/robinhood-in-house-load-balancing-service) (2024) — weights from per-backend PID controllers.
+- [AWS: Optimizing data transfer costs when using AWS Network Load Balancer](https://aws.amazon.com/blogs/networking-and-content-delivery/optimizing-data-transfer-costs-when-using-aws-network-load-balancer) (living AWS blog, checked October 2026) — cross-zone traffic and its cost.
+
+**Docs and proposals**
+
+- [Envoy: supported load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers) (living docs, checked October 2026) — weighted round robin, least request, P2C and the bias formula.
+- [Envoy: outlier detection](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/outlier_detection.proto) and [panic threshold](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold) (living docs, checked October 2026) — ejection defaults and the 50% guard.
+- [Envoy: common load balancing config](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/load_balancing_policies/common/v3/common.proto) (living docs, checked October 2026) — zone-aware routing and `min_cluster_size`.
+- [Linkerd: load balancing](https://linkerd.io/docs/reference/load-balancing/) and [rate-limit-aware load balancing](https://linkerd.io/docs/tasks/rate-limit-aware-load-balancing/) (living docs, checked October 2026; feature added in 2.20, June 2026) — EWMA and the 429 feedback loop.
+- [AWS: how Elastic Load Balancing works](https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html) (living docs, checked October 2026) — cross-zone defaults for NLB and ALB.
+- [Kubernetes KEP-4444: traffic distribution for Services](https://www.kubernetes.dev/resources/keps/4444/) (2024) — `PreferClose` and the overload caveat.
+- [grpc-go keepalive package](https://pkg.go.dev/google.golang.org/grpc/keepalive) (living docs, checked October 2026) — `MaxConnectionAge` and its jitter.

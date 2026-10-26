@@ -1,0 +1,55 @@
+---
+// Hero: what a client may do when a request times out, by method. Safe methods change nothing,
+// idempotent ones can be repeated, and POST and PATCH need an Idempotency-Key to be retried.
+const rows = [
+  { methods: 'GET, HEAD', safe: true, idem: true, action: ['retry it'], tone: 'ok' },
+  { methods: 'PUT, DELETE', safe: false, idem: true, action: ['retry it, if the server', 'keeps the promise'], tone: 'warn' },
+  { methods: 'POST, PATCH', safe: false, idem: false, action: ['retry only with an', 'Idempotency-Key'], tone: 'bad' },
+];
+const ROW = 74;
+---
+
+<svg viewBox={`0 0 400 ${76 + rows.length * ROW}`} width="100%" role="img" aria-labelledby="rad-at-t rad-at-d">
+  <title id="rad-at-t">What a client may do after a timeout, by method</title>
+  <desc id="rad-at-d">
+    A table of three rows. GET and HEAD are safe and idempotent: retry them. PUT and DELETE are not
+    safe but are idempotent: retry them, if the server keeps that promise. POST and PATCH are neither
+    safe nor idempotent: retry them only with an Idempotency-Key, otherwise the client must ask the
+    server what happened.
+  </desc>
+
+  <g font-size="15" font-weight="700" style="fill: var(--viz-muted)">
+    <text x="4" y="58">method</text>
+    <text x="132" y="58" text-anchor="middle">safe</text>
+    <text x="196" y="58" text-anchor="middle">idempotent</text>
+    <text x="252" y="58">after a timeout</text>
+  </g>
+  <g font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">
+    <text x="4" y="16">safe: the client asks for no change</text>
+    <text x="4" y="34">idempotent: same effect if repeated</text>
+  </g>
+
+  {
+    rows.map((r, i) => {
+      const y = 70 + i * ROW;
+      const mark = (ok: boolean, x: number) =>
+        ok ? (
+          <path d={`M${x - 8} ${y + 32} l6 7 l11 -14`} fill="none" stroke-width="3" stroke-linecap="round" style="stroke: var(--viz-ok)" />
+        ) : (
+          <path d={`M${x - 7} ${y + 25} l14 14 M${x + 7} ${y + 25} l-14 14`} fill="none" stroke-width="3" stroke-linecap="round" style="stroke: var(--viz-bad)" />
+        );
+      return (
+        <g>
+          <rect x="4" y={y} width="392" height={ROW - 8} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+          <text x="12" y={y + 39} font-size="15" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{r.methods}</text>
+          {mark(r.safe, 132)}
+          {mark(r.idem, 196)}
+          <rect x="246" y={y + 8} width="144" height={ROW - 24} rx="6" stroke-width="1.5" style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+          {r.action.map((line, k) => (
+            <text x="318" y={y + (r.action.length === 1 ? 38 : 30 + k * 19)} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{line}</text>
+          ))}
+        </g>
+      );
+    })
+  }
+</svg>

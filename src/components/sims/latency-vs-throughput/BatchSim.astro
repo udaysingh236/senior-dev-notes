@@ -1,0 +1,19 @@
+---
+// One call per write vs batched writes against a backend with a fixed cost per call.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="batching"
+  title="Batching: paying latency to buy throughput, until it buys both"
+  description="Two lanes on the same stream of writes. Each backend call costs 2 ms plus 0.05 ms per write in it, and only one call runs at a time. The top lane makes one call per write; the bottom lane takes everything waiting, waiting up to the batch window for company when only one or two writes are queued. Each lane shows waiting writes as squares, the call in flight, and the throughput and mean latency of recent writes."
+  watchFor="At 100 writes a second, batching costs latency: about 4 ms against 2 ms, and 8 ms with a 10 ms window, for no gain. Raise the rate to 400: the one-at-a-time lane now queues and is slower than the batched one. At 800 it can no longer keep up at all (its ceiling is about 488 a second) and its latency climbs without limit, while the batched lane serves 3,000 a second at a few milliseconds."
+  viewBox="0 0 400 236"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createBatchModel } from './batch-model';
+
+  mountAll('batching', createBatchModel);
+</script>

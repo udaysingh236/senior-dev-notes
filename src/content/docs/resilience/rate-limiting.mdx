@@ -1030,6 +1030,7 @@ real usage. Set `max_tokens` near what you need. On your own limiter, reserve an
   { slug: 'backpressure', why: 'When you control both ends of a pipeline, slowing the producer beats rejecting its work.' },
   { slug: 'rate-limiter-service', why: 'The full case study: a rate limiter as a shared service for many teams, with rules, storage and failover.' },
   { slug: 'llm-rate-limits', why: 'Limits in tokens per minute, estimated at arrival: reserve and refund applied to AI APIs.' },
+  { slug: 'rest-api-design', why: 'The rest of the HTTP contract around a 429: retry semantics per method, idempotency keys, status codes a client acts on, and Problem Details errors.' },
   { slug: 'proxy-lb-gateway', why: 'Where the gateway sits, why long-lived connections pin clients to one node, and what X-Forwarded-For you can trust.' },
 ]} />
 

@@ -1,0 +1,19 @@
+---
+// POST /payments over a lossy network, with and without retries and keys. See retry-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="payment-retry"
+  title="One tap, a lossy network, three clients"
+  description="Three lanes see the same lost requests and lost responses. Each square is one payment a user meant to make once: green when charged once and the user saw success, red with ×2 when charged more than once, amber when charged but the user only saw an error, and an empty outline when nothing was charged. Under each lane, a count of each outcome."
+  watchFor="The client that never retries never double-charges, but every lost response becomes a user who paid and was told it failed, and will probably tap again. Retrying without a key turns those same lost responses into double charges. Only the lane with a key has neither. Set responses lost to 0%: all three agree, which is why this bug survives every test on a good network."
+  viewBox="0 0 400 304"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createRetryModel } from './retry-model';
+
+  mountAll('payment-retry', createRetryModel);
+</script>

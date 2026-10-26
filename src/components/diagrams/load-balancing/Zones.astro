@@ -1,0 +1,48 @@
+---
+// Zone-aware routing: zone A has half the callers but 30% of the backends.
+const callers = 5;
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="lb-zone-t lb-zone-d">
+  <title id="lb-zone-t">Zone-aware routing with spillover</title>
+  <desc id="lb-zone-d">
+    Two zones. Zone A has five callers sending 50% of the traffic and three backends. Zone B has five
+    callers sending the other 50% and seven backends. Zone A keeps 30 of its 50 points of traffic
+    local and spills 20 to zone B. Zone B keeps all of its 50 local and receives the 20 from A. Every
+    backend in both zones gets 10% of the traffic. Staying local without spillover would give each
+    zone A backend 16.7%.
+  </desc>
+  <defs>
+    <marker id="lb-zone-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  <rect x="4" y="30" width="150" height="210" rx="8" stroke-width="1.5" stroke-dasharray="5 4" style="fill: none; stroke: var(--viz-stroke)" />
+  <rect x="168" y="30" width="228" height="210" rx="8" stroke-width="1.5" stroke-dasharray="5 4" style="fill: none; stroke: var(--viz-stroke)" />
+  <text x="12" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">zone A</text>
+  <text x="176" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">zone B</text>
+  <text x="14" y="54" font-size="14" style="fill: var(--viz-muted)">callers: 50% of traffic</text>
+  <text x="178" y="54" font-size="14" style="fill: var(--viz-muted)">callers: 50% of traffic</text>
+  {Array.from({ length: callers }, (_, i) => (
+    <rect x={14 + i * 27} y="62" width="22" height="22" rx="5" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  ))}
+  {Array.from({ length: callers }, (_, i) => (
+    <rect x={178 + i * 27} y="62" width="22" height="22" rx="5" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  ))}
+  <path d="M60 88 L60 168" stroke-width="2.5" marker-end="url(#lb-zone-arrow)" style="stroke: var(--viz-flow)" />
+  <text x="66" y="126" font-size="15" font-weight="700" style="fill: var(--viz-ink)">30 local</text>
+  <path d="M120 88 L210 168" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#lb-zone-arrow)" style="stroke: var(--viz-flow)" />
+  <text x="86" y="150" font-size="15" font-weight="700" style="fill: var(--viz-warn)">20 spill</text>
+  <path d="M290 88 L290 168" stroke-width="2.5" marker-end="url(#lb-zone-arrow)" style="stroke: var(--viz-flow)" />
+  <text x="296" y="126" font-size="15" font-weight="700" style="fill: var(--viz-ink)">50 local</text>
+  {Array.from({ length: 3 }, (_, i) => (
+    <rect x={14 + i * 46} y="174" width="38" height="34" rx="5" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  ))}
+  {Array.from({ length: 7 }, (_, i) => (
+    <rect x={178 + i * 31} y="174" width="26" height="34" rx="5" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  ))}
+  <text x="14" y="230" font-size="14" style="fill: var(--viz-muted)">3 backends (30%)</text>
+  <text x="178" y="230" font-size="14" style="fill: var(--viz-muted)">7 backends (70%)</text>
+  <text x="4" y="266" font-size="16" font-weight="700" style="fill: var(--viz-ok)">with spillover: every backend gets 10%</text>
+  <text x="4" y="290" font-size="16" font-weight="700" style="fill: var(--viz-bad)">stay local only: zone A backends get 16.7%</text>
+</svg>

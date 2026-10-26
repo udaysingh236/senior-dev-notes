@@ -1,0 +1,80 @@
+---
+// Three write paths side by side: cache-aside, write-through, write-behind.
+const rows = [
+  {
+    title: 'cache-aside', note: 'the app talks to both',
+    arrows: [
+      { from: 'app', to: 'db', label: '1 write', tone: 'flow' },
+      { from: 'app', to: 'cache', label: '2 delete', tone: 'warn' },
+    ],
+  },
+  {
+    title: 'write-through', note: 'the cache writes the database, then acks',
+    arrows: [
+      { from: 'app', to: 'cache', label: '1 write', tone: 'flow' },
+      { from: 'cache', to: 'db', label: '2 now', tone: 'flow' },
+    ],
+  },
+  {
+    title: 'write-behind', note: 'acked before the database has it',
+    arrows: [
+      { from: 'app', to: 'cache', label: '1 write, ack', tone: 'flow' },
+      { from: 'cache', to: 'db', label: '2 later, batched', tone: 'warn', dashed: true },
+    ],
+  },
+];
+const X = { app: 40, cache: 200, db: 360 };
+const tops = [8, 116, 204]; // the first row needs room for the arrow that goes under the cache
+---
+
+<svg viewBox="0 0 400 290" width="100%" role="img" aria-labelledby="cs-wp-t cs-wp-d">
+  <title id="cs-wp-t">Three ways a write reaches the cache and the database</title>
+  <desc id="cs-wp-d">
+    Three rows, each with the app, the cache and the database. Cache-aside: the app writes the
+    database first, then deletes the cache key. Write-through: the app writes to the cache layer,
+    which writes the database at once and only then acknowledges. Write-behind: the cache layer
+    acknowledges the write immediately and writes the database later, in batches, so the
+    acknowledged write is not yet durable.
+  </desc>
+  <defs>
+    {['flow', 'warn'].map((t) => (
+      <marker id={`cs-wp-a-${t}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" style={`fill: var(--viz-${t})`} />
+      </marker>
+    ))}
+  </defs>
+  {
+    rows.map((r, i) => {
+      const y = tops[i];
+      return (
+        <g>
+          <text x="4" y={y + 16} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{r.title}</text>
+          <text x="396" y={y + 16} font-size="14" text-anchor="end" style="fill: var(--viz-muted)">{r.note}</text>
+          <rect x={X.app - 36} y={y + 26} width="72" height="30" rx="12" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+          <text x={X.app} y={y + 46} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">app</text>
+          <rect x={X.cache - 36} y={y + 26} width="72" height="30" rx="5" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+          <text x={X.cache} y={y + 46} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">cache</text>
+          <rect x={X.db - 36} y={y + 26} width="72" height="30" rx="5" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+          <text x={X.db} y={y + 46} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">database</text>
+          {r.arrows.map((a, k) => {
+            const x1 = X[a.from as keyof typeof X] + 36;
+            const x2 = X[a.to as keyof typeof X] - 36;
+            const long = a.from === 'app' && a.to === 'db';
+            const ay = y + 84;
+            return long ? (
+              <g>
+                <path d={`M${x1 - 20} ${y + 58} L${x1 - 20} ${ay} L${x2 + 20} ${ay} L${x2 + 20} ${y + 60}`} fill="none" stroke-width="1.8" marker-end={`url(#cs-wp-a-${a.tone})`} style={`stroke: var(--viz-${a.tone})`} />
+                <text x={(x1 + x2) / 2} y={ay + 18} font-size="14" text-anchor="middle" style={`fill: var(--viz-${a.tone})`}>{a.label}</text>
+              </g>
+            ) : (
+              <g>
+                <path d={`M${x1} ${y + 41} L${x2 - 2} ${y + 41}`} stroke-width="1.8" stroke-dasharray={a.dashed ? '5 4' : undefined} marker-end={`url(#cs-wp-a-${a.tone})`} style={`stroke: var(--viz-${a.tone})`} />
+                <text x={(x1 + x2) / 2} y={y + 74} font-size="14" text-anchor="middle" style={`fill: var(--viz-${a.tone})`}>{a.label}</text>
+              </g>
+            );
+          })}
+        </g>
+      );
+    })
+  }
+</svg>

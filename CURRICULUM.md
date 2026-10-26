@@ -27,7 +27,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 |---|---|---|---|---|
 | 1 | What happens when you type a URL | how-the-web-works | new | published (2026-10-18) |
 | 2 | Back-of-the-envelope estimation | back-of-the-envelope-estimation | new | planned |
-| 3 | Latency vs throughput | latency-vs-throughput | 89, 90 | planned |
+| 3 | Latency vs throughput | latency-vs-throughput | 89, 90 | published (2026-10-25) |
 | 4 | Percentiles, P99 and tail latency | percentiles-and-tail-latency | 91, 92 | planned |
 | 5 | Monolith vs microservices | monolith-vs-microservices | new | planned |
 
@@ -39,7 +39,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 2 | TCP vs UDP | tcp-vs-udp | 59 | published (2026-10-18) |
 | 3 | TLS and encryption in transit | tls | 49, 51 | published (2026-10-18) |
 | 4 | HTTP/1.1 → HTTP/2 → HTTP/3 | http-evolution | 58 | planned |
-| 5 | REST API design | rest-api-design | new | planned |
+| 5 | REST API design | rest-api-design | new | published (2026-10-23) |
 | 6 | API versioning | api-versioning | 77 | planned |
 | 7 | Pagination | pagination | new | planned |
 | 8 | gRPC | grpc | 57 | planned |
@@ -54,7 +54,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | Reverse proxies | reverse-proxies | 3 | planned |
-| 2 | Load balancing | load-balancing | 8 | planned |
+| 2 | Load balancing | load-balancing | 8 | published (2026-10-26) |
 | 3 | API gateways | api-gateways | 9 | planned |
 | 4 | Reverse proxy vs load balancer vs API gateway | proxy-lb-gateway | new | published (2026-10-22) |
 | 5 | CDNs and edge caching | cdn-and-edge-caching | 84, 85 | planned |
@@ -85,7 +85,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Caching strategies | caching-strategies | 6 | planned |
+| 1 | Caching strategies | caching-strategies | 6 | published (2026-10-26) |
 | 2 | Cache invalidation | cache-invalidation | 7 | planned |
 | 3 | Cache stampede (thundering herd) | cache-stampede | new | planned |
 | 4 | Hot keys | hot-keys | new | planned |

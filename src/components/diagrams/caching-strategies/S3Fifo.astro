@@ -1,0 +1,66 @@
+---
+// S3-FIFO: a small FIFO, a main FIFO and a ghost FIFO of keys only.
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="cs-s3-t cs-s3-d">
+  <title id="cs-s3-t">S3-FIFO: three queues, nothing moves on a hit</title>
+  <desc id="cs-s3-d">
+    A new key enters the small queue, which holds 10% of the cache. When it reaches the end of the
+    small queue, a key that was read again moves to the main queue, which holds the other 90%;
+    a key that was not is dropped, and only its name goes into the ghost queue. A miss on a key
+    that is still in the ghost queue goes straight into the main queue. At the end of the main
+    queue, a key that was read since it last passed goes back to the front with its counter
+    lowered by one; a key that was not is evicted. A hit only increments a counter of up to 3.
+  </desc>
+  <defs>
+    {['flow', 'ok', 'bad', 'muted'].map((t) => (
+      <marker id={`cs-s3-a-${t}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" style={`fill: var(--viz-${t})`} />
+      </marker>
+    ))}
+  </defs>
+
+  <text x="4" y="22" font-size="15" style="fill: var(--viz-flow)">new key</text>
+  <path d="M66 18 L96 18 L96 40" fill="none" stroke-width="1.8" marker-end="url(#cs-s3-a-flow)" style="stroke: var(--viz-flow)" />
+
+  <!-- small queue -->
+  <text x="4" y="64" font-size="16" font-weight="700" style="fill: var(--viz-ink)">small</text>
+  <text x="4" y="82" font-size="14" style="fill: var(--viz-muted)">10%</text>
+  {[0, 1, 2, 3].map((i) => (
+    <rect x={72 + i * 34} y="46" width="30" height="34" rx="3" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  ))}
+  <text x="214" y="68" font-size="14" style="fill: var(--viz-muted)">oldest →</text>
+
+  <path d="M240 80 C 260 120, 200 130, 150 146" fill="none" stroke-width="1.8" marker-end="url(#cs-s3-a-ok)" style="stroke: var(--viz-ok)" />
+  <text x="250" y="106" font-size="14" style="fill: var(--viz-ok)">read again:</text>
+  <text x="250" y="122" font-size="14" style="fill: var(--viz-ok)">to main</text>
+  <path d="M276 62 L316 62" stroke-width="1.8" marker-end="url(#cs-s3-a-muted)" style="stroke: var(--viz-muted)" />
+  <text x="276" y="48" font-size="14" style="fill: var(--viz-muted)">not read:</text>
+  <text x="396" y="48" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">drop</text>
+
+  <!-- ghost -->
+  <rect x="320" y="52" width="76" height="26" rx="3" stroke-width="1.5" stroke-dasharray="4 3" style="fill: none; stroke: var(--viz-muted)" />
+  <text x="358" y="70" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">ghost</text>
+  <text x="358" y="96" font-size="13" text-anchor="middle" style="fill: var(--viz-muted)">keys only</text>
+  <path d="M340 102 C 320 130, 312 142, 300 158" fill="none" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#cs-s3-a-flow)" style="stroke: var(--viz-flow)" />
+  <text x="396" y="134" font-size="13" text-anchor="end" style="fill: var(--viz-flow)">miss on a</text>
+  <text x="396" y="150" font-size="13" text-anchor="end" style="fill: var(--viz-flow)">ghost key</text>
+
+  <!-- main queue -->
+  <text x="4" y="178" font-size="16" font-weight="700" style="fill: var(--viz-ink)">main</text>
+  <text x="4" y="196" font-size="14" style="fill: var(--viz-muted)">90%</text>
+  {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+    <rect x={72 + i * 34} y="160" width="30" height="34" rx="3" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  ))}
+  {[0, 2, 0, 1, 0, 3, 1].map((c, i) => (
+    <text x={87 + i * 34} y="182" font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">{c}</text>
+  ))}
+  <text x="316" y="182" font-size="14" style="fill: var(--viz-muted)">oldest →</text>
+
+  <path d="M316 200 C 300 250, 120 250, 88 200" fill="none" stroke-width="1.8" marker-end="url(#cs-s3-a-ok)" style="stroke: var(--viz-ok)" />
+  <text x="190" y="260" font-size="14" text-anchor="middle" style="fill: var(--viz-ok)">counter above 0:</text>
+  <text x="190" y="276" font-size="14" text-anchor="middle" style="fill: var(--viz-ok)">back to the front, counter − 1</text>
+  <path d="M352 200 L352 282" stroke-width="1.8" marker-end="url(#cs-s3-a-bad)" style="stroke: var(--viz-bad)" />
+  <text x="396" y="300" font-size="14" text-anchor="end" style="fill: var(--viz-bad)">counter 0: evict</text>
+  <text x="4" y="324" font-size="14" style="fill: var(--viz-muted)">numbers: hits since the key last passed the end (max 3)</text>
+</svg>

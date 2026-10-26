@@ -1,0 +1,67 @@
+---
+// The per-request decision: filters that shrink the pool, then a pick, with results fed back.
+const N = 12;
+// Which of the 12 backends survive each stage.
+const rows = [
+  { label: 'Discovery', sub: 'every backend', keep: [...Array(N).keys()], cross: [] as number[] },
+  { label: 'Health, ejection', sub: 'panic if too few left', keep: [0, 1, 3, 4, 5, 6, 8, 9, 10, 11], cross: [2, 7] },
+  { label: 'Zone', sub: 'local first, then spill', keep: [0, 1, 3, 4, 5, 6], cross: [] },
+  { label: 'Subset', sub: "this client's k", keep: [0, 3, 5, 6], cross: [] },
+  { label: 'Pick', sub: 'cheaper of two random', keep: [3, 6], cross: [], chosen: 6 },
+];
+const x0 = 184;
+const step = 17.4;
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="lb-pipe-t lb-pipe-d">
+  <title id="lb-pipe-t">The decision a load balancer makes for each request</title>
+  <desc id="lb-pipe-d">
+    Five stages from top to bottom, each shown with twelve backend squares. Discovery: all twelve.
+    Health and ejection: two are crossed out as failed, with panic mode if too few are left. Zone:
+    six in the local zone remain. Subset: four belong to this client. Pick: two are sampled at
+    random and the cheaper one, shown in green, gets the request. At the bottom, each response
+    updates the latency estimate, the in-flight count and the error count, which feed the pick and
+    the ejection filter for the next request.
+  </desc>
+  <defs>
+    <marker id="lb-pipe-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one request</text>
+  {
+    rows.map((r, i) => {
+      const y = 36 + i * 52;
+      return (
+        <g>
+          <text x="22" y={y + 17} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{r.label}</text>
+          <text x="22" y={y + 36} font-size="14" style="fill: var(--viz-muted)">{r.sub}</text>
+          {Array.from({ length: N }, (_, k) => {
+            const x = x0 + k * step;
+            const kept = r.keep.includes(k);
+            const crossed = r.cross.includes(k);
+            const chosen = 'chosen' in r && r.chosen === k;
+            const style = chosen
+              ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'
+              : crossed
+                ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)'
+                : kept
+                  ? 'fill: var(--viz-server-soft); stroke: var(--viz-server)'
+                  : 'fill: none; stroke: var(--viz-stroke)';
+            return (
+              <g>
+                <rect x={x} y={y + 6} width="14" height="26" rx="3" stroke-width={chosen ? 2.5 : 1.5} style={style} stroke-dasharray={kept || crossed || chosen ? undefined : '3 3'} />
+                {crossed && <path d={`M${x + 2} ${y + 10} L${x + 12} ${y + 28} M${x + 12} ${y + 10} L${x + 2} ${y + 28}`} stroke-width="2" style="stroke: var(--viz-bad)" />}
+              </g>
+            );
+          })}
+          {i < rows.length - 1 && <path d={`M10 ${y + 30} L10 ${y + 58}`} stroke-width="1.5" marker-end="url(#lb-pipe-arrow)" style="stroke: var(--viz-muted)" />}
+        </g>
+      );
+    })
+  }
+  <rect x="4" y="300" width="392" height="46" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="14" y="320" font-size="15" style="fill: var(--viz-ink)">each response updates the latency estimate,</text>
+  <text x="14" y="339" font-size="15" style="fill: var(--viz-ink)">in-flight count and errors for the next pick</text>
+  <path d={`M${x0 + 6 * step + 7} 278 L${x0 + 6 * step + 7} 298`} stroke-width="1.5" marker-start="url(#lb-pipe-arrow)" style="stroke: var(--viz-muted)" />
+</svg>

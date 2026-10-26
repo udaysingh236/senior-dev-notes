@@ -1,0 +1,71 @@
+---
+// Two editors change different fields of one product. With blind PUTs the second write erases the
+// first, and both get 200. With If-Match the second gets 412, reads again and keeps both changes.
+type Tone = 'plain' | 'ok' | 'warn' | 'bad';
+const panels: { title: string; steps: { who: 1 | 2; text: string; tone?: Tone }[] }[] = [
+  {
+    title: 'Blind PUT: 200, 200, one change gone',
+    steps: [
+      { who: 1, text: 'GET → price 1499' },
+      { who: 2, text: 'GET → price 1499' },
+      { who: 1, text: 'PUT price 1299 → 200', tone: 'ok' },
+      { who: 2, text: 'PUT stock 9 → 200', tone: 'bad' },
+    ],
+  },
+  {
+    title: 'PUT with If-Match: the stale write is refused',
+    steps: [
+      { who: 1, text: 'GET → ETag "v3"' },
+      { who: 2, text: 'GET → ETag "v3"' },
+      { who: 1, text: 'If-Match "v3" → 200', tone: 'ok' },
+      { who: 2, text: 'If-Match "v3" → 412', tone: 'warn' },
+      { who: 2, text: 'GET "v4", PUT → 200', tone: 'ok' },
+    ],
+  },
+];
+const ROW = 28;
+const COL_W = 182;
+const X = { 1: 30, 2: 214 } as const;
+const STYLE: Record<Tone, string> = {
+  plain: 'fill: var(--viz-server-soft); stroke: var(--viz-server)',
+  ok: 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)',
+  warn: 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)',
+  bad: 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)',
+};
+const heights = panels.map((p) => 56 + p.steps.length * ROW);
+const tops = heights.map((_, i) => heights.slice(0, i).reduce((a, b) => a + b, 0));
+---
+
+<svg viewBox={`0 0 400 ${heights.reduce((a, b) => a + b, 0) + 4}`} width="100%" role="img" aria-labelledby="rad-lu-t rad-lu-d">
+  <title id="rad-lu-t">A lost update, and the same edits with If-Match</title>
+  <desc id="rad-lu-d">
+    Two timelines with Asha on the left and Ravi on the right, time going down. Blind PUT: both read
+    the product with price 1499; Asha PUTs the whole product with price 1299 and gets 200; Ravi PUTs
+    his copy with stock 9 and gets 200, which puts the price back to 1499: Asha's change is gone.
+    With If-Match: both read ETag v3; Asha's PUT with If-Match v3 gets 200; Ravi's gets 412
+    Precondition Failed; he reads version 4, applies his change again and gets 200, and both changes
+    are kept.
+  </desc>
+  {
+    panels.map((p, pi) => {
+      const y0 = tops[pi];
+      return (
+        <g>
+          <text x="4" y={y0 + 20} font-size="17" font-weight="700" style="fill: var(--viz-ink)">{p.title}</text>
+          <text x={X[1] + COL_W / 2} y={y0 + 40} font-size="14" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">Asha</text>
+          <text x={X[2] + COL_W / 2} y={y0 + 40} font-size="14" font-weight="700" text-anchor="middle" style="fill: var(--viz-muted)">Ravi</text>
+          <line x1="12" y1={y0 + 50} x2="12" y2={y0 + 46 + p.steps.length * ROW} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+          {p.steps.map((s, i) => {
+            const y = y0 + 48 + i * ROW;
+            return (
+              <g>
+                <rect x={X[s.who]} y={y} width={COL_W} height={ROW - 5} rx="5" stroke-width="1.5" style={STYLE[s.tone ?? 'plain']} />
+                <text x={X[s.who] + 8} y={y + 17} font-size="14" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{s.text}</text>
+              </g>
+            );
+          })}
+        </g>
+      );
+    })
+  }
+</svg>
