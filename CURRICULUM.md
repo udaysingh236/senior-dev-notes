@@ -238,3 +238,5 @@ Topic ideas saved with `/save-topic`, oldest first. `/add-topic` offers these fi
 one into its track's table when the page is written. Bullets, not a table: the site build reads
 only the track tables above.
 
+
+- 2026-10-28 · DPoP (Demonstrating Proof of Possession) · `security/dpop`
