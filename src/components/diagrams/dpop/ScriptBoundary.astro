@@ -1,0 +1,36 @@
+---
+// What injected script can and cannot do when the DPoP key is non-extractable.
+---
+
+<svg viewBox="0 0 400 392" width="100%" role="img" aria-labelledby="dp-sb-t dp-sb-d">
+  <title id="dp-sb-t">What script injected into the page can do against DPoP</title>
+  <desc id="dp-sb-d">
+    The key is non-extractable. Blocked: reading the private key out, because export throws; and
+    sending the tokens home to use later, because they are useless without the key. Still possible:
+    signing requests while the victim's page is open; pre-signing proofs for later, until the server
+    nonce changes or the access token expires; and starting a new login in a hidden frame with a key of
+    the attacker's own, if the authorization server allows a silent login.
+  </desc>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Script on the page, key non-extractable</text>
+
+  {[
+    { ok: true, head: 'Read the private key out', sub: 'exportKey() throws', y: 40 },
+    { ok: true, head: 'Send the tokens home, use later', sub: 'useless without the key', y: 108 },
+    { ok: false, head: 'Sign requests while page is open', sub: 'the key works for any script', y: 176 },
+    { ok: false, head: 'Pre-sign proofs for later', sub: 'until the nonce or token expires', y: 244 },
+    { ok: false, head: 'Start a new login, own key', sub: 'if a silent login is allowed', y: 312 },
+  ].map(({ ok, head, sub, y }) => (
+    <g>
+      <rect
+        x="4" y={y} width="392" height="58" rx="8" stroke-width="1.5"
+        style={ok ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'}
+      />
+      <circle cx="30" cy={y + 29} r="13" stroke-width="1.5" style={ok ? 'fill: var(--viz-surface); stroke: var(--viz-ok)' : 'fill: var(--viz-surface); stroke: var(--viz-warn)'} />
+      <text x="30" y={y + 35} font-size="16" font-weight="700" text-anchor="middle" style={`fill: var(${ok ? '--viz-ok' : '--viz-warn'})`}>{ok ? '✓' : '!'}</text>
+      <text x="54" y={y + 25} font-size="16" font-weight="600" style="fill: var(--viz-ink)">{head}</text>
+      <text x="54" y={y + 46} font-size="15" style="fill: var(--viz-muted)">{sub}</text>
+    </g>
+  ))}
+  <text x="4" y="388" font-size="14" style="fill: var(--viz-muted)">✓ DPoP blocks it · ! still possible</text>
+</svg>

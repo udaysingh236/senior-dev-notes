@@ -1,0 +1,766 @@
+---
+title: "DPoP: Sender-Constrained Tokens"
+description: How DPoP (RFC 9449) ties an OAuth access token to a key the client holds. What a proof signs and what it leaves out, how the server binds and checks it, why replay protection needs shared state, what server nonces stop that nothing else does, and where cross-site scripting still wins.
+tagline: A stolen bearer token works for anyone. A DPoP token works only alongside a fresh signature from one key, and the details of "fresh" are where the security lives.
+difficulty: intermediate
+track: security
+prerequisites: [oauth-and-oidc, jwt-and-key-rotation, tls]
+next: [xss, secrets-management, mcp-authorization]
+lastReviewed: 2026-10-28
+sidebar:
+  order: 6
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import Overview from '../../../components/diagrams/dpop/Overview.astro';
+import ProofAnatomy from '../../../components/diagrams/dpop/ProofAnatomy.astro';
+import Binding from '../../../components/diagrams/dpop/Binding.astro';
+import ClusterReplay from '../../../components/diagrams/dpop/ClusterReplay.astro';
+import ScriptBoundary from '../../../components/diagrams/dpop/ScriptBoundary.astro';
+import ReplaySim from '../../../components/sims/dpop/ReplaySim.astro';
+
+## The question
+
+With DPoP, the client signs every API call with a private key, and the access token works only
+next to such a signature. Yet the signature covers the HTTP method and the URL, not the body. The
+key lives in the same JavaScript that a cross-site scripting bug would run. And the server never
+learns whose key it is. So what can a thief still do with a DPoP token, and what does the server
+have to remember to stop the rest?
+
+## Why this problem exists
+
+OAuth splits the work between three parties. The **authorization server** (AS) signs the user in
+and issues tokens. The **resource server** (RS) is your API. The **client** is the app calling the
+API on the user's behalf: a single-page app, a mobile app, or a backend. The client gets an
+**access token**, a credential the API accepts for a few minutes to an hour, and often a
+**refresh token**, a longer-lived credential that buys new access tokens from the AS.
+
+Almost every access token today is a **bearer token** (RFC 6750): whoever presents it is let in, the
+way a cinema ticket works for whoever holds it. Nothing in the request shows that the sender is
+the party the token was issued to. That makes a token a password that travels on every request,
+and tokens leak through more doors than passwords do:
+
+- **Logs and traces.** An `Authorization` header captured by a debug log, an APM agent, a HAR file
+  attached to a support ticket, or a proxy that records headers.
+- **The browser.** A token in `localStorage` or in a JavaScript variable can be read and sent
+  elsewhere by any script running on the page.
+- **A malicious or compromised API.** The client hands its token to every API it calls. One bad
+  API can replay that token against the others, unless every token is restricted to one audience.
+- **The client's own servers.** In April 2022, OAuth tokens that GitHub had issued to Heroku and
+  Travis CI were stolen from those companies and used to list and clone private repositories of
+  dozens of organisations, npm among them
+  ([GitHub, 2022](https://github.blog/news-insights/company-news/security-alert-stolen-oauth-user-tokens/)).
+  From 8 to 18 August 2025, access and refresh tokens taken from Salesloft's Drift integration
+  were used to export data from customers' Salesforce instances; Google's threat intelligence team
+  counted over 700 potentially affected organisations
+  ([Google, 2025](https://cloud.google.com/blog/topics/threat-intelligence/data-theft-salesforce-instances-via-salesloft-drift)).
+
+In every case the stolen token worked from the attacker's own machine, with nothing else. The damage
+is bounded by the token's lifetime, and for a refresh token that is days or months. Revocation
+helps only after someone notices, and a JWT access token is often checked by signature alone, so
+it stays valid until it expires.
+
+A **sender-constrained** token closes the gap: the token works only for the party that can prove
+it holds something the thief does not have. **DPoP** (Demonstrating Proof of Possession, RFC 9449,
+September 2023) makes that something a private key, and the proof an HTTP header.
+
+## The obvious fix, and why it breaks
+
+**"Make tokens short-lived."** A 5-minute token limits the damage of one stolen access token. It
+does nothing for the refresh token that renews it, and a thief with a refresh token mints fresh
+access tokens for as long as the session lives. The Drift tokens included refresh tokens; nobody
+had to race a 5-minute clock.
+
+**"Bind the token to the client's IP address."** Phones change IP when they move between Wi-Fi and
+mobile data, carrier-grade NAT puts thousands of users behind one address, and IPv6 privacy
+addresses rotate on purpose. You lock out real users, and an attacker on the same network, or
+running code on the same device, passes anyway.
+
+**"Restrict each token to one audience."** An `aud` claim stops a token issued for the payments API
+from working at the orders API. It does not stop a thief from using it at the payments API, which
+is the API they wanted.
+
+**"Use mutual TLS."** OAuth mTLS (RFC 8705, 2020) binds the token to the client's TLS certificate:
+the AS writes the certificate's hash into the token, and the API compares it with the certificate
+of the connection. It is strong and it is standard for bank-to-bank APIs. It fits browsers badly: a
+web page cannot create and present a client certificate of its own, and the browser's certificate
+prompt is not something you show users. It also breaks when TLS ends at a load balancer, which must
+forward the certificate to the app. An older idea, **token binding**, tied tokens to the TLS
+connection itself, and never got browser support.
+
+Two neighbours get confused with DPoP. **HTTP Message Signatures** (RFC 9421, 2024) sign any parts of
+a request you choose, including a digest of the body, at the cost of canonicalising headers on
+both sides; they prove the request was not altered, which DPoP does not try to do. **Device Bound
+Session Credentials** (DBSC), which Chrome made generally available on Windows in April 2026
+([The Hacker News, 2026](https://thehackernews.com/2026/04/google-rolls-out-dbsc-in-chrome-146-to.html)),
+apply the same idea to session cookies, with the key in the device's TPM; they protect a site's own
+login cookie, not OAuth tokens sent to APIs.
+
+## The core idea
+
+The client makes a key pair and keeps the private half. When it asks the AS for a token, it sends a
+signed statement containing the public half: a **DPoP proof**. The AS writes a fingerprint of that
+public key into the token. From then on, every API call carries the token and a new proof, signed
+by the same key, for this method, this URL, this moment and this token. The API checks the
+signature with the public key inside the proof, then checks that the key's fingerprint is the one
+written in the token.
+
+The token alone is now useless: the thief has the fingerprint, not the key. What remains is
+everything that can be done *with* the key, or with proofs it already signed. The rest of the page
+is about those two.
+
+<Figure caption="A bearer token is accepted from anyone. A DPoP-bound token carries the fingerprint of the client's public key, and every request must arrive with a fresh proof signed by the matching private key, which never leaves the client.">
+  <Overview />
+</Figure>
+
+## How it works, piece by piece
+
+### The building blocks: keys, signatures, JWTs and thumbprints
+
+Four pieces of cryptography carry the whole protocol. If they are familiar, skip to the next heading.
+
+A **key pair** is two numbers that belong together. The **private key** stays with its owner; the
+**public key** can be given to anyone. A **signature** is a short value computed from a message and
+the private key. Anyone with the public key can check that the signature belongs to this exact
+message, and nobody without the private key can produce one. Change one byte of the message and
+the check fails. DPoP proofs use **ES256** in practice: ECDSA signatures on the P-256 curve with
+SHA-256. A public key is two 32-byte numbers, `x` and `y`; a signature is 64 bytes.
+
+A **JWT** (JSON Web Token) is three base64url pieces joined by dots: a header (JSON), a payload of
+**claims** (JSON), and a signature over the first two. **base64url** is base64 with `-` and `_`
+instead of `+` and `/`, so the result is safe in URLs and headers. A **JWK** (JSON Web Key) is a key
+written as JSON, for example `{"kty":"EC","crv":"P-256","x":"l8tF…","y":"9VE4…"}`.
+
+A **hash** such as SHA-256 turns any input into a fixed 32-byte value; the same input always gives
+the same output, and no one can find a different input with the same output. A **JWK thumbprint**
+(RFC 7638) is the hash of a public key, made repeatable: keep only the key's required members, sort
+them by name, remove all whitespace, hash, base64url.
+
+Worked example: the public key in RFC 9449's own examples becomes the string
+`{"crv":"P-256","kty":"EC","x":"l8tFrhx-34tV3hRICRDY9zCkDlpBhF42UQUfWVAWBFs","y":"9VE4jf_Ok_o64zbTTlcuNJajHmt6v9TDVrU0CdvGRDA"}`,
+and its SHA-256 in base64url is the 43 characters `0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I`.
+Our example code recomputes that value from the key. That fingerprint is what ends up in the token.
+
+### The proof: one signed JWT per request
+
+A DPoP proof is a JWT that the client creates and signs itself, sent in a request header named
+`DPoP`. Each field exists to stop one specific misuse.
+
+<Figure caption="A DPoP proof is a JWT signed by the client. The header carries the public key; each claim narrows where, when and with what the proof can be used.">
+  <ProofAnatomy />
+</Figure>
+
+The header says what it is (`typ` must be `dpop+jwt`, so that no other JWT the client signs can be
+passed off as a proof), how it was signed (`alg`, an asymmetric algorithm, never `none`), and carries
+the public key itself in `jwk`. The claims:
+
+- `jti`, a unique ID: at least 96 random bits, or a UUID. It lets the server notice a proof sent twice.
+- `htm` and `htu`: the HTTP method and the target URL without query string or fragment. A proof for
+  `GET /orders` cannot be used for `DELETE /orders/7`.
+- `iat`: when the proof was made, in seconds. The server accepts proofs only for a short window.
+- `ath`: the SHA-256 of the access token, in base64url, on every call to the API. A proof is good
+  for one token only.
+- `nonce`: a value the server handed out, when the server asks for one. More on this below.
+
+What is not signed matters as much. The query string, the headers and the body are outside the
+proof. RFC 9449 chose this on purpose: signing a whole HTTP message requires both sides to
+rebuild it byte for byte after proxies have rewritten headers, and that is where signature
+schemes go to die. The integrity of the body is left to TLS. Our proofs were 530 bytes each.
+
+### Binding: the token remembers the key
+
+The token request is ordinary OAuth with one extra header:
+
+```http
+POST /token HTTP/1.1
+Host: auth.example.com
+Content-Type: application/x-www-form-urlencoded
+DPoP: eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7…
+
+grant_type=authorization_code&code=SplxlOBeZQQYbYS6WxSbIA&code_verifier=…
+```
+
+The AS checks the proof, computes the thumbprint of its `jwk`, and binds the token to it. A JWT
+access token carries the thumbprint in a **confirmation claim**, `"cnf": {"jkt": "0ZcOCOR…"}`; an
+opaque token has it stored at the AS, which returns the same `cnf` from token introspection. The
+response says `"token_type": "DPoP"` instead of `"Bearer"`. If it says `Bearer`, the AS chose not to
+bind the token, and a client that depends on the protection must refuse it.
+
+<Figure caption="Two hashes chain the request to the key. cnf.jkt in the token is the thumbprint of the client's public key; ath in the proof is the hash of the token. The API recomputes both, and both must match.">
+  <Binding />
+</Figure>
+
+The API call then uses the `DPoP` authorization scheme and a fresh proof:
+
+```http
+GET /orders HTTP/1.1
+Host: api.example.com
+Authorization: DPoP Kz~8mXK1EalYznwH-LC-1fBAo.4Ljp~zsPE_NeO.gxU
+DPoP: eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7…
+```
+
+Notice what the server trusts. The `jwk` in a proof is self-asserted: anyone can make a key pair
+and sign a perfect proof with it. A proof only means something next to a token whose `cnf.jkt`
+the AS recorded. DPoP is not client authentication; it proves continuity. The key that asked for
+this token is the key using it.
+
+### What the API checks, and what each check stops
+
+RFC 9449 lists the checks in section 4.3. Grouped by the attack each one answers:
+
+| Check | Stops |
+|---|---|
+| Exactly one `DPoP` header, a well-formed JWT, all required claims | malformed and ambiguous requests |
+| `typ` is `dpop+jwt`; `alg` is asymmetric and allowed | an ID token or other signed JWT used as a proof; `alg: none` |
+| Signature verifies with the `jwk` in the header, which has no private part | a forged or edited proof |
+| `htm` and `htu` match this request | a captured proof used on another endpoint or method |
+| `iat` within a short window | old captured proofs |
+| `jti` not seen before for this URL | a captured proof replayed inside the window |
+| `nonce` matches one the server issued recently | proofs signed in advance |
+| `ath` equals the hash of the token | a proof for one token used with another |
+| Thumbprint of `jwk` equals the token's `cnf.jkt` | a stolen token used with the thief's own key |
+
+Our example server runs these in both languages, and the first experiment shows the core result.
+The same stolen token, used from another machine:
+
+```text
+1. A token copied from a log file, used from another machine
+   bearer token, no proof                         200 OK
+   DPoP token, no proof                           rejected: no DPoP proof
+   DPoP token, proof signed with thief's key      rejected: proof key does not match the token's cnf.jkt
+   DPoP token sent as Bearer                      rejected: DPoP-bound token sent as Bearer
+   same, to a server that predates DPoP           200 OK
+```
+
+The last line is not a bug in the example. An API that has never heard of DPoP ignores the unknown
+`cnf` claim, as JWT processing rules tell it to, and accepts the token as a bearer token. The
+gotchas come back to it.
+
+### Replay: the window and the jti store
+
+A thief who captures a whole request, token and proof together, from a log or a proxy, holds a valid
+pair. Two checks stand between them and a replay. The `iat` window limits how old a proof can be;
+the spec asks for "seconds or minutes", and we use 60 seconds plus 5 seconds of allowance for a
+client clock running ahead. Inside the window, only the `jti` check stops the same proof from
+working again, and it only works if the server remembers.
+
+That memory is the part people underestimate. The server must keep every `jti` it accepted, per
+target URL, for as long as the proof could still pass the window check: one entry per request. At
+1,000 requests a second and a 65-second window, that is 65,000 live entries, a few megabytes with
+Redis overhead (our arithmetic, not a benchmark). Store a hash of the `jti` rather than the value,
+and reject oversized ones, or an attacker fills your memory with megabyte-long IDs.
+
+And the memory must be shared by every server that accepts proofs for that URL. Our second
+experiment sends the real request to node 0 of four, then replays the captured pair through a
+load balancer:
+
+```text
+2. One real request captured with its proof, then replayed
+   the real request                               200 OK
+   replayed 2 s later                             rejected: jti already used
+   replayed as DELETE /orders/7                   rejected: htm is GET, request is DELETE
+   replayed to 4 nodes, each with its own cache   3 of 4 accepted
+   replayed 61 s later                            rejected: iat outside the window
+```
+
+<Figure caption="With a cache per node, a captured proof is accepted once by every node that has not seen it yet. A shared store, such as one Redis SET with NX and an expiry, accepts it once in total.">
+  <ClusterReplay />
+</Figure>
+
+The spec admits that strict single use "may not always be feasible" when servers share no state,
+which is why the window must stay short either way: a per-node cache with a 60-second window caps
+the damage at one replay per node per minute, for the endpoint the proof names.
+
+### Server nonces: proofs signed in advance
+
+The `iat` claim is chosen by the client. That is fine while the client is honest and fatal when
+it is not. Suppose an attacker gets script running on your page for a moment, through a cross-site
+scripting bug or a compromised third-party script. The private key cannot be read out (next
+section), but the script can call `sign()` with it. It signs proofs for `GET /orders` with `iat` set
+30 seconds apart for the next ten minutes, sends them home with the access token, and leaves. Each
+proof has its own `jti`, and each one's `iat` is "now" at the moment it is used. The window and
+the `jti` store both accept them.
+
+A **server nonce** stops this. The server sends an unpredictable value in a `DPoP-Nonce` response
+header and requires it in the `nonce` claim of later proofs. A proof can then not be made before
+the server said the nonce, and the server decides when nonces stop being accepted. The client
+cannot know future nonces, so pre-signed proofs die when the nonce they carry does.
+
+<StepThrough
+  title="Getting a DPoP token and calling the API, with server nonces"
+  actors={[
+    { id: 'client', label: 'Client', kind: 'client' },
+    { id: 'as', label: 'Auth server', kind: 'server' },
+    { id: 'api', label: 'API', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'client', to: 'client', label: 'new key pair', text: 'The client makes a P-256 key pair for this session. In a browser the private key is created non-extractable, so script can use it but cannot read it out.' },
+    { from: 'client', to: 'as', label: 'POST /token', text: 'A normal token request (an authorization code, say) with a DPoP header: a proof for POST /token signed by the new key. No nonce yet.' },
+    { from: 'as', to: 'client', label: '400 nonce', text: 'This AS requires nonces. It answers 400 with error use_dpop_nonce and a DPoP-Nonce header. Nothing was issued.', tone: 'warn', dashed: true },
+    { from: 'client', to: 'as', label: 'POST /token', text: 'The client signs a new proof, with a new jti and the nonce in its claims, and sends the same request again.' },
+    { from: 'as', to: 'client', label: '200 DPoP token', text: 'The AS checks the proof, computes the key thumbprint and writes it into the token as cnf.jkt. The response says token_type DPoP.', tone: 'ok', dashed: true },
+    { from: 'client', to: 'api', label: 'GET /orders', text: 'Authorization: DPoP <token>, and a proof for GET /orders whose ath is the hash of that token. The API has nonces of its own, separate from the AS ones.' },
+    { from: 'api', to: 'client', label: '401 nonce', text: 'The API answers 401 with WWW-Authenticate: DPoP error="use_dpop_nonce" and its own DPoP-Nonce. One extra round trip per server, once.', tone: 'warn', dashed: true },
+    { from: 'client', to: 'api', label: 'GET /orders', text: 'A new proof with the API nonce. Signature, htm, htu, iat, nonce, ath, jti and the thumbprint against cnf.jkt all pass.' },
+    { from: 'api', to: 'client', label: '200 + next nonce', text: 'The response carries the next nonce in DPoP-Nonce, so the client stays current without another 401 as long as it keeps talking.', tone: 'ok', dashed: true },
+  ]}
+  summary="The key never leaves the client, the token carries the key's thumbprint, and every request carries a proof that cannot be made before the server's latest nonce. Each server keeps its own nonces; the client tracks one per server."
+/>
+
+The nonce does not have to be stored. Our example builds it from the current time bucket and an
+HMAC of it with a server secret, then accepts the current and the previous bucket, so a client in
+the middle of a rotation is not turned away. Any server holding the secret can check it, and
+because the nonce carries the server's own time, it also bounds the proof's age when the client's
+clock is wrong by hours. The third experiment runs the attack above against a 5-minute access
+token:
+
+```text
+3. Script injected into the page signs 20 proofs for the next 10 minutes, then leaves
+   no server nonce                                10 of 20 accepted, the last at t+270 s
+   nonce, rotated every 60 s                      4 of 20 accepted, the last at t+90 s
+```
+
+Two limits show here. Without a nonce, the pre-signed proofs worked until the access token
+expired: the `ath` claim tied them to that token, and the attacker cannot pre-sign proofs for a token
+that does not exist yet. That is why the spec says deployments without nonces should not issue
+long-lived DPoP access tokens. With a nonce, they lasted about two rotation periods, because the
+server also accepts the previous nonce.
+
+The simulation puts these defences in one place. An attacker holds three things from the first
+second: a token copied from a log, one complete captured request, and a stash of proofs signed in
+advance. They try each one every 10 seconds for ten minutes against your API. You choose the
+defences.
+
+<ReplaySim />
+
+### Refresh tokens and authorization codes
+
+A stolen access token dies with its lifetime. A refresh token is the real prize, so DPoP binds it
+too, with one distinction. For a **public client**, one with no credentials of its own (a browser
+app, a mobile app), the AS must bind the refresh token to the DPoP key, and every refresh needs a
+proof from that key. For a **confidential client**, a backend that authenticates to the AS with a
+secret or its own signed assertion, refresh tokens are not bound to the DPoP key: they are already
+bound to the client's credentials, and binding them to a key as well would stop the client from
+rotating its credentials without logging every user out.
+
+An AS may also bind only the refresh token and hand out ordinary bearer access tokens. Keycloak
+26.4 offers exactly that for public clients. It is a sensible first step: APIs need no change, and
+the long-lived credential, the one stolen in the incidents above, is protected.
+
+One gap remains before the first token. An **authorization code** stolen from a redirect URL or a
+log can be redeemed by the thief with their own key, and the tokens are then bound to the thief.
+PKCE (Proof Key for Code Exchange, the `code_verifier` in the request above) already stops this when
+the thief has only the code. The `dpop_jkt` parameter goes further: the client puts its key's
+thumbprint in the authorization request, and the AS refuses to redeem the code with a proof from
+any other key. It helps only if the client uses a new key for each authorization; FAPI 2.0 requires
+servers to support it.
+
+### Where the key lives, and what script on the page can still do
+
+DPoP is only as strong as the private key's hiding place. In a browser, Web Crypto creates keys with
+an `extractable` flag; with `extractable: false`, `exportKey()` throws, and the key's bytes are never
+exposed to JavaScript. The `CryptoKey` object can still be stored in IndexedDB and used for signing
+after a reload. On mobile, the platform keystores (Android Keystore, the iOS Secure Enclave) hold
+keys that the app can use but not read. On a server, the key belongs in a KMS or HSM, or at least
+outside the database where the tokens are kept.
+
+"Cannot be read" is not "cannot be used". RFC 9449 is direct that once an attacker runs code in the
+client, DPoP's guarantees are gone, and the spec puts it out of scope.
+
+<Figure caption="With a non-extractable key, script injected into the page cannot take the key home. It can still sign requests while the page is open, pre-sign proofs until a nonce or the token's expiry stops them, and start a fresh login bound to a key of its own.">
+  <ScriptBoundary />
+</Figure>
+
+What DPoP does give you against script on the page: a token and a refresh token that the script
+sends home are worthless on their own, and anything it does afterwards needs the victim's page to
+stay open, or proofs it pre-signed, which a nonce and a short token lifetime cut short. What it
+does not give you: protection while the page is open, or against a script that starts a new
+authorization in a hidden iframe with its own key, which works if the user's session at the AS
+allows a silent login. Content Security Policy and the rest of the cross-site scripting
+defences, the next topic below, still decide that.
+
+## Choosing between them
+
+| Approach | What a stolen token is worth | What it costs | Fits |
+|---|---|---|---|
+| Bearer, long-lived | full access until expiry or revocation | nothing | nothing you would choose today |
+| Bearer, short-lived, rotated refresh | a few minutes; the refresh token until reuse is noticed | refresh traffic | low-value APIs; the minimum RFC 9700 accepts for public clients |
+| DPoP | nothing alone; captured proofs only inside the window | a signature per request, a `jti` store, nonce round trips | browser and mobile apps, public clients, APIs you do not all control |
+| mTLS-bound (RFC 8705) | nothing alone | client certificates, TLS termination that forwards them | server-to-server, open banking, inside a service mesh |
+| HTTP Message Signatures | nothing alone, and the body is protected | canonicalisation on both sides, more code | requests whose content must be provably unaltered |
+
+How to choose: for browser and native apps, use DPoP, starting with refresh tokens if your APIs are
+not ready, then access tokens once every API enforces it. For backend-to-backend calls where you
+already run mTLS, bind tokens to the certificate and skip DPoP. The OAuth Security Best Current
+Practice (RFC 9700, January 2025) requires refresh tokens of public clients to be either
+sender-constrained or rotated with reuse detection, and recommends sender-constrained access tokens.
+
+## Build it yourself
+
+The client side is one function: build the header and claims, sign. ES256 signatures in a JWT are
+the raw 32-byte `r` and `s` values side by side; Python's `cryptography` package returns them in a
+different encoding (DER), so the example converts them. JavaScript's `node:crypto` does it with
+`dsaEncoding: 'ieee-p1363'`.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="dpop.py (client excerpt)"
+# runnable version: examples/dpop/python/dpop.py
+def make_proof(key, htm: str, htu: str, *, now: float, access_token: str | None = None,
+               nonce: str | None = None, iat: float | None = None) -> str:
+    """One DPoP proof: a JWT signed with the client's private key, valid for one request."""
+    header = {"typ": "dpop+jwt", "alg": "ES256", "jwk": public_jwk(key)}
+    claims = {"jti": str(uuid.uuid4()), "htm": htm, "htu": htu, "iat": int(iat if iat is not None else now)}
+    if access_token:
+        claims["ath"] = sha256_b64(access_token)  # ties this proof to this one token
+    if nonce:
+        claims["nonce"] = nonce  # proves the proof was made after the server said this
+    compact = {"separators": (",", ":")}
+    signing_input = f"{b64url(json.dumps(header, **compact).encode())}.{b64url(json.dumps(claims, **compact).encode())}"
+    r, s = decode_dss_signature(key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256())))
+    return f"{signing_input}.{b64url(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="dpop.mjs (client excerpt)"
+// runnable version: examples/dpop/js/dpop.mjs
+/** One DPoP proof: a JWT signed with the client's private key, valid for one request. */
+export function makeProof(key, htm, htu, { now, accessToken, nonce, iat } = {}) {
+  const header = { typ: 'dpop+jwt', alg: 'ES256', jwk: key.jwk };
+  const claims = { jti: randomUUID(), htm, htu, iat: Math.floor(iat ?? now) };
+  if (accessToken) claims.ath = sha256b64(accessToken); // ties this proof to this one token
+  if (nonce) claims.nonce = nonce; // proves the proof was made after the server said this
+  const signingInput = `${b64json(header)}.${b64json(claims)}`;
+  const sig = sign('sha256', Buffer.from(signingInput), { key: key.privateKey, dsaEncoding: 'ieee-p1363' });
+  return `${signingInput}.${b64url(sig)}`;
+}
+```
+  </TabItem>
+</Tabs>
+
+The server side is the table above in code. The order matters in one place: the `jti` is recorded
+last, so a proof that fails another check does not take a slot in the store.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="dpop.py (server excerpt)"
+MAX_AGE, MAX_FUTURE = 60, 5  # seconds a proof stays acceptable; allowance for client clocks ahead
+
+
+def check_proof(proof: str, *, method: str, url: str, now: float, jti_store: JtiStore,
+                access_token: str | None = None, bound_jkt: str | None = None,
+                nonces: NonceIssuer | None = None) -> dict:
+    """The checks of RFC 9449 section 4.3. Returns the claims, or raises Rejected."""
+    try:
+        h64, c64, s64 = proof.split(".")
+        header, claims = json.loads(b64url_decode(h64)), json.loads(b64url_decode(c64))
+    except ValueError:
+        raise Rejected("not a JWT")
+    if header.get("typ") != "dpop+jwt":
+        raise Rejected("typ is not dpop+jwt")  # stops other JWTs being passed off as proofs
+    if header.get("alg") != "ES256":
+        raise Rejected("alg not allowed")  # never 'none', never HS256
+    jwk = header.get("jwk", {})
+    if "d" in jwk:
+        raise Rejected("jwk contains a private key")
+    sig = b64url_decode(s64)
+    try:
+        key_from_jwk(jwk).verify(encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")),
+                                 f"{h64}.{c64}".encode(), ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, KeyError, ValueError):
+        raise Rejected("bad signature")
+    if not {"jti", "htm", "htu", "iat"} <= claims.keys():
+        raise Rejected("missing claim")
+    if claims["htm"] != method:
+        raise Rejected(f"htm is {claims['htm']}, request is {method}")
+    if claims["htu"] != url.split("?")[0].split("#")[0]:
+        raise Rejected(f"htu is {claims['htu']}, request is {url}")
+    if nonces and not nonces.valid(claims.get("nonce", ""), now):
+        raise Rejected("use_dpop_nonce")  # the caller sends a fresh DPoP-Nonce header with this
+    if not now - MAX_AGE <= claims["iat"] <= now + MAX_FUTURE:
+        raise Rejected("iat outside the window")
+    if access_token is not None:
+        if claims.get("ath") != sha256_b64(access_token):
+            raise Rejected("ath does not match the access token")
+        if jwk_thumbprint(jwk) != bound_jkt:
+            raise Rejected("proof key does not match the token's cnf.jkt")
+    if not jti_store.first_use(claims["htu"], claims["jti"], now, ttl=MAX_AGE + MAX_FUTURE):
+        raise Rejected("jti already used")  # last, so failed proofs don't fill the store
+    return claims
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="dpop.mjs (server excerpt)"
+const MAX_AGE = 60; // seconds a proof stays acceptable
+const MAX_FUTURE = 5; // allowance for client clocks running ahead
+
+/** The checks of RFC 9449 section 4.3. Returns the claims, or throws Rejected. */
+export function checkProof(proof, { method, url, now, jtiStore, accessToken, boundJkt, nonces }) {
+  const [h64, c64, s64] = proof.split('.');
+  let header, claims;
+  try {
+    header = JSON.parse(Buffer.from(h64, 'base64url'));
+    claims = JSON.parse(Buffer.from(c64, 'base64url'));
+  } catch {
+    throw new Rejected('not a JWT');
+  }
+  if (header.typ !== 'dpop+jwt') throw new Rejected('typ is not dpop+jwt'); // stops other JWTs passing as proofs
+  if (header.alg !== 'ES256') throw new Rejected('alg not allowed'); // never 'none', never HS256
+  const jwk = header.jwk ?? {};
+  if ('d' in jwk) throw new Rejected('jwk contains a private key');
+  let ok = false;
+  try {
+    const pub = createPublicKey({ key: jwk, format: 'jwk' });
+    ok = verify('sha256', Buffer.from(`${h64}.${c64}`), { key: pub, dsaEncoding: 'ieee-p1363' }, Buffer.from(s64 ?? '', 'base64url'));
+  } catch {}
+  if (!ok) throw new Rejected('bad signature');
+  if (!['jti', 'htm', 'htu', 'iat'].every((c) => c in claims)) throw new Rejected('missing claim');
+  if (claims.htm !== method) throw new Rejected(`htm is ${claims.htm}, request is ${method}`);
+  if (claims.htu !== url.split('?')[0].split('#')[0]) throw new Rejected(`htu is ${claims.htu}, request is ${url}`);
+  if (nonces && !nonces.valid(claims.nonce, now)) throw new Rejected('use_dpop_nonce'); // send a fresh DPoP-Nonce
+  if (!(claims.iat >= now - MAX_AGE && claims.iat <= now + MAX_FUTURE)) throw new Rejected('iat outside the window');
+  if (accessToken !== undefined) {
+    if (claims.ath !== sha256b64(accessToken)) throw new Rejected('ath does not match the access token');
+    if (jwkThumbprint(jwk) !== boundJkt) throw new Rejected("proof key does not match the token's cnf.jkt");
+  }
+  // Last, so failed proofs don't fill the store.
+  if (!jtiStore.firstUse(claims.htu, claims.jti, now, MAX_AGE + MAX_FUTURE)) throw new Rejected('jti already used');
+  return claims;
+}
+```
+  </TabItem>
+</Tabs>
+
+The full files add the RFC 7638 thumbprint, the `jti` store, the HMAC nonces and a toy API that
+refuses DPoP-bound tokens sent as `Bearer`, then run the five experiments on this page. Section 0
+recomputes the thumbprints and the `ath` printed in RFC 9449 and RFC 7638, as a check on the
+hashing code. The last section measures the cost, on one core of our machine:
+
+```text
+5. What it costs
+   make a proof 85 µs, check one 198 µs, 530 bytes in the DPoP header
+```
+
+A fifth of a millisecond per request is small next to a database query, and large next to
+checking a bearer token's signature once and caching the result. In a browser, Web Crypto signs
+asynchronously and adds its own overhead; measure on the slowest phone you support. For a real
+service, use a maintained library (`oauth4webapi` in JavaScript, Spring Security in Java)
+rather than this code; it is written to show the checks, not to be deployed.
+
+## How real systems do it
+
+**Bluesky** (the AT Protocol) requires DPoP of every client. Its OAuth
+profile, read in October 2026, makes DPoP mandatory at the authorization server and at each user's
+data server, makes server nonces mandatory, and requires servers to rotate them at least every 5
+minutes, accepting a recently replaced nonce so that concurrent requests survive a rotation.
+Clients must make a new DPoP key for every session and device. Access tokens should live under 30
+minutes (5 recommended), and a public client's whole session at most two weeks
+([AT Protocol OAuth spec](https://atproto.com/specs/oauth)). Every rule on this page is in there,
+turned to the strict setting.
+
+**Okta** answers a client's first token request with `400 use_dpop_nonce` and a `dpop-nonce`
+header. Its nonce changes every 24 hours, and an old one keeps working for
+three days ([Okta DPoP guide](https://developer.okta.com/docs/guides/dpop/main/), as of October
+2026). Compare that with Bluesky's 5 minutes: at the token endpoint, a long-lived nonce does almost
+nothing against proofs signed in advance, and the remaining limit is the lifetime of the tokens
+those proofs are tied to. Okta's guide also tells resource servers to track the `jti` of every
+proof and reject repeats.
+
+**Keycloak** shipped DPoP as a preview from version 23 and declared it fully supported in 26.4
+(September 2025), with the option to bind only the refresh tokens of public clients, a setting
+that requires `dpop_jkt` in every authorization request, and client profiles for FAPI 2.0 with DPoP
+([Keycloak, 2025](https://www.keycloak.org/2025/10/dpop-support-26-4)).
+
+**Spring Security** added DPoP support for resource servers in 6.5 (2025). As of October 2026 its
+default replay check (since 6.5.12) keeps `jti` values in an in-memory cache, per application
+instance, for 30 seconds past `iat`, with at most 100,000 entries and 1,000 proofs per key. It
+compares `htu` with the request URL as an exact string. Both defaults matter in the gotchas below.
+
+**FAPI 2.0** (the OpenID Foundation's security profile for open banking and other high-value APIs,
+final in February 2025) allows only sender-constrained access tokens, by mTLS or DPoP. With DPoP,
+servers are expected to use nonces and must support binding the authorization code with `dpop_jkt`
+([FAPI 2.0 Security Profile](https://openid.net/specs/fapi-security-profile-2_0.html)).
+
+## Gotchas and war stories
+
+:::caution[The URL your app sees is not the URL the client signed]
+Behind a TLS-terminating load balancer, the app sees `http://10.0.3.7:8080/orders` while the client
+signed `https://api.example.com/orders`, and every proof fails `htu`. Our fourth experiment shows it:
+`rejected: htu is https://api.example.com/orders, request is http://10.0.3.7:8080/orders`. Build the
+URL from the configured public origin, or from `X-Forwarded-Proto` and `X-Forwarded-Host` that only
+your own proxy can set, never from the socket. The spec asks servers to normalise case, default
+ports and percent-encoding before comparing; an exact string match, as in Spring's default, rejects
+`HTTPS://API.example.com:443/orders` that the spec would accept.
+:::
+
+:::caution[A replay cache per instance is a replay cache per instance]
+An in-memory `jti` cache, the default in more than one library, lets a captured proof through once
+on every instance behind the balancer, as the second experiment showed: 3 of 4. Put the store where
+all instances share it, as one atomic `SET key 1 NX EX 65` in Redis per proof, keyed by a hash of
+URL and `jti`. If that is not possible, keep the window short, because it is then your only limit.
+:::
+
+:::danger[Every API must refuse a bound token sent as Bearer]
+A DPoP-bound access token is a perfectly good bearer token to any API that does not know DPoP. If
+the public gateway enforces DPoP but internal services also accept the same tokens with
+`Authorization: Bearer`, a thief who can reach one internal service, or one legacy API on the same
+audience, uses the stolen token without a key. RFC 9449 requires an API that supports both schemes
+to reject a DPoP-bound token presented as `Bearer`; an API that supports neither cannot. Bind access
+tokens only when every API that accepts them checks the binding, and bind only refresh tokens until
+then.
+:::
+
+:::danger[DPoP on a backend only helps if the key is not next to the tokens]
+GitHub's and Salesloft's stolen tokens were held by backend services. A DPoP key stored in the same
+database or the same environment variables as the tokens is stolen with them, and the binding
+protects nothing. Keep the key in a KMS or HSM that signs on request, so that the attacker has to
+keep control of your signing service, not copy a file. And remember that a confidential client's
+refresh tokens are bound to its client credentials, not to the DPoP key: a stolen client secret
+plus a refresh token is still a working pair.
+:::
+
+:::caution[Retries, rotations and CORS]
+A proof is single-use, so a retried request needs a new proof; a client library that replays the
+same headers on a network error gets `jti already used`. Nonces rotate under concurrent requests:
+accept the previous nonce for a short while, and make clients retry once on `use_dpop_nonce` with
+the new value. Browser apps cannot read `DPoP-Nonce` or `WWW-Authenticate` from a cross-origin
+response unless the API lists them in `Access-Control-Expose-Headers`, which shows up as an
+endless loop of 401s.
+:::
+
+## Trade-offs and when not to use it
+
+DPoP moves cost from the moment of theft to every request. The client signs every call (about
+0.1 ms in our measurement, more in a browser), every request carries about half a kilobyte more,
+and the API verifies a signature and writes to a shared store on every call, where a bearer token
+needed a cached signature check. Nonces add a round trip per server per rotation, and clients need
+a retry path for them. The server now holds state for authentication that used to be stateless.
+
+DPoP does not protect the request body or headers: it relies on TLS for that. It does not
+authenticate the client: anyone can make a key. It does not help once an attacker runs code inside
+the client, beyond making that attacker stay online. And it protects only at APIs that enforce it,
+so a token accepted anywhere as a bearer token is a bearer token.
+
+Skip it, or wait, when the calls are server-to-server inside a network that already runs mTLS
+(bind tokens to the certificate instead); when tokens are short-lived, low-value and confined to one
+API you control; or when you cannot make every API that accepts the tokens enforce the binding yet,
+in which case start with refresh tokens only.
+
+## Interview corner
+
+DPoP comes up in designs for single-page apps, mobile apps and "how would you protect tokens if one
+leaks". A strong answer names what it stops, what it does not, and the server state it needs.
+
+- **"What is the difference between a bearer token and a sender-constrained token?"** Possession of a
+  bearer token is enough; a sender-constrained token also needs proof of a key (DPoP) or a client
+  certificate (mTLS) recorded in the token as `cnf`. Give one way bearer tokens leak: logs, XSS,
+  a breached integrator.
+- **"What does a DPoP proof sign, and why not the body?"** Method, URL without query, time, a
+  unique ID, the token's hash, and the server nonce when there is one. Signing the whole message needs
+  canonicalisation that proxies break; TLS already protects the body in transit.
+- **"You run 20 API instances. How do you prevent replay?"** A short `iat` window and a shared `jti`
+  store with an expiry equal to the window, keyed by URL and a hash of the `jti`; say what a
+  per-instance cache lets through.
+- **"Does DPoP protect a SPA against XSS?"** Only partly. Tokens taken away are useless; the script
+  can still use the non-extractable key while the page is open, pre-sign proofs (stopped by nonces and
+  short tokens) and start a fresh grant with its own key. XSS prevention is still required.
+
+## Check yourself
+
+<details>
+<summary>1. An attacker reads an access token and a refresh token from a public client's log file. Both are DPoP-bound. What can they do with them?</summary>
+
+Nothing, on their own. Every API call needs a proof signed by the client's private key whose
+thumbprint matches the token's `cnf.jkt`, and every refresh needs a proof from the same key. A proof
+signed with the attacker's key fails the thumbprint check. The exception is any API that accepts
+the access token as a bearer token.
+
+</details>
+
+<details>
+<summary>2. Your API checks the iat window (60 s) and the signature, but keeps no jti store. A proxy logs one full request, token and proof. What can an attacker do with it?</summary>
+
+Replay that exact request, same method and URL, as many times as they like for up to 60 seconds after
+the proof was made. Nothing else: `htm`, `htu` and `ath` stop it from being used on any other
+endpoint or with any other token. A shared `jti` store would let it through zero times.
+
+</details>
+
+<details>
+<summary>3. Why can't the jti store and the iat window stop proofs signed in advance by injected script?</summary>
+
+Each pre-signed proof has its own unique `jti`, and its `iat` was set to the moment it would be
+used, so it is fresh when it arrives. Only something the client could not know at signing time
+stops it: a server nonce issued later, or the access token expiring, since `ath` ties the proofs to
+that one token.
+
+</details>
+
+<details>
+<summary>4. After you enable DPoP behind your load balancer, every API call fails with an htu mismatch, but calls straight to one instance work. What is happening?</summary>
+
+The instance rebuilds the request URL from the connection it received, `http://` and an internal
+host and port, while the client signed the public `https://` URL. Build the URL from the configured
+public origin or from forwarded headers set by your own proxy, and normalise before comparing.
+
+</details>
+
+<details>
+<summary>5. Why are a confidential client's refresh tokens not bound to its DPoP key?</summary>
+
+They are already bound to the client: the client must authenticate to the AS with its own
+credentials to use them. Binding them to a DPoP key as well would add little, and the client could
+not rotate the key without invalidating every user's refresh token.
+
+</details>
+
+## Recap
+
+- A bearer token works for whoever holds it; DPoP adds a per-request proof signed by a key whose
+  thumbprint the AS writes into the token as `cnf.jkt`.
+- The proof signs the method, the URL without query, `iat`, a unique `jti`, the token's hash `ath`,
+  and the server's `nonce` when there is one. Not the body or headers.
+- The API checks signature, `typ`, `alg`, `htm`, `htu`, window, nonce, `ath` and the thumbprint;
+  replay inside the window needs a `jti` store shared by every instance.
+- Server nonces are the only defence against proofs signed in advance; short access tokens bound the
+  rest.
+- Public clients' refresh tokens are bound to the key; confidential clients' are bound to their
+  credentials. `dpop_jkt` binds the authorization code.
+- Script running in the client can still use a non-extractable key. Every API that accepts the
+  token must refuse it as `Bearer`.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'xss', why: 'The attack DPoP cannot stop: script running on your page, and how to keep it out.' },
+  { slug: 'secrets-management', why: 'Where a backend keeps its DPoP signing key so that stealing the tokens does not steal the key.' },
+  { slug: 'mcp-authorization', why: 'OAuth 2.1 for AI agents and tool servers, where tokens pass through many hands and sender constraint is being discussed.' },
+]} />
+
+## Further reading
+
+**Specs**
+
+- [RFC 9449: OAuth 2.0 Demonstrating Proof of Possession (DPoP)](https://www.rfc-editor.org/rfc/rfc9449) (2023) — the protocol, the checks in section 4.3, and an unusually frank security considerations section.
+- [RFC 7638: JWK Thumbprint](https://www.rfc-editor.org/rfc/rfc7638) (2015, in force) — how the key fingerprint is computed.
+- [RFC 9700: OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700) (2025) — where sender-constrained and rotated refresh tokens are required.
+- [RFC 8705: OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens](https://www.rfc-editor.org/rfc/rfc8705) (2020) — the TLS alternative.
+- [RFC 9421: HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421) (2024) — signing chosen parts of a request, body included.
+- [FAPI 2.0 Security Profile](https://openid.net/specs/fapi-security-profile-2_0.html) (2025) — sender-constrained tokens, nonces and code binding for high-value APIs.
+- [AT Protocol OAuth profile](https://atproto.com/specs/oauth) (living spec, read October 2026) — DPoP with mandatory nonces at Bluesky's scale.
+
+**Product documentation**
+
+- [Okta: configure OAuth 2.0 DPoP](https://developer.okta.com/docs/guides/dpop/main/) (living docs, read October 2026) — the nonce on the first token request, its 24-hour rotation.
+- [Keycloak: official support for DPoP in 26.4](https://www.keycloak.org/2025/10/dpop-support-26-4) (2025) — refresh-only binding and required `dpop_jkt`.
+- [Spring Security: DPoP-bound access tokens](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/dpop-tokens.html) (living docs, read October 2026; 6.5+) — a resource server implementation, defaults read from its source.
+- [MDN: CryptoKey.extractable](https://developer.mozilla.org/en-US/docs/Web/API/CryptoKey/extractable) (living docs, read October 2026) — non-extractable keys in the browser.
+
+**Incidents and news**
+
+- [GitHub: security alert, stolen OAuth user tokens](https://github.blog/news-insights/company-news/security-alert-stolen-oauth-user-tokens/) (2022) — tokens stolen from two integrators, used to clone private repositories.
+- [Google Threat Intelligence: data theft from Salesforce instances via Salesloft Drift](https://cloud.google.com/blog/topics/threat-intelligence/data-theft-salesforce-instances-via-salesloft-drift) (2025) — stolen access and refresh tokens at scale.
+- [The Hacker News: Google rolls out DBSC in Chrome 146](https://thehackernews.com/2026/04/google-rolls-out-dbsc-in-chrome-146-to.html) (2026) — the same binding idea applied to session cookies.

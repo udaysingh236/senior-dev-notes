@@ -1,0 +1,53 @@
+---
+// The parts of a DPoP proof JWT and the misuse each one rules out.
+---
+
+<svg viewBox="0 0 400 452" width="100%" role="img" aria-labelledby="dp-pa-t dp-pa-d">
+  <title id="dp-pa-t">Anatomy of a DPoP proof</title>
+  <desc id="dp-pa-d">
+    A DPoP proof is a JWT in three parts. The header holds typ dpop+jwt, which stops other JWTs being
+    used as proofs; alg ES256, never none; and jwk, the client's public key. The payload holds jti, a
+    unique ID that stops replay; htm and htu, the method and URL, which stop use on another endpoint;
+    iat, the time, which stops old proofs; ath, the hash of the access token, which stops use with
+    another token; and nonce, from the server, which stops proofs signed in advance. The signature, 64
+    bytes, stops edits and forgeries. The query string, other headers and the body are not signed.
+  </desc>
+
+  <text x="4" y="20" font-size="15" style="fill: var(--viz-muted)">field, and what it stops</text>
+
+  <rect x="4" y="30" width="392" height="112" rx="8" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="14" y="52" font-size="15" font-weight="700" style="fill: var(--viz-client)">header</text>
+  {[
+    ['typ: dpop+jwt', 'other JWTs as proofs', 76],
+    ['alg: ES256', 'alg none, shared secrets', 102],
+    ['jwk: { x, y }', 'nothing: it is the key', 128],
+  ].map(([field, stops, y]) => (
+    <g>
+      <text x="14" y={y} font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{field}</text>
+      <text x="386" y={y} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">{stops}</text>
+    </g>
+  ))}
+
+  <rect x="4" y="152" width="392" height="188" rx="8" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="14" y="174" font-size="15" font-weight="700" style="fill: var(--viz-flow)">claims</text>
+  {[
+    ['jti: 9f1c…', 'the same proof twice', 198],
+    ['htm: GET', 'another method', 224],
+    ['htu: https://…/orders', 'another endpoint', 250],
+    ['iat: 1800000000', 'old proofs', 276],
+    ['ath: fUHyO2r…', 'another token', 302],
+    ['nonce: kQ3v…', 'proofs signed early', 328],
+  ].map(([field, stops, y]) => (
+    <g>
+      <text x="14" y={y} font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{field}</text>
+      <text x="386" y={y} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">{stops}</text>
+    </g>
+  ))}
+
+  <rect x="4" y="350" width="392" height="44" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="14" y="377" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">signature, 64 bytes</text>
+  <text x="386" y="377" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">edits, forgeries</text>
+
+  <rect x="4" y="406" width="392" height="40" rx="8" fill="none" stroke-width="1.5" stroke-dasharray="6 4" style="stroke: var(--viz-warn)" />
+  <text x="14" y="431" font-size="15" style="fill: var(--viz-warn)">not signed: query string, headers, body</text>
+</svg>
