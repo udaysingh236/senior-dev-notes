@@ -1,0 +1,48 @@
+---
+// Latency of one request against the number of orders on the page, at a 1 ms round trip.
+// Numbers from examples/n-plus-one-queries/postgres/expected-output.txt, section 3.
+const points = [
+  { n: 10, naive: 26.7, batched: 4.3 },
+  { n: 50, naive: 117.0, batched: 4.5 },
+  { n: 200, naive: 477.1, batched: 7.2 },
+];
+const X0 = 56;
+const X1 = 380;
+const Y0 = 250; // the 0 ms line
+const Y1 = 40; // the 500 ms line
+const x = (n: number) => X0 + ((X1 - X0) * n) / 200;
+const y = (ms: number) => Y0 - ((Y0 - Y1) * ms) / 500;
+const line = (key: 'naive' | 'batched') => points.map((p, i) => `${i ? 'L' : 'M'}${x(p.n)} ${y(p[key])}`).join(' ');
+---
+
+<svg viewBox="0 0 400 310" width="100%" role="img" aria-labelledby="n1-grow-t n1-grow-d">
+  <title id="n1-grow-t">N+1 latency grows with the page; batched does not</title>
+  <desc id="n1-grow-d">
+    Latency of one request at a 1 millisecond round trip, for pages of 10, 50 and 200 orders. With a
+    query per order the request takes 27 ms, 117 ms and 477 ms: 21, 101 and 401 queries, each a
+    round trip. Batched, with 3 queries whatever the page size, it takes 4.3 ms, 4.5 ms and 7.2 ms.
+  </desc>
+
+  {[0, 100, 200, 300, 400, 500].map((ms) => (
+    <g>
+      <path d={`M${X0} ${y(ms)} L${X1} ${y(ms)}`} stroke-width="1" style="stroke: var(--viz-stroke); opacity: 0.6" />
+      <text x={X0 - 8} y={y(ms) + 5} font-size="15" text-anchor="end" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{ms}</text>
+    </g>
+  ))}
+  <text x="4" y="22" font-size="16" style="fill: var(--viz-muted)">ms per request, 1 ms round trip</text>
+  {points.map((p) => (
+    <text x={x(p.n)} y={Y0 + 24} font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{p.n}</text>
+  ))}
+  <text x={X1} y={Y0 + 48} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">orders on the page</text>
+
+  <path d={line('naive')} fill="none" stroke-width="2.5" style="stroke: var(--viz-bad)" />
+  <path d={line('batched')} fill="none" stroke-width="2.5" stroke-dasharray="6 4" style="stroke: var(--viz-ok)" />
+  {points.map((p) => (
+    <g>
+      <circle cx={x(p.n)} cy={y(p.naive)} r="4.5" style="fill: var(--viz-bad)" />
+      <rect x={x(p.n) - 4} y={y(p.batched) - 4} width="8" height="8" style="fill: var(--viz-ok)" />
+    </g>
+  ))}
+  <text x={X0 + 10} y={y(450)} font-size="16" font-weight="700" style="fill: var(--viz-bad)">N+1: 2N + 1 queries</text>
+  <text x={x(200) - 8} y={y(7.2) - 12} font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ok)">batched: 3 queries</text>
+</svg>

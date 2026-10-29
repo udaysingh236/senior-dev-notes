@@ -1,0 +1,67 @@
+---
+// A loaded row object with two relations that are not loaded yet: touching either one runs a query.
+const rows = [
+  { label: 'id', value: '17', loaded: true },
+  { label: 'total', value: '1,240', loaded: true },
+  { label: 'customer_id', value: '42', loaded: true },
+  { label: 'customer', value: '?', loaded: false },
+  { label: 'items', value: '?', loaded: false },
+];
+---
+
+<svg viewBox="0 0 400 370" width="100%" role="img" aria-labelledby="n1-lazy-t n1-lazy-d">
+  <title id="n1-lazy-t">A lazy relation is a query waiting to happen</title>
+  <desc id="n1-lazy-d">
+    An order object loaded by the page query holds its own columns: id 17, total 1,240 and
+    customer_id 42. Its customer and items relations are not loaded. Reading order.customer sends
+    SELECT from customers where id is 42; reading order.items sends SELECT from order_items where
+    order_id is 17. In a loop over 50 orders that is 1 plus 2 times 50, 101 queries, and if the code
+    also reads the product of each of 5 items per order, 250 more: 351. No line of the loop says
+    SELECT.
+  </desc>
+  <defs>
+    <marker id="n1-lazy-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">order 17, from the page query</text>
+  <rect x="4" y="32" width="190" height="140" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  {rows.map((r, i) => (
+    <g>
+      {!r.loaded && (
+        <rect x="10" y={38 + i * 26} width="178" height="22" rx="4" stroke-width="1.5" stroke-dasharray="4 3"
+          style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+      )}
+      <text x="16" y={54 + i * 26} font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{r.label}</text>
+      <text x="182" y={54 + i * 26} font-size="16" text-anchor="end"
+        style={`fill: var(${r.loaded ? '--viz-ok' : '--viz-warn'}); font-family: var(--sl-font-mono)`}>
+        {r.loaded ? r.value : 'lazy'}
+      </text>
+    </g>
+  ))}
+
+  <rect x="212" y="60" width="184" height="46" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="222" y="79" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">SELECT customers</text>
+  <text x="222" y="98" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">WHERE id = 42</text>
+  <rect x="212" y="122" width="184" height="46" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="222" y="141" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">SELECT order_items</text>
+  <text x="222" y="160" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">WHERE order_id = 17</text>
+  <path d="M188 127 C 200 127, 198 90, 210 86" fill="none" stroke-width="2" marker-end="url(#n1-lazy-a)" style="stroke: var(--viz-flow)" />
+  <path d="M188 153 C 198 153, 200 148, 210 146" fill="none" stroke-width="2" marker-end="url(#n1-lazy-a)" style="stroke: var(--viz-flow)" />
+
+  <path d="M304 168 L304 194" stroke-width="2" marker-end="url(#n1-lazy-a)" style="stroke: var(--viz-flow)" />
+  <ellipse cx="304" cy="204" rx="78" ry="9" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <path d="M226 204 L226 236 A78 9 0 0 0 382 236 L382 204" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="304" y="232" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">one round trip each</text>
+
+  <text x="4" y="206" font-size="16" style="fill: var(--viz-muted)">touching a relation</text>
+  <text x="4" y="226" font-size="16" style="fill: var(--viz-muted)">that is not loaded</text>
+  <text x="4" y="246" font-size="16" style="fill: var(--viz-muted)">sends a query</text>
+
+  <text x="4" y="290" font-size="17" style="fill: var(--viz-ink)">50 orders, 2 relations each:</text>
+  <text x="396" y="290" font-size="17" font-weight="700" text-anchor="end" style="fill: var(--viz-bad); font-family: var(--sl-font-mono)">1 + 2×50 = 101</text>
+  <text x="4" y="318" font-size="17" style="fill: var(--viz-ink)">+ the product of 5 items each:</text>
+  <text x="396" y="318" font-size="17" font-weight="700" text-anchor="end" style="fill: var(--viz-bad); font-family: var(--sl-font-mono)">+ 250 = 351</text>
+  <text x="4" y="352" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">and no line of the loop says SELECT</text>
+</svg>

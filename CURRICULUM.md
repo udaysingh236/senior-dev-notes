@@ -71,7 +71,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 4 | Storage engines: B-trees vs LSM trees | b-trees-vs-lsm-trees | new | planned |
 | 5 | Write-ahead log | write-ahead-log | new | planned |
 | 6 | Query optimization | query-optimization | 21 | planned |
-| 7 | N+1 queries | n-plus-one-queries | 5 | planned |
+| 7 | N+1 queries | n-plus-one-queries | 5 | published (2026-10-29) |
 | 8 | Connection pooling | connection-pooling | 4 | published (2026-10-26) |
 | 9 | Replication | replication | 30 | planned |
 | 10 | Read replicas | read-replicas | 22 | planned |

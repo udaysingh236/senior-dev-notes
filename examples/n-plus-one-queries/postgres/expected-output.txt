@@ -1,0 +1,38 @@
+PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+cores: 4
+
+== 0. One "select 1", one client: what each network adds per round trip
+direct      0.098 ms per query
+1ms         1.057 ms per query
+5ms         4.979 ms per query
+
+== 1. One request for a page of 50 orders with customer and items, one client
+strategy      queries       direct     1 ms RTT     5 ms RTT    bytes from db
+n_plus_one        101     16.92 ms    111.97 ms    523.73 ms            33617
+pipelined         101      5.74 ms      6.78 ms     10.66 ms            32995
+batched             3      1.42 ms      5.02 ms     17.52 ms            19398
+joined              1      1.72 ms      2.77 ms      6.78 ms            42117
+json_agg            1      1.43 ms      2.81 ms      6.66 ms            14104
+
+== 2. Throughput: 8 clients over the Unix socket (no network delay), page of 50
+n_plus_one          337 requests/s
+batched            3462 requests/s
+json_agg           2558 requests/s
+
+== 3. Page size at 1 ms RTT, one client
+N = 10   n_plus_one   21 queries     26.66 ms   batched 3 queries    4.28 ms
+N = 50   n_plus_one  101 queries    116.98 ms   batched 3 queries    4.49 ms
+N = 200  n_plus_one  401 queries    477.12 ms   batched 3 queries    7.16 ms
+
+== 4. Two collections (5 items and 3 payments per order), page of 50, 1 ms RTT
+two_joined        3.91 ms     105506 bytes from db
+two_batched       4.49 ms      22611 bytes from db
+rows returned by one JOIN of items and payments: 750
+rows returned by the batched queries: 450
+
+== 5. LIMIT on a JOIN limits rows, not orders
+orders on the "page" when LIMIT 50 is applied to orders JOIN order_items: 10
+
+== 6. Is it the planning? The N+1 page of 50 with prepared statements (-M prepared), one client
+direct      11.496 ms
+1ms        106.300 ms

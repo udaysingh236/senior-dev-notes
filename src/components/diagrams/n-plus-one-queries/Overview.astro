@@ -1,0 +1,61 @@
+---
+// One request for a page of 50 orders, four ways, on a timeline at a 1 ms round trip.
+// Numbers from examples/n-plus-one-queries/postgres/expected-output.txt, section 1.
+const MS = 3; // drawing units per millisecond; the axis runs from 0 to 120 ms
+const X0 = 16;
+const rows = [
+  { label: 'N+1: 101 queries, one after another', ms: 112.0, trips: 101, tone: 'bad' },
+  { label: 'N+1, pipelined: 101 queries, sent together', ms: 6.8, trips: 1, tone: 'warn' },
+  { label: 'Batched with IN: 3 queries', ms: 5.0, trips: 3, tone: 'ok' },
+  { label: 'One JOIN: 1 query', ms: 2.8, trips: 1, tone: 'ok' },
+];
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="n1-ov-t n1-ov-d">
+  <title id="n1-ov-t">Where the time of one N+1 request goes</title>
+  <desc id="n1-ov-d">
+    A timeline from 0 to 120 milliseconds for one request that lists 50 orders with their customer
+    and items, with a 1 millisecond network round trip to PostgreSQL. Running a query per order, 101
+    queries one after another, takes 112 ms, almost all of it waiting for 101 round trips. Sending
+    the same 101 queries in one pipeline takes 6.8 ms. Batching with IN, 3 queries, takes 5.0 ms. One
+    JOIN takes 2.8 ms. On localhost, with a 0.1 ms round trip, the N+1 version still takes 17 ms
+    against 1.4 ms batched.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one page of 50 orders, 1 ms round trip</text>
+
+  {rows.map((r, i) => {
+    const y = 58 + i * 58;
+    const width = r.ms * MS;
+    return (
+      <g>
+        <text x="4" y={y} font-size="16" style="fill: var(--viz-ink)">{r.label}</text>
+        <rect x={X0} y={y + 8} width={width} height="20" rx="3" stroke-width="1.5"
+          style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+        {r.trips > 1 && r.trips < 20 && Array.from({ length: r.trips - 1 }, (_, k) => (
+          <path d={`M${X0 + (width * (k + 1)) / r.trips} ${y + 8} L${X0 + (width * (k + 1)) / r.trips} ${y + 28}`}
+            stroke-width="1.5" style={`stroke: var(--viz-${r.tone})`} />
+        ))}
+        {r.trips >= 20 && (
+          <path d={`M${X0} ${y + 18} L${X0 + width} ${y + 18}`} stroke-width="20"
+            stroke-dasharray={`${(width / r.trips) * 0.55} ${(width / r.trips) * 0.45}`}
+            style={`stroke: var(--viz-${r.tone}); opacity: 0.35`} />
+        )}
+        <text x={r.ms > 60 ? X0 + width - 4 : X0 + width + 8} y={y + 24} font-size="16" font-weight="700"
+          text-anchor={r.ms > 60 ? 'end' : 'start'} style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+          {r.ms.toFixed(1)} ms
+        </text>
+      </g>
+    );
+  })}
+
+  <path d={`M${X0} 286 L${X0 + 120 * MS} 286`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  {[0, 40, 80, 120].map((ms) => (
+    <g>
+      <path d={`M${X0 + ms * MS} 282 L${X0 + ms * MS} 290`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+      <text x={X0 + ms * MS} y="306" font-size="15" text-anchor={ms === 0 ? 'start' : ms === 120 ? 'end' : 'middle'}
+        style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{ms} ms</text>
+    </g>
+  ))}
+  <text x="4" y="326" font-size="15" style="fill: var(--viz-muted)">each stripe of the top bar is one round trip</text>
+</svg>
