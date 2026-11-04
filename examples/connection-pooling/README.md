@@ -1,7 +1,7 @@
 # Connection pooling: runnable examples
 
 The code behind the snippets and numbers on the
-[Connection Pooling](https://seniordevnotes.netlify.app/databases/connection-pooling/) page.
+[Connection Pooling](https://seniordevnotes.in/databases/connection-pooling/) page.
 
 | File | What it shows |
 |---|---|

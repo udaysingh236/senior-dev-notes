@@ -1,6 +1,6 @@
 # DNS: runnable examples
 
-The code behind every snippet on the [DNS](https://seniordevnotes.netlify.app/networking/dns/) page.
+The code behind every snippet on the [DNS](https://seniordevnotes.in/networking/dns/) page.
 Python 3.11+ and Node 20+, standard library only, nothing to install.
 
 Every demo starts its own tiny authoritative DNS server for the zone `shop.example.test` on

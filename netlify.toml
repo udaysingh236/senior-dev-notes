@@ -15,3 +15,12 @@
   for = "/_astro/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# One address for search engines: the Netlify subdomain redirects to the custom domain.
+# Deploy previews (deploy-preview-N--seniordevnotes.netlify.app) have other host names and are
+# not affected.
+[[redirects]]
+  from = "https://seniordevnotes.netlify.app/*"
+  to = "https://seniordevnotes.in/:splat"
+  status = 301
+  force = true

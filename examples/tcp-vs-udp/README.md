@@ -1,6 +1,6 @@
 # TCP vs UDP: runnable examples
 
-The code behind every snippet and output on the [TCP vs UDP](https://seniordevnotes.netlify.app/networking/tcp-vs-udp/)
+The code behind every snippet and output on the [TCP vs UDP](https://seniordevnotes.in/networking/tcp-vs-udp/)
 page. Python 3.11+ and Node 20+, standard library only, nothing to install. Everything runs on
 `127.0.0.1` and works offline.
 

@@ -1,7 +1,7 @@
 # IRCTC Tatkal booking: runnable examples
 
 The code behind the snippets on the
-[How IRCTC Tatkal Booking Works](https://seniordevnotes.netlify.app/case-studies/irctc-tatkal-booking/)
+[How IRCTC Tatkal Booking Works](https://seniordevnotes.in/case-studies/irctc-tatkal-booking/)
 page. Python 3.11+ and Node 20+, standard library only. Each file prints its results, so you can
 check them against the page.
 

@@ -1,7 +1,7 @@
 # REST API design: runnable examples
 
 The code behind the snippets on the
-[REST API Design](https://seniordevnotes.netlify.app/networking/rest-api-design/) page. Python 3.11+
+[REST API Design](https://seniordevnotes.in/networking/rest-api-design/) page. Python 3.11+
 and Node 22+, standard library only, nothing to install. Everything runs on `127.0.0.1`.
 
 | File | What it shows |

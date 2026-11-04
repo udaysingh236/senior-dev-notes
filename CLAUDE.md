@@ -5,7 +5,7 @@ final-year students, new grads and engineers in their first job. Every topic is 
 engineer with 25+ years of experience would mentor a junior: start from the real problem, walk
 around it, then go deep, then point to what to learn next.
 
-Owner: Uday. Repo: `udaysingh236/senior-dev-notes`. Live site: `https://seniordevnotes.netlify.app`.
+Owner: Uday. Repo: `udaysingh236/senior-dev-notes`. Live site: `https://seniordevnotes.in` (Netlify DNS; `seniordevnotes.netlify.app` redirects to it).
 
 ## Stack
 
@@ -14,7 +14,7 @@ Owner: Uday. Repo: `udaysingh236/senior-dev-notes`. Live site: `https://seniorde
   shared `SimShell` component. No UI framework unless already added to the project.
 - Hosting: Netlify, connected to the GitHub repo. Build settings live in `netlify.toml`
   (`npm run build`, publish `dist`). A push to `main` deploys the site; other branches get
-  deploy previews. The site is served from the domain root (a custom domain once bought), so there
+  deploy previews. The site is served from the root of `seniordevnotes.in`, so there
   is no `base` path.
 
 ## Repo map

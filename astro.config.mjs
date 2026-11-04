@@ -30,7 +30,7 @@ const trackGroups = getCurriculum()
 
 // https://astro.build/config
 export default defineConfig({
-  site: 'https://seniordevnotes.netlify.app',
+  site: 'https://seniordevnotes.in',
   integrations: [
     starlight({
       title: 'Senior Dev Notes',

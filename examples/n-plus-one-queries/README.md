@@ -1,7 +1,7 @@
 # N+1 queries: runnable examples
 
 The code behind the snippets and numbers on the
-[N+1 Queries](https://seniordevnotes.netlify.app/databases/n-plus-one-queries/) page.
+[N+1 Queries](https://seniordevnotes.in/databases/n-plus-one-queries/) page.
 
 | File | What it shows |
 |---|---|

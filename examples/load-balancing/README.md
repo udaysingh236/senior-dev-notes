@@ -1,7 +1,7 @@
 # Load balancing: runnable examples
 
 The code behind the snippets and numbers on the
-[Load Balancing](https://seniordevnotes.netlify.app/traffic/load-balancing/) page.
+[Load Balancing](https://seniordevnotes.in/traffic/load-balancing/) page.
 Python 3.11+ and Node 22+, standard library only, nothing to install.
 
 | File | What it shows |

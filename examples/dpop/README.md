@@ -1,7 +1,7 @@
 # DPoP: runnable examples
 
 The code behind the snippets and results on the
-[DPoP](https://seniordevnotes.netlify.app/security/dpop/) page.
+[DPoP](https://seniordevnotes.in/security/dpop/) page.
 
 | File | What it shows |
 |---|---|
