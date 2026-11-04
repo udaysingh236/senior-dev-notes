@@ -1,0 +1,46 @@
+---
+// Pods × pool size against max_connections: steady state, a rolling deploy, and behind a pooler.
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="cp-bu-t cp-bu-d">
+  <title id="cp-bu-t">The connection budget</title>
+  <desc id="cp-bu-d">
+    Three bars measured against max_connections of 100. Steady state: 6 pods with pools of 10 open 60
+    connections, plus 10 kept for migrations, cron jobs and people, plus 3 reserved for superusers,
+    leaving 27 free. During a rolling deploy, 6 new pods start before the 6 old ones stop: 120 pool
+    connections plus the 13 others is 133, and every connection past 100 is refused. Behind a pooler,
+    the same 12 pods open 120 client connections to the pooler, which keeps only 20 server
+    connections to the database.
+  </desc>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">steady: 6 pods × pool of 10</text>
+  <rect x="10" y="30" width="168" height="30" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="1.5" />
+  <text x="94" y="51" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">60 app</text>
+  <rect x="178" y="30" width="28" height="30" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="1.5" />
+  <rect x="206" y="30" width="8.4" height="30" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="1.5" />
+  <rect x="214.4" y="30" width="75.6" height="30" fill="none" stroke-dasharray="4 3" style="stroke: var(--viz-stroke)" stroke-width="1.5" />
+  <text x="252" y="51" font-size="15" text-anchor="middle" style="fill: var(--viz-ok)">27 free</text>
+  <text x="10" y="80" font-size="15" style="fill: var(--viz-muted)">+10 jobs, migrations, people · +3 superuser</text>
+
+  <text x="4" y="114" font-size="17" font-weight="700" style="fill: var(--viz-ink)">rolling deploy: 12 pods for a while</text>
+  <rect x="10" y="124" width="280" height="30" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="1.5" />
+  <text x="150" y="145" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">100 used</text>
+  <rect x="290" y="124" width="92.4" height="30" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" stroke-width="1.5" />
+  <text x="336" y="145" font-size="16" text-anchor="middle" style="fill: var(--viz-bad)">33 refused</text>
+  <text x="10" y="174" font-size="15" style="fill: var(--viz-bad)">"sorry, too many clients already"</text>
+
+  <path d="M290 26 L290 64 M290 118 L290 158" stroke-width="2" stroke-dasharray="3 3" style="stroke: var(--viz-ink)" />
+  <text x="296" y="100" font-size="14" style="fill: var(--viz-muted)">limit: 100</text>
+
+  <path d="M4 192 L396 192" stroke-width="1" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  <text x="4" y="216" font-size="17" font-weight="700" style="fill: var(--viz-ink)">behind a pooler: the same 12 pods</text>
+  <rect x="10" y="228" width="110" height="30" rx="4" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="1.5" />
+  <text x="65" y="249" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">120 clients</text>
+  <path d="M120 243 L150 243" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <rect x="150" y="228" width="92" height="30" rx="4" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" stroke-width="1.5" />
+  <text x="196" y="249" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">pooler</text>
+  <path d="M242 243 L272 243" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <rect x="272" y="228" width="56" height="30" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" stroke-width="1.5" />
+  <text x="300" y="249" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">20</text>
+  <text x="10" y="284" font-size="15" style="fill: var(--viz-muted)">clients queue at the pooler, not in Postgres</text>
+</svg>

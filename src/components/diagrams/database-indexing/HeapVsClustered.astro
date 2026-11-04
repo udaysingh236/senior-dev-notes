@@ -1,0 +1,45 @@
+---
+// Postgres secondary index → heap address, versus InnoDB secondary index → primary key → clustered tree.
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="di-hc-t di-hc-d">
+  <title id="di-hc-t">Heap table versus clustered index</title>
+  <desc id="di-hc-d">
+    Top, PostgreSQL: an index on email stores, next to each email, the row's physical address
+    (page 812, slot 4). A lookup walks the email index and then reads that one table page.
+    Bottom, MySQL InnoDB: the table itself is a B-tree ordered by primary key, with whole rows in its
+    leaves. An index on email stores the primary key, id 9041, instead of an address, so a lookup
+    walks the email index and then walks the primary key tree to reach the row.
+  </desc>
+  <defs>
+    <marker id="di-hc-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="18" font-weight="700" style="fill: var(--viz-ink)">PostgreSQL: index → heap page</text>
+  <rect x="4" y="34" width="168" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="16" y="58" font-size="16" style="fill: var(--viz-muted)">index on email</text>
+  <text x="16" y="83" font-size="16" style="fill: var(--viz-ink)">ana@… → (812, 4)</text>
+  <path d="M172 65 L236 65" stroke-width="2" marker-end="url(#di-hc-a)" style="stroke: var(--viz-flow)" />
+  <rect x="240" y="34" width="156" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="252" y="58" font-size="16" style="fill: var(--viz-muted)">heap page 812</text>
+  <text x="252" y="83" font-size="16" style="fill: var(--viz-ink)">slot 4: the row</text>
+  <text x="4" y="122" font-size="16" style="fill: var(--viz-ok)">one tree walk, then one page</text>
+
+  <path d="M4 140 L396 140" stroke-width="1" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+
+  <text x="4" y="168" font-size="18" font-weight="700" style="fill: var(--viz-ink)">InnoDB: index → primary key → row</text>
+  <rect x="4" y="182" width="150" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="16" y="206" font-size="16" style="fill: var(--viz-muted)">index on email</text>
+  <text x="16" y="231" font-size="16" style="fill: var(--viz-ink)">ana@… → id 9041</text>
+  <path d="M154 213 L192 213" stroke-width="2" marker-end="url(#di-hc-a)" style="stroke: var(--viz-flow)" />
+  <path d="M196 244 L246 182 L296 244 Z" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="246" y="236" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">id tree</text>
+  <path d="M296 213 L316 213" stroke-width="2" marker-end="url(#di-hc-a)" style="stroke: var(--viz-flow)" />
+  <rect x="320" y="182" width="76" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="358" y="206" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">leaf</text>
+  <text x="358" y="231" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">whole row</text>
+  <text x="4" y="270" font-size="16" style="fill: var(--viz-warn)">two tree walks; every secondary index</text>
+  <text x="4" y="290" font-size="16" style="fill: var(--viz-warn)">carries a copy of the primary key</text>
+</svg>

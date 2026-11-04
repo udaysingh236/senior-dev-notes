@@ -24,6 +24,8 @@ export interface ParamSpec {
   step: number;
   value: number;
   unit?: string;
+  /** Text shown for a value instead of "value unit", e.g. (v) => (v === 0 ? 'off' : `${v} s`). */
+  format?: (value: number) => string;
 }
 
 export interface SimModel {

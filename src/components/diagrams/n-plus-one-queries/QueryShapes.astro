@@ -1,0 +1,66 @@
+---
+// What comes back for one order (5 items, 3 payments) under each fix, and the totals for a page of
+// 50 orders. Totals from examples/n-plus-one-queries/postgres/expected-output.txt, sections 1 and 4.
+type Cell = 0 | 1 | 2; // 0 empty, 1 sent once, 2 a repeat of data already sent
+const COLS = ['order', 'customer', 'item', 'payment'];
+const W = 70;
+const PITCH = 7.5;
+
+const inBatch: Cell[][] = [[1, 0, 0, 0], [0, 1, 0, 0], ...Array.from({ length: 5 }, (): Cell[] => [0, 0, 1, 0])];
+const join: Cell[][] = Array.from({ length: 5 }, (_, i): Cell[] => [i ? 2 : 1, i ? 2 : 1, 1, 0]);
+const twoJoin: Cell[][] = Array.from({ length: 15 }, (_, r): Cell[] => {
+  const item = Math.floor(r / 3);
+  const payment = r % 3;
+  return [r ? 2 : 1, 0, payment ? 2 : 1, item ? 2 : 1];
+});
+const jsonAgg: Cell[][] = [[1, 1, 1, 0]];
+
+const panels = [
+  { title: 'Batched with IN: 3 queries', rows: inBatch, total: ['350 rows', '19 KB'] },
+  { title: 'One JOIN with items', rows: join, total: ['250 rows', '42 KB'] },
+  { title: 'One JOIN with items and payments', rows: twoJoin, total: ['750 rows', '106 KB'] },
+  { title: 'One query, items as JSON', rows: jsonAgg, total: ['50 rows', '14 KB'] },
+];
+let y = 52;
+const laid = panels.map((p) => {
+  const top = y + 24;
+  y = top + p.rows.length * PITCH + 22;
+  return { ...p, top };
+});
+---
+
+<svg viewBox="0 0 400 462" width="100%" role="img" aria-labelledby="n1-shape-t n1-shape-d">
+  <title id="n1-shape-t">What each fix sends back</title>
+  <desc id="n1-shape-d">
+    The rows returned for one order with 5 items and 3 payments, and totals for a page of 50
+    orders. Batched with IN: one order row, one customer row and five item rows, nothing
+    repeated; 350 rows and 19 KB for the page. One JOIN with items: five rows, each repeating the
+    order and customer columns; 250 rows and 42 KB. One JOIN with both items and payments: 15 rows,
+    every item repeated for each payment and every payment repeated for each item; 750 rows and
+    106 KB, against 450 rows and 23 KB when batched. One query that returns the items as a JSON
+    array: one row per order; 50 rows and 14 KB.
+  </desc>
+
+  <text x="4" y="18" font-size="15" style="fill: var(--viz-muted)">rows for one order; totals for 50 orders</text>
+  {COLS.map((c, i) => (
+    <text x={4 + i * (W + 4) + W / 2} y="44" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{c}</text>
+  ))}
+
+  {laid.map((p) => (
+    <g>
+      <text x="4" y={p.top - 8} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{p.title}</text>
+      {p.rows.map((row, r) => row.map((cell, c) => cell !== 0 && (
+        <rect x={4 + c * (W + 4)} y={p.top + r * PITCH} width={W} height={PITCH - 1.5} rx="1.5" stroke-width="1"
+          stroke-dasharray={cell === 2 ? '3 2' : undefined}
+          style={cell === 1 ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'} />
+      )))}
+      <text x="396" y={p.top + 4} font-size="15" text-anchor="end" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{p.total[0]}</text>
+      <text x="396" y={p.top + 22} font-size="15" text-anchor="end" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{p.total[1]}</text>
+    </g>
+  ))}
+
+  <rect x="4" y="442" width="16" height="10" rx="1.5" stroke-width="1" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="26" y="452" font-size="15" style="fill: var(--viz-muted)">sent once</text>
+  <rect x="112" y="442" width="16" height="10" rx="1.5" stroke-width="1" stroke-dasharray="3 2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="134" y="452" font-size="15" style="fill: var(--viz-muted)">sent again: a repeat</text>
+</svg>

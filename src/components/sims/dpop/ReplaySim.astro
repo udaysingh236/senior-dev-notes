@@ -1,0 +1,20 @@
+---
+// Ten minutes of an attacker trying a stolen token, a captured request and pre-signed proofs.
+// See replay-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="dpop-replay"
+  title="Stolen DPoP material against your API: what still gets in"
+  description="A timeline of ten minutes, with four rows. Every 10 seconds the attacker tries each row once: the same token as if it were a bearer token, the DPoP token alone without the key, one captured request replayed exactly, and a proof signed in advance by injected script. A tall red bar means the attempt got in; a short green tick means it was blocked. A dashed amber line marks when the access token expires, and blue dots on the time axis mark server nonce rotations. At the bottom, one box per API instance shows whether its replay cache holds the captured request's jti."
+  watchFor="At the defaults (60 s window, a jti cache per instance, 4 instances, no nonce, 5-minute token), the DPoP token alone never gets in, while the bearer row gets in until the token expires. The captured request gets in a few times in its first minute, once on each instance that had not seen it: switch the jti store to 'shared' and it never does. The pre-signed proofs are untouched by the window and the jti store, and run exactly as long as the bearer token. Only two things shorten that row: a server nonce (try every 60 s; they stop within two rotations) or a shorter token. Finally set the rotation to 30 s and watch the real client's extra round trips: it pays one whenever it sat idle across a rotation."
+  viewBox="0 0 400 360"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createReplayModel } from './replay-model';
+
+  mountAll('dpop-replay', createReplayModel);
+</script>

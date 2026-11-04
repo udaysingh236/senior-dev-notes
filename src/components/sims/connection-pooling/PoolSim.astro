@@ -1,0 +1,19 @@
+---
+// A connection pool in front of a 4-core database. See pool-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="connection-pool"
+  title="A pool in front of a 4-core database: where the waiting happens"
+  description="At the top, requests waiting for a free connection; a square turns red when it has waited most of the acquire timeout. In the middle, one cell per connection in the pool: blue while it runs a query, amber with a dash while it is held by a request that is doing something else, empty while idle. At the bottom, the database's four cores, how many queries share them and how fast each one runs. Every request needs 10 ms of CPU in two queries; the database loses some efficiency for every query beyond four that runs at once."
+  watchFor="At the defaults (pool of 8, 250 requests a second) nothing waits. Set 'Held outside the database' to 50 ms, as if each request made an HTTP call inside its transaction: the cells turn amber, the queue fills and requests fail, while the database's CPU is mostly idle. A pool of 24 fixes it, and so does moving the call out of the transaction. Then set it back to 0 and raise the rate to 380: the pool of 8 keeps up with almost no failures. Now raise the pool to 64. More queries run at once, each runs slower, the cores do less useful work, and fewer requests complete than with 8."
+  viewBox="0 0 400 344"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createPoolModel } from './pool-model';
+
+  mountAll('connection-pool', createPoolModel);
+</script>

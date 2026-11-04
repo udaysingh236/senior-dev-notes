@@ -1,0 +1,49 @@
+---
+// What acquire() does, and the states a pooled connection moves through.
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="cp-lc-t cp-lc-d">
+  <title id="cp-lc-t">Acquiring a connection, and a pooled connection's life</title>
+  <desc id="cp-lc-d">
+    Top: acquire checks three cases in order. If an idle connection is free, take it. If the pool is
+    below its maximum, open a new one, which costs a few milliseconds. If the pool is at its maximum,
+    wait in line, and fail with an error when the acquire timeout runs out.
+    Bottom: a connection moves from idle to in use when acquired, and back to idle when released,
+    after the pool rolls back any open transaction and resets session state. An idle connection is
+    closed when it has been idle too long, reaches its maximum lifetime, or fails a health check.
+    A connection that breaks while in use is closed instead of being returned.
+  </desc>
+  <defs>
+    <marker id="cp-lc-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="18" font-weight="700" style="fill: var(--viz-ink)">acquire(), in order</text>
+  <rect x="4" y="32" width="392" height="30" rx="5" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="14" y="53" font-size="16" style="fill: var(--viz-ink)">1. an idle one is free → take it</text>
+  <rect x="4" y="70" width="392" height="30" rx="5" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="14" y="91" font-size="16" style="fill: var(--viz-ink)">2. below the max → open one (2–10 ms)</text>
+  <rect x="4" y="108" width="392" height="30" rx="5" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="14" y="129" font-size="16" style="fill: var(--viz-ink)">3. at the max → wait in line ≤ timeout</text>
+  <text x="14" y="158" font-size="16" style="fill: var(--viz-bad)">timeout runs out → error, not a hang</text>
+
+  <path d="M4 174 L396 174" stroke-width="1" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  <text x="4" y="198" font-size="18" font-weight="700" style="fill: var(--viz-ink)">one connection's life</text>
+
+  <rect x="20" y="214" width="110" height="40" rx="8" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-server)" />
+  <text x="75" y="240" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">idle</text>
+  <rect x="270" y="214" width="110" height="40" rx="8" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="325" y="240" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">in use</text>
+  <rect x="145" y="282" width="110" height="40" rx="8" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="200" y="308" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">closed</text>
+
+  <path d="M130 222 L268 222" stroke-width="2" marker-end="url(#cp-lc-a)" style="stroke: var(--viz-muted)" />
+  <text x="200" y="215" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">acquire</text>
+  <path d="M270 248 L132 248" stroke-width="2" marker-end="url(#cp-lc-a)" style="stroke: var(--viz-muted)" />
+  <text x="200" y="267" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">release + reset</text>
+  <path d="M60 254 L60 300 L143 300" fill="none" stroke-width="2" marker-end="url(#cp-lc-a)" style="stroke: var(--viz-bad)" />
+  <text x="4" y="324" font-size="14" style="fill: var(--viz-muted)">too old, idle, broken</text>
+  <path d="M340 254 L340 300 L257 300" fill="none" stroke-width="2" marker-end="url(#cp-lc-a)" style="stroke: var(--viz-bad)" />
+  <text x="396" y="324" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">broke in use</text>
+</svg>

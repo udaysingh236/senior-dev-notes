@@ -1,0 +1,82 @@
+---
+// A B-tree index over a heap table: the seek for one id reads one page per level, then one heap page.
+const internals = [
+  { x: 8, label: '1 … 104k', hot: false },
+  { x: 141, label: '4.17M … 4.27M', hot: true },
+  { x: 274, label: '… 5M', hot: false },
+];
+const leaves = [
+  { x: 8, label: '4,242,0xx', hot: false },
+  { x: 106, label: '4,242,4xx', hot: true },
+  { x: 204, label: '4,242,7xx', hot: false },
+  { x: 302, label: '4,243,0xx', hot: false },
+];
+const heap = Array.from({ length: 16 }, (_, i) => i);
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="di-ov-t di-ov-d">
+  <title id="di-ov-t">Seek versus scan</title>
+  <desc id="di-ov-d">
+    A three-level B-tree index on id sits above the table. Finding id 4,242,424 reads the root page,
+    one internal page whose key range contains it, and one leaf page. The leaf entry holds the
+    row's address, page 73,111 slot 28, so the fourth and last read is that one table page. Leaf
+    pages are linked left to right, so a range of ids is read by walking along the leaves. A
+    sequential scan, with no index, reads all 86,168 table pages.
+  </desc>
+  <defs>
+    <marker id="di-ov-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="di-ov-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="18" font-size="16" style="fill: var(--viz-muted)">index on id: a B-tree of 8 KB pages</text>
+
+  <!-- root -->
+  <rect x="120" y="28" width="160" height="38" rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="200" y="53" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">root: 48 ranges</text>
+  <text x="300" y="53" font-size="17" font-weight="700" style="fill: var(--viz-flow)">1</text>
+
+  <!-- internal level -->
+  {internals.map((n) => (
+    <g>
+      <rect x={n.x} y="100" width="118" height="38" rx="6" stroke-width={n.hot ? 2 : 1.5}
+        style={n.hot ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: none; stroke: var(--viz-stroke)'} />
+      <text x={n.x + 59} y="125" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">{n.label}</text>
+    </g>
+  ))}
+  <text x="264" y="94" font-size="17" font-weight="700" style="fill: var(--viz-flow)">2</text>
+  <path d="M200 66 L200 98" stroke-width="2" marker-end="url(#di-ov-a)" style="stroke: var(--viz-flow)" />
+  <path d="M160 66 L80 98" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <path d="M240 66 L320 98" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+
+  <!-- leaf level -->
+  {leaves.map((n) => (
+    <g>
+      <rect x={n.x} y="172" width="90" height="52" rx="6" stroke-width={n.hot ? 2 : 1.5}
+        style={n.hot ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)' : 'fill: none; stroke: var(--viz-stroke)'} />
+      <text x={n.x + 45} y="194" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{n.label}</text>
+      <text x={n.x + 45} y="214" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">→ address</text>
+    </g>
+  ))}
+  {[98, 196, 294].map((x) => (
+    <path d={`M${x} 198 L${x + 7} 198`} stroke-width="1.5" marker-end="url(#di-ov-m)" style="stroke: var(--viz-muted)" />
+  ))}
+  <path d="M200 138 L160 170" stroke-width="2" marker-end="url(#di-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="190" y="160" font-size="17" font-weight="700" style="fill: var(--viz-flow)">3</text>
+
+  <!-- heap -->
+  <text x="4" y="262" font-size="16" style="fill: var(--viz-muted)">table: 86,168 pages</text>
+  {heap.map((i) => (
+    <rect x={4 + i * 24.5} y="272" width="21" height="28" rx="3" stroke-width={i === 11 ? 2 : 1.2}
+      style={i === 11 ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: none; stroke: var(--viz-stroke)'} />
+  ))}
+  <path d="M170 224 L274 270" stroke-width="2" marker-end="url(#di-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="236" y="244" font-size="16" style="fill: var(--viz-ink)">(73111, 28)</text>
+  <text x="300" y="262" font-size="17" font-weight="700" style="fill: var(--viz-flow)">4</text>
+
+  <text x="4" y="326" font-size="17" font-weight="700" style="fill: var(--viz-ok)">seek for id 4,242,424: 4 page reads</text>
+  <text x="4" y="346" font-size="17" style="fill: var(--viz-bad)">scan without an index: 86,168 page reads</text>
+</svg>

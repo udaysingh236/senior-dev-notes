@@ -1,0 +1,42 @@
+---
+// The two hashes that tie a request to the key: cnf.jkt (token → key) and ath (proof → token).
+---
+
+<svg viewBox="0 0 400 344" width="100%" role="img" aria-labelledby="dp-bi-t dp-bi-d">
+  <title id="dp-bi-t">How the token and the proof are bound to each other and to the key</title>
+  <desc id="dp-bi-d">
+    Left, the access token, which carries cnf.jkt, the thumbprint of the client's public key that the
+    authorization server recorded. Right, the DPoP proof, which carries the public key as jwk and ath,
+    the hash of the access token. The API runs two checks. One: the SHA-256 thumbprint of the proof's
+    jwk must equal the token's cnf.jkt, so the proof was signed by the key the token was issued to.
+    Two: the SHA-256 of the token must equal the proof's ath, so the proof was made for this token.
+  </desc>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-store)">access token</text>
+  <rect x="4" y="30" width="182" height="112" rx="6" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="14" y="56" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">sub: user-42</text>
+  <text x="14" y="80" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">exp: +5 min</text>
+  <text x="14" y="108" font-size="15" font-weight="600" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">cnf.jkt:</text>
+  <text x="14" y="130" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">0ZcOCOR…</text>
+
+  <text x="214" y="20" font-size="17" font-weight="700" style="fill: var(--viz-flow)">DPoP proof</text>
+  <rect x="214" y="30" width="182" height="112" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="224" y="56" font-size="15" font-weight="600" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">jwk: {"{"} x, y {"}"}</text>
+  <text x="224" y="80" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">htm, htu, iat</text>
+  <text x="224" y="108" font-size="15" font-weight="600" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">ath:</text>
+  <text x="224" y="130" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">fUHyO2r…</text>
+
+  <text x="4" y="176" font-size="16" font-weight="700" style="fill: var(--viz-ink)">The API recomputes both</text>
+
+  <rect x="4" y="188" width="392" height="66" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="214" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan>1. thumbprint(</tspan><tspan style="fill: var(--viz-flow)">jwk</tspan><tspan>) = </tspan><tspan style="fill: var(--viz-store)">cnf.jkt</tspan>
+  </text>
+  <text x="16" y="240" font-size="15" style="fill: var(--viz-muted)">signed by the key the token was issued to</text>
+
+  <rect x="4" y="266" width="392" height="66" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="292" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan>2. SHA-256(</tspan><tspan style="fill: var(--viz-store)">token</tspan><tspan>) = </tspan><tspan style="fill: var(--viz-flow)">ath</tspan>
+  </text>
+  <text x="16" y="318" font-size="15" style="fill: var(--viz-muted)">made for this token, not another one</text>
+</svg>

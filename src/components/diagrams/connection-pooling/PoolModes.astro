@@ -1,0 +1,59 @@
+---
+// Session vs transaction pooling: who holds a server connection, and for how long.
+---
+
+<svg viewBox="0 0 400 310" width="100%" role="img" aria-labelledby="cp-pm-t cp-pm-d">
+  <title id="cp-pm-t">Session pooling versus transaction pooling</title>
+  <desc id="cp-pm-d">
+    Two clients, A and B, each run two short transactions and sit idle in between. In session mode,
+    each client owns a server connection from connect to disconnect, so two clients need two server
+    connections, both idle most of the time. In transaction mode, a server connection is lent to a
+    client only for one transaction, so the same work fits on one server connection: A, B, A, B.
+    The price is that anything a client leaves on the connection outside a transaction, such as a SET,
+    a session lock or a prepared statement, is still there for the next client.
+  </desc>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">client sessions</text>
+  {[
+    { y: 30, name: 'A', tx: [[60, 120], [220, 280]] },
+    { y: 60, name: 'B', tx: [[130, 190], [300, 360]] },
+  ].map((row) => (
+    <g>
+      <text x="4" y={row.y + 19} font-size="16" font-weight="700" style="fill: var(--viz-client)">{row.name}</text>
+      <rect x="40" y={row.y} width="350" height="24" rx="3" stroke-width="1" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+      {row.tx.map(([a, b]) => (
+        <rect x={a} y={row.y} width={b - a} height="24" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      ))}
+    </g>
+  ))}
+  <text x="40" y="104" font-size="14" style="fill: var(--viz-muted)">blue: inside a transaction · white: idle</text>
+
+  <text x="4" y="138" font-size="17" font-weight="700" style="fill: var(--viz-ink)">session mode: 2 server connections</text>
+  {[
+    { y: 148, name: 'A', tx: [[60, 120], [220, 280]] },
+    { y: 178, name: 'B', tx: [[130, 190], [300, 360]] },
+  ].map((row) => (
+    <g>
+      <text x="4" y={row.y + 19} font-size="15" style="fill: var(--viz-muted)">s{row.name === 'A' ? 1 : 2}</text>
+      <rect x="40" y={row.y} width="350" height="24" rx="3" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+      {row.tx.map(([a, b]) => (
+        <g>
+          <rect x={a} y={row.y} width={b - a} height="24" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+          <text x={(a + b) / 2} y={row.y + 18} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{row.name}</text>
+        </g>
+      ))}
+    </g>
+  ))}
+  <text x="40" y="222" font-size="14" style="fill: var(--viz-warn)">amber: held by its client, doing nothing</text>
+
+  <text x="4" y="256" font-size="17" font-weight="700" style="fill: var(--viz-ink)">transaction mode: 1 server connection</text>
+  <text x="4" y="285" font-size="15" style="fill: var(--viz-muted)">s1</text>
+  <rect x="40" y="266" width="350" height="24" rx="3" stroke-width="1" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  {[[60, 120, 'A'], [130, 190, 'B'], [220, 280, 'A'], [300, 360, 'B']].map(([a, b, who]) => (
+    <g>
+      <rect x={a} y="266" width={Number(b) - Number(a)} height="24" rx="3" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+      <text x={(Number(a) + Number(b)) / 2} y="284" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{who}</text>
+    </g>
+  ))}
+  <text x="40" y="306" font-size="14" style="fill: var(--viz-bad)">whatever A leaves on s1, B finds there</text>
+</svg>

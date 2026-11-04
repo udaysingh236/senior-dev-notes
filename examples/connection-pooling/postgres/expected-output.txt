@@ -1,0 +1,63 @@
+PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+cores: 4
+
+== 1. What one connection costs: "select 1", one client, 8 s, mean latency of 3 runs
+reused connection (Unix socket)                     0.040 ms
+reused connection (TCP, TLS, SCRAM)                 0.054 ms
+new connection per query: Unix socket, trust        2.260 ms
+new connection per query: TCP, trust                2.354 ms
+new connection per query: TCP, SCRAM                6.678 ms
+new connection per query: TCP, TLS, SCRAM           9.523 ms
+
+== 2. Memory of 500 idle connections (each ran one catalogue query first)
+backends: 500, private memory (PSS) 646 MB in total, 1.29 MB each; RSS 18.4 MB each (RSS counts shared memory once per process)
+
+== 3. More connections than cores (pgbench client runs on the same machine)
+== 3a. CPU-bound query, about 2 ms of CPU each
+ conns      tps   p50 ms   p99 ms
+     1      516      1.8      3.3
+     2     1024      1.8      3.6
+     4     1753      1.9      6.8
+     8     1966      3.7      9.7
+    16     1976      8.0     20.5
+    32     2026     17.0     41.1
+    64     2007     34.9     83.2
+   128     1949     69.8    170.4
+   256     1732    129.4    359.9
+   512     1826    185.6    624.4
+== 3b. pgbench tpcb-like, scale 10: 7 statements, 3 updates, 10 branch rows
+ conns      tps   p50 ms   p99 ms
+     1     1486      0.6      1.5
+     2     2696      0.7      1.5
+     4     3727      1.0      2.6
+     8     6598      1.0      3.6
+    16     5326      2.5      9.2
+    32     5496      4.3     25.0
+    64     4802      8.2     74.3
+   128     4118     15.4    201.4
+   256     3473     33.0    535.4
+   512     2370     92.5   1666.8
+
+== 4. The same workloads through PgBouncer 1.22.0, transaction mode, 8 server connections
+== 4a. CPU-bound query through PgBouncer
+ conns      tps   p50 ms   p99 ms
+     8     1924      3.7     11.0
+    64     1918     32.5     47.5
+   512     1826    279.7    331.0
+== 4b. tpcb-like through PgBouncer
+ conns      tps   p50 ms   p99 ms
+     8     3813      1.9      5.0
+    64     4016     15.4     24.8
+   512     3347    151.6    199.3
+
+== 5. Transaction mode and session state (pool of 1 server connection, so every client shares it)
+SET
+client A: backend 5765, statement_timeout 50ms
+client B: backend 5765, statement_timeout 50ms
+client B: ERROR:  canceling statement due to statement timeout
+after client C disconnected, advisory lock 42 is still held by backend 5765
+
+== 6. Protocol-level prepared statements in transaction mode (pgbench -M prepared, 16 clients, 5 s)
+max_prepared_statements = 0: prepared statement "P_0" already exists
+max_prepared_statements = 100: tps = 44321
+exit=0

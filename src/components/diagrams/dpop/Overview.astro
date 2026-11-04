@@ -1,0 +1,56 @@
+---
+// Bearer: the token alone gets anyone in. DPoP: the token needs a fresh proof from the client's key.
+---
+
+<svg viewBox="0 0 400 356" width="100%" role="img" aria-labelledby="dp-ov-t dp-ov-d">
+  <title id="dp-ov-t">Bearer tokens compared with DPoP-bound tokens</title>
+  <desc id="dp-ov-d">
+    Top half, bearer token: the client sends the token and the API accepts it; a thief who copied the
+    token sends it from another machine and the API accepts it too. Bottom half, DPoP: the client holds
+    a private key that never leaves it, and sends the token, which carries the key's thumbprint as
+    cnf.jkt, together with a proof signed by that key; the API accepts. The thief sends the same token
+    without the key and the API rejects it.
+  </desc>
+  <defs>
+    <marker id="dp-ov-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="18" font-weight="700" style="fill: var(--viz-ink)">Bearer token</text>
+  <rect x="4" y="34" width="104" height="40" rx="10" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="56" y="60" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">client</text>
+  <rect x="4" y="98" width="104" height="40" rx="10" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="56" y="124" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">thief</text>
+  <rect x="292" y="34" width="104" height="104" rx="4" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="344" y="92" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">API</text>
+
+  <path d="M108 54 L288 54" stroke-width="2" marker-end="url(#dp-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="198" y="46" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">token</text>
+  <text x="270" y="74" font-size="15" text-anchor="end" style="fill: var(--viz-ok)">✓ accepted</text>
+  <path d="M108 118 L288 118" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#dp-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="198" y="110" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">copied token</text>
+  <text x="270" y="138" font-size="15" text-anchor="end" style="fill: var(--viz-ok)">✓ accepted too</text>
+
+  <line x1="4" y1="164" x2="396" y2="164" stroke-width="1" stroke-dasharray="3 5" style="stroke: var(--viz-stroke)" />
+
+  <text x="4" y="192" font-size="18" font-weight="700" style="fill: var(--viz-ink)">DPoP-bound token</text>
+  <rect x="4" y="206" width="104" height="52" rx="10" stroke-width="1.5" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="56" y="228" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">client</text>
+  <text x="56" y="249" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">has the key</text>
+  <rect x="4" y="282" width="104" height="40" rx="10" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="56" y="308" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">thief</text>
+  <rect x="292" y="206" width="104" height="116" rx="4" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="344" y="252" font-size="17" text-anchor="middle" style="fill: var(--viz-ink)">API</text>
+  <text x="344" y="274" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">key = cnf.jkt?</text>
+
+  <path d="M108 232 L288 232" stroke-width="2" marker-end="url(#dp-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="198" y="214" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">token (cnf.jkt)</text>
+  <text x="198" y="250" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">+ proof signed by key</text>
+  <text x="270" y="270" font-size="15" text-anchor="end" style="fill: var(--viz-ok)">✓ accepted</text>
+  <path d="M108 302 L288 302" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#dp-ov-a)" style="stroke: var(--viz-flow)" />
+  <text x="198" y="294" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">copied token, no key</text>
+  <text x="270" y="322" font-size="15" text-anchor="end" style="fill: var(--viz-bad)">✗ rejected</text>
+
+  <text x="4" y="348" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">the private key never leaves the client</text>
+</svg>

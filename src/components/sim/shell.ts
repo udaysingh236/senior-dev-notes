@@ -237,7 +237,7 @@ export function mountSim(root: HTMLElement, factory: SimFactory, defaults: SimOp
     label.textContent = p.label;
     const out = document.createElement('output');
     out.htmlFor.add(id);
-    const fmt = (v: number) => `${v}${p.unit ? ` ${p.unit}` : ''}`;
+    const fmt = (v: number) => (p.format ? p.format(v) : `${v}${p.unit ? ` ${p.unit}` : ''}`);
     out.textContent = fmt(p.value);
     const input = document.createElement('input');
     Object.assign(input, { type: 'range', id, min: p.min, max: p.max, step: p.step, value: p.value });

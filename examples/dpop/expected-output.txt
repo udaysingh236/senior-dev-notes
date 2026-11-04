@@ -1,0 +1,29 @@
+0. RFC example values, recomputed
+   jkt of the RFC 9449 example key   0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I
+   jkt of the RFC 7638 example key   NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs
+   ath of the RFC 9449 example token fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo
+
+1. A token copied from a log file, used from another machine
+   bearer token, no proof                         200 OK
+   DPoP token, no proof                           rejected: no DPoP proof
+   DPoP token, proof signed with thief's key      rejected: proof key does not match the token's cnf.jkt
+   DPoP token sent as Bearer                      rejected: DPoP-bound token sent as Bearer
+   same, to a server that predates DPoP           200 OK
+
+2. One real request captured with its proof, then replayed
+   the real request                               200 OK
+   replayed 2 s later                             rejected: jti already used
+   replayed as DELETE /orders/7                   rejected: htm is GET, request is DELETE
+   replayed to 4 nodes, each with its own cache   3 of 4 accepted
+   replayed 61 s later                            rejected: iat outside the window
+
+3. Script injected into the page signs 20 proofs for the next 10 minutes, then leaves
+   no server nonce                                10 of 20 accepted, the last at t+270 s
+   nonce, rotated every 60 s                      4 of 20 accepted, the last at t+90 s
+
+4. TLS ends at the load balancer; the app rebuilds the URL from what it sees
+   URL from the socket                            rejected: htu is https://api.example.com/orders, request is http://10.0.3.7:8080/orders
+   URL from the configured public origin          200 OK
+
+5. What it costs
+   make a proof 85 µs, check one 198 µs, 530 bytes in the DPoP header

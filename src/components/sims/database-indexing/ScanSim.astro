@@ -1,0 +1,19 @@
+---
+// Full scan vs index scan vs bitmap scan on the same table. See scan-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="scan-seek"
+  title="Full scan, index scan or bitmap scan: the same query, three plans"
+  description="Three copies of the same table of 120 pages, 50 rows to a page, one per plan. The full scan reads every page in order. The index scan fetches the page of each matching row in index order, so it can jump around and read a page more than once. The bitmap scan reads each page that has a match once, in page order. A page lights green when it is read and holds a matching row, grey when it is read and holds none, and amber with a cross when it is read again. A bar under each grid shows progress; all three spend the same cost per second, where the next page in order costs 1 and any other page costs the random read cost. The cheapest plan's cost is shown in bold green."
+  watchFor="At the defaults (2% of rows, stored in no particular order), two pages in three already hold a match. The index scan pays a random read for every row, four times the cost of the full scan, and reads some pages twice. The bitmap scan reads each page once but still jumps between them, and loses too. Lower 'Rows matched' to 0.5% and the bitmap scan wins. Set 'Rows stored in index order' to 100%: the matches now sit on a few neighbouring pages and the index scan wins even at 30%; at 50% half the rows are scattered again and it loses badly. 'Random read cost' 1.1, a common SSD setting, lets the bitmap scan win at 2%, but the plain index scan still loses."
+  viewBox="0 0 400 290"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createScanModel } from './scan-model';
+
+  mountAll('scan-seek', createScanModel);
+</script>

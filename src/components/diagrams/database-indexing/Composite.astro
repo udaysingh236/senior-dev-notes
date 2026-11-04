@@ -1,0 +1,54 @@
+---
+// The same query against two column orders, and a query with no condition on the leading column.
+const countries = ['BR', 'DE', 'FR', 'GB', 'ID', 'IN', 'JP', 'MX', 'NG', 'US'];
+const months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+const W = 392 / countries.length;
+const M = 392 / months.length;
+---
+
+<svg viewBox="0 0 400 350" width="100%" role="img" aria-labelledby="di-co-t di-co-d">
+  <title id="di-co-t">Column order in a composite index</title>
+  <desc id="di-co-d">
+    Three strips, each a whole index drawn as its sorted entries from left to right. First, an index
+    on country then created_at, read for country IN and June: entries are grouped by country and
+    sorted by time inside each group, so the answer is one short run inside the IN group, 96 pages.
+    Second, the same index read for June alone: June is a small slice inside every one of the ten
+    country groups, so without skip scan PostgreSQL 16 reads the whole index, 19,161 pages. Third, an
+    index on created_at then country, read for IN and June: the June entries are one run, but
+    countries are mixed inside it, so it reads all 432,000 June entries to keep 24,023, 1,659 pages.
+  </desc>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">(country, created_at) · IN and June</text>
+  {countries.map((c, i) => (
+    <g>
+      <rect x={4 + i * W} y="30" width={W - 2} height="34" rx="3" stroke-width="1.2" style="fill: none; stroke: var(--viz-stroke)" />
+      <text x={4 + i * W + W / 2 - 1} y="59" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{c}</text>
+    </g>
+  ))}
+  <rect x={4 + 5 * W + 13} y="31" width="6" height="12" style="fill: var(--viz-ok)" />
+  <text x="4" y="88" font-size="16" style="fill: var(--viz-ok)">one short run: 96 pages</text>
+
+  <text x="4" y="128" font-size="17" font-weight="700" style="fill: var(--viz-ink)">(country, created_at) · June only</text>
+  {countries.map((c, i) => (
+    <g>
+      <rect x={4 + i * W} y="138" width={W - 2} height="34" rx="3" stroke-width="1.2" style="fill: var(--viz-bad-soft); stroke: var(--viz-stroke)" />
+      <rect x={4 + i * W + 13} y="138" width="6" height="34" style="fill: var(--viz-ok)" />
+    </g>
+  ))}
+  <text x="4" y="196" font-size="16" style="fill: var(--viz-bad)">June is in every group: whole index, 19,161 pages</text>
+  <text x="4" y="216" font-size="15" style="fill: var(--viz-muted)">PostgreSQL 18 skip scan: one probe per country</text>
+
+  <text x="4" y="256" font-size="17" font-weight="700" style="fill: var(--viz-ink)">(created_at, country) · IN and June</text>
+  {months.map((m, i) => (
+    <g>
+      <rect x={4 + i * M} y="266" width={M - 2} height="34" rx="3" stroke-width="1.2"
+        style={i === 5 ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)' : 'fill: none; stroke: var(--viz-stroke)'} />
+      <text x={4 + i * M + M / 2 - 1} y="289" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{m}</text>
+    </g>
+  ))}
+  {[0, 1, 2, 3, 4].map((k) => (
+    <rect x={4 + 5 * M + 3 + k * 6} y="294" width="3" height="5" style="fill: var(--viz-ok)" />
+  ))}
+  <text x="4" y="324" font-size="16" style="fill: var(--viz-warn)">all of June, keep IN: 1,659 pages</text>
+  <text x="4" y="344" font-size="15" style="fill: var(--viz-muted)">green: entries the query wants · red or amber: read anyway</text>
+</svg>

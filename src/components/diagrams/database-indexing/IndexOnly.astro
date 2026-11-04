@@ -1,0 +1,48 @@
+---
+// An index-only scan answers from the index, and checks the visibility map before trusting it.
+const pages = [
+  { n: 40, visible: true },
+  { n: 41, visible: true },
+  { n: 42, visible: false },
+  { n: 43, visible: true },
+  { n: 44, visible: true },
+];
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="di-io-t di-io-d">
+  <title id="di-io-t">Index-only scan and the visibility map</title>
+  <desc id="di-io-d">
+    A covering index on customer_id that includes amount_cents holds both columns the query needs,
+    plus each row's page. Before using an entry, the scan checks that page's bit in the visibility
+    map. Pages 40, 41, 43 and 44 are marked all-visible, so their entries are answered from the
+    index alone. Page 42 had a row changed since the last vacuum, its bit is clear, and the scan
+    must read the table page to check which row version this transaction may see.
+  </desc>
+  <defs>
+    <marker id="di-io-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="17" font-weight="700" style="fill: var(--viz-ink)">index (customer_id) include (amount_cents)</text>
+  <rect x="4" y="32" width="392" height="40" rx="6" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="16" y="58" font-size="16" style="fill: var(--viz-ink)">key: customer_id · payload: amount_cents · page</text>
+
+  <text x="4" y="104" font-size="17" font-weight="700" style="fill: var(--viz-ink)">visibility map: 1 bit per table page</text>
+  {pages.map((p, i) => (
+    <g>
+      <rect x={4 + i * 79} y="116" width="73" height="40" rx="5" stroke-width="1.5"
+        style={p.visible ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'} />
+      <text x={40 + i * 79} y="142" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">{p.n}: {p.visible ? '1' : '0'}</text>
+    </g>
+  ))}
+  <text x="4" y="182" font-size="16" style="fill: var(--viz-ok)">bit 1: answer from</text>
+  <text x="4" y="202" font-size="16" style="fill: var(--viz-ok)">the index alone</text>
+
+  <path d="M198 156 L198 232" stroke-width="2" marker-end="url(#di-io-a)" style="stroke: var(--viz-warn)" />
+  <rect x="140" y="236" width="116" height="40" rx="5" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="198" y="262" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">table page 42</text>
+  <text x="264" y="252" font-size="15" style="fill: var(--viz-warn)">bit 0: read it</text>
+  <text x="264" y="270" font-size="15" style="fill: var(--viz-warn)">(Heap Fetches)</text>
+  <text x="4" y="296" font-size="15" style="fill: var(--viz-muted)">vacuum sets bits; any change to a page clears its bit</text>
+</svg>

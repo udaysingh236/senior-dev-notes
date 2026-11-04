@@ -1,0 +1,19 @@
+---
+// N+1 versus batched loading behind a connection pool, as the network round trip grows. See pool-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="n-plus-one-pool"
+  title="The same endpoint twice: N+1 queries or batched, behind a pool"
+  description="Two copies of an endpoint that lists a page of orders with each order's customer and items, fed the same random stream of requests. The top copy runs one query for the page and two per order; the bottom copy runs three queries in all. Each has its own pool of connections and its own database with 4 cores. A pool cell is outlined blue while a request holds that connection and fills as the request works through its queries. Amber marks below are requests waiting for a connection; they turn red when close to the 1 second acquire timeout, after which they fail. The headline of each copy shows how long one request holds a connection and the most requests per second the pool can then serve."
+  watchFor="At 0.1 ms round trip, the database next to the app, both copies keep up with 200 requests a second, but the stats show the N+1 copy using several times the database CPU. Move the round trip to 1 ms, a database in another availability zone: the N+1 copy now holds each connection for over 100 ms, its pool can serve fewer than 100 requests a second, the queue fills and requests start failing, and its database CPU falls, because the requests are waiting on the network, not on the database. The batched copy does not notice. Then raise the page size: N+1 gets worse with every order on the page, batched barely moves."
+  viewBox="0 0 400 350"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createPoolModel } from './pool-model';
+
+  mountAll('n-plus-one-pool', createPoolModel);
+</script>

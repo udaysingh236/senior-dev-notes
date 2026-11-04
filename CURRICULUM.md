@@ -67,12 +67,12 @@ message-queues → replication → logging → slis-slos-error-budgets
 |---|---|---|---|---|
 | 1 | SQL vs NoSQL | sql-vs-nosql | new | planned |
 | 2 | ACID and isolation levels | acid-and-isolation-levels | new | planned |
-| 3 | Database indexing (scan vs seek) | database-indexing | 20 | planned |
+| 3 | Database indexing (scan vs seek) | database-indexing | 20 | published (2026-10-26) |
 | 4 | Storage engines: B-trees vs LSM trees | b-trees-vs-lsm-trees | new | planned |
 | 5 | Write-ahead log | write-ahead-log | new | planned |
 | 6 | Query optimization | query-optimization | 21 | planned |
-| 7 | N+1 queries | n-plus-one-queries | 5 | planned |
-| 8 | Connection pooling | connection-pooling | 4 | planned |
+| 7 | N+1 queries | n-plus-one-queries | 5 | published (2026-10-29) |
+| 8 | Connection pooling | connection-pooling | 4 | published (2026-10-26) |
 | 9 | Replication | replication | 30 | planned |
 | 10 | Read replicas | read-replicas | 22 | planned |
 | 11 | Partitioning and sharding | partitioning-and-sharding | 28, 29 | planned |
@@ -152,15 +152,16 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 3 | Sessions vs tokens | sessions-vs-tokens | new | planned |
 | 4 | OAuth 2.0 and OpenID Connect | oauth-and-oidc | 46 | planned |
 | 5 | JWTs and key rotation | jwt-and-key-rotation | 47 | planned |
-| 6 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
-| 7 | Secrets management | secrets-management | 19 | planned |
-| 8 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
-| 9 | SQL injection | sql-injection | 42 | planned |
-| 10 | Cross-site scripting (XSS) | xss | 43 | planned |
-| 11 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
-| 12 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
-| 13 | Web application firewalls | waf | 52 | planned |
-| 14 | DDoS protection | ddos-protection | 53 | planned |
+| 6 | DPoP: sender-constrained tokens | dpop | new | published (2026-10-28) |
+| 7 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
+| 8 | Secrets management | secrets-management | 19 | planned |
+| 9 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
+| 10 | SQL injection | sql-injection | 42 | planned |
+| 11 | Cross-site scripting (XSS) | xss | 43 | planned |
+| 12 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
+| 13 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
+| 14 | Web application firewalls | waf | 52 | planned |
+| 15 | DDoS protection | ddos-protection | 53 | planned |
 
 ## 10. Performance & runtime — `performance`
 
