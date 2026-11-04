@@ -1,6 +1,6 @@
 # Rate limiting: runnable examples
 
-The code behind every snippet on the [Rate Limiting](https://seniordevnotes.netlify.app/resilience/rate-limiting/)
+The code behind every snippet on the [Rate Limiting](https://seniordevnotes.in/resilience/rate-limiting/)
 page. Python 3.11+ and Node 20+. Every file prints its results, so you can check them against
 the page.
 

@@ -1,7 +1,7 @@
 # Latency vs throughput: runnable examples
 
 The code behind the snippets on the
-[Latency vs Throughput](https://seniordevnotes.netlify.app/foundations/latency-vs-throughput/) page.
+[Latency vs Throughput](https://seniordevnotes.in/foundations/latency-vs-throughput/) page.
 Python 3.11+ and Node 22+, standard library only, nothing to install.
 
 | File | What it shows |

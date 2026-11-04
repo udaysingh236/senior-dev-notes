@@ -1,7 +1,7 @@
 # Caching strategies: runnable examples
 
 The code behind the snippets and numbers on the
-[Caching Strategies](https://seniordevnotes.netlify.app/caching/caching-strategies/) page.
+[Caching Strategies](https://seniordevnotes.in/caching/caching-strategies/) page.
 Python 3.11+ and Node 22+, standard library only, nothing to install. The Redis demo needs
 `redis-server` and `redis-cli` (tested with Redis 7.0).
 

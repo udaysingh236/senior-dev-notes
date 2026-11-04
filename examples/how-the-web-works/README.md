@@ -1,6 +1,6 @@
 # What happens when you type a URL: runnable examples
 
-The code behind every snippet on the [What Happens When You Type a URL](https://seniordevnotes.netlify.app/foundations/how-the-web-works/)
+The code behind every snippet on the [What Happens When You Type a URL](https://seniordevnotes.in/foundations/how-the-web-works/)
 page. Python 3.11+ and Node 20+, standard library only, nothing to install.
 
 | File (Python / JavaScript) | What it shows | Network? |

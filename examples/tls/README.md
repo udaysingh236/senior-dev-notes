@@ -1,6 +1,6 @@
 # TLS and encryption in transit: runnable examples
 
-The code behind every snippet on the [TLS and Encryption in Transit](https://seniordevnotes.netlify.app/networking/tls/)
+The code behind every snippet on the [TLS and Encryption in Transit](https://seniordevnotes.in/networking/tls/)
 page. Python 3.11+ and Node 20+, standard library only, nothing to install, no internet needed.
 `make-certs.sh` needs the `openssl` command line tool (it ships with Git for Windows, macOS and every
 Linux distribution).

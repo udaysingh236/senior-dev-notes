@@ -1,7 +1,7 @@
 # Database indexing: runnable examples
 
 The code behind the snippets and numbers on the
-[Database Indexing](https://seniordevnotes.netlify.app/databases/database-indexing/) page.
+[Database Indexing](https://seniordevnotes.in/databases/database-indexing/) page.
 
 | File | What it shows |
 |---|---|

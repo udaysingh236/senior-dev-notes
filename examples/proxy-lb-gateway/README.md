@@ -1,7 +1,7 @@
 # Reverse proxy vs load balancer vs API gateway: runnable examples
 
 The code behind the snippets on the
-[Reverse Proxy vs Load Balancer vs API Gateway](https://seniordevnotes.netlify.app/traffic/proxy-lb-gateway/)
+[Reverse Proxy vs Load Balancer vs API Gateway](https://seniordevnotes.in/traffic/proxy-lb-gateway/)
 page. Python 3.11+ and Node 20+, standard library only, nothing to install. Everything runs on
 `127.0.0.1` and works offline.
 
