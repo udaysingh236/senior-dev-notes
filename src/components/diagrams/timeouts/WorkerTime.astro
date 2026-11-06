@@ -1,0 +1,55 @@
+---
+// Worker-seconds needed per second of traffic, against the 20 a pool of 20 workers has.
+// 200 requests a second; healthy calls hold a worker about 48 ms on average; hung calls hold it
+// for the whole timeout. The same arithmetic as the simulation below it.
+const CAP = 20;
+const U = 9; // drawing units per worker-second
+const X0 = 8;
+const rows = [
+  { label: 'no calls hang', healthy: 9.6, hung: 0 },
+  { label: '5% hang, timeout 2 s', healthy: 9.1, hung: 20 },
+  { label: '5% hang, timeout 300 ms', healthy: 9.1, hung: 3 },
+];
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="to-wt-t to-wt-d">
+  <title id="to-wt-t">Hung calls spend worker time until the timeout</title>
+  <desc id="to-wt-d">
+    Worker-seconds needed each second, for 200 requests a second, against the 20 that 20 workers
+    provide. With no hung calls, healthy calls of about 48 ms need 9.6. When 5% of calls hang and
+    the timeout is 2 seconds, the healthy calls need 9.1 and the 10 hung calls a second need 20 more,
+    29.1 in all: more than the pool has, so requests queue and are rejected. With a 300 millisecond
+    timeout the hung calls need 3, and the total of 12.1 fits.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">worker-seconds needed per second</text>
+  <text x="4" y="44" font-size="15" style="fill: var(--viz-muted)">200 requests/s, 20 workers</text>
+
+  {rows.map((r, i) => {
+    const y = 86 + i * 70;
+    const total = r.healthy + r.hung;
+    return (
+      <g>
+        <text x="4" y={y} font-size="16" style="fill: var(--viz-ink)">{r.label}</text>
+        <rect x={X0} y={y + 10} width={r.healthy * U} height="24" rx="2" stroke-width="1.2"
+          style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+        {r.hung > 0 && (
+          <rect x={X0 + r.healthy * U} y={y + 10} width={Math.min(r.hung, 33) * U} height="24" rx="2" stroke-width="1.2"
+            stroke-dasharray="4 3" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+        )}
+        <text x="396" y={y} font-size="16" font-weight="700" text-anchor="end"
+          style={`fill: var(${total > CAP ? '--viz-bad' : '--viz-ok'}); font-family: var(--sl-font-mono)`}>{total.toFixed(1)}</text>
+      </g>
+    );
+  })}
+
+  {rows.map((_, i) => (
+    <path d={`M${X0 + CAP * U} ${86 + i * 70 + 4} L${X0 + CAP * U} ${86 + i * 70 + 40}`} stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-bad)" />
+  ))}
+  <text x={X0 + CAP * U - 6} y="290" font-size="15" text-anchor="end" style="fill: var(--viz-bad)">the pool has 20</text>
+
+  <rect x="4" y="306" width="16" height="12" rx="2" stroke-width="1.2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="26" y="317" font-size="15" style="fill: var(--viz-muted)">healthy calls</text>
+  <rect x="140" y="306" width="16" height="12" rx="2" stroke-width="1.2" stroke-dasharray="4 3" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="162" y="317" font-size="15" style="fill: var(--viz-muted)">hung calls, until the timeout</text>
+</svg>

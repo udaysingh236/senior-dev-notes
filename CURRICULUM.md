@@ -130,7 +130,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Timeouts | timeouts | 10 | planned |
+| 1 | Timeouts | timeouts | 10 | published (2026-11-06) |
 | 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | planned |
 | 3 | Circuit breakers | circuit-breakers | 13 | pilot |
 | 4 | Bulkheads | bulkheads | new | planned |

@@ -1,0 +1,23 @@
+PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+
+== 1. The client process dies 1 s into an 8 s query (what a client-side timeout that closes the socket looks like)
+   at 2 s, the query is: active for 2.0 s
+   at 9 s, the query is: gone
+
+== 2. The same, with client_connection_check_interval = 500ms (PostgreSQL 14+)
+   at 2 s, the query is: gone
+
+== 3. The client sends a cancel request after 1 s (psql does this on Ctrl-C)
+   psql: Cancel request sent
+   psql: ERROR:  canceling statement due to user request
+   0.5 s later, the query is: gone
+
+== 4. statement_timeout = 1s: the server stops the query itself
+   ERROR:  canceling statement due to statement timeout
+   returned after 1.0 s
+
+== 5. lock_timeout = 500ms: waiting for a row lock someone else holds
+   ERROR:  canceling statement due to lock timeout
+   CONTEXT:  while updating tuple (0,1) in relation "accounts"
+   returned after 0.5 s
+
