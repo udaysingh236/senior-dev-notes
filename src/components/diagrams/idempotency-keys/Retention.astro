@@ -1,0 +1,70 @@
+---
+// How long real systems remember a key, on a log scale from 10 s to 30 days (as of November 2026).
+// The dashed marker is illustrative: a message replayed from a dead letter queue two days later.
+const X0 = 8;
+const W = 384;
+const x = (seconds: number) => X0 + ((Math.log10(seconds) - 1) / (Math.log10(30 * 86400) - 1)) * W;
+const MIN = 60;
+const HOUR = 3600;
+const DAY = 86400;
+const rows = [
+  { name: 'Amazon SQS FIFO deduplication', to: 5 * MIN, label: '5 min' },
+  { name: 'Powertools for Lambda, default', to: HOUR, label: '1 h' },
+  { name: 'Stripe API v1', to: DAY, label: '≥ 24 h' },
+  { name: 'Adyen', to: 7 * DAY, upTo: 14 * DAY, label: '7–14 days' },
+  { name: 'Stripe API v2', to: 30 * DAY, label: '30 days' },
+];
+const ticks = [
+  { s: 10, label: '' },
+  { s: MIN, label: '1 min' },
+  { s: HOUR, label: '1 h' },
+  { s: DAY, label: '1 day' },
+  { s: 30 * DAY, label: '30 d' },
+];
+const ROW = 50;
+const Y0 = 40;
+const replay = 2 * DAY;
+---
+
+<svg viewBox="0 0 400 372" width="100%" role="img" aria-labelledby="ik-ret-t ik-ret-d">
+  <title id="ik-ret-t">How long five systems remember an idempotency key</title>
+  <desc id="ik-ret-d">
+    Bars on a log scale from 10 seconds to 30 days. Amazon SQS FIFO deduplicates for 5 minutes.
+    Powertools for AWS Lambda keeps records for 1 hour by default. Stripe's API v1 keeps keys at
+    least 24 hours. Adyen keeps them 7 to 14 days. Stripe's API v2 treats a request as a replay
+    within 30 days. A dashed line at 2 days marks an illustrative message replayed from a dead
+    letter queue two days later: only Adyen and Stripe v2 would still recognise its key.
+  </desc>
+
+  {ticks.map((t) => (
+    <g>
+      <line x1={x(t.s)} y1={Y0 - 8} x2={x(t.s)} y2={Y0 + rows.length * ROW} stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+      <text x={Math.min(Math.max(x(t.s), 20), 380)} y={Y0 + rows.length * ROW + 20} font-size="14" text-anchor="middle"
+        style="font-family: var(--sl-font-mono); fill: var(--viz-muted)">{t.label}</text>
+    </g>
+  ))}
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">how long a key is remembered</text>
+
+  {rows.map((r, i) => {
+    const y = Y0 + i * ROW;
+    return (
+      <g>
+        <text x="4" y={y + 8} font-size="15" style="fill: var(--viz-ink)">{r.name}</text>
+        <rect x={X0} y={y + 16} width={x(r.to) - X0} height="16" rx="3" stroke-width="1.5"
+          style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+        {r.upTo && (
+          <rect x={x(r.to)} y={y + 16} width={x(r.upTo) - x(r.to)} height="16" rx="3" stroke-width="1.5" stroke-dasharray="4 3"
+            style="fill: none; stroke: var(--viz-store)" />
+        )}
+        <text x={x(r.to) > 250 ? x(r.to) - 6 : x(r.to) + 6} y={y + 29} font-size="14"
+          text-anchor={x(r.to) > 250 ? 'end' : 'start'}
+          style={`font-family: var(--sl-font-mono); fill: var(--viz-${x(r.to) > 250 ? 'ink' : 'muted'})`}>{r.label}</text>
+      </g>
+    );
+  })}
+
+  <line x1={x(replay)} y1={Y0 - 8} x2={x(replay)} y2={Y0 + rows.length * ROW} stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-bad)" />
+  <text x="4" y={Y0 + rows.length * ROW + 50} font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-bad)">red line: a dead-letter replay two days later</text>
+  <text x="4" y={Y0 + rows.length * ROW + 70} font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">only bars that cross it still recognise the key</text>
+</svg>

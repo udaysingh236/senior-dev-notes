@@ -1,0 +1,58 @@
+---
+// Attempts per request, 1 + p + p² + … + p^N, against the share p of attempts that fail.
+// With a 10% retry budget the curve is capped at 1.1 (the budget's line follows 1 + p until then).
+const X0 = 44;
+const X1 = 380;
+const Y0 = 50;
+const Y1 = 290;
+const YMAX = 4.2;
+const xs = (p: number) => X0 + p * (X1 - X0);
+const ys = (a: number) => Y1 - ((a - 1) / (YMAX - 1)) * (Y1 - Y0);
+const attempts = (p: number, n: number) => Array.from({ length: n + 1 }, (_, k) => p ** k).reduce((s, v) => s + v, 0);
+const path = (f: (p: number) => number) =>
+  Array.from({ length: 51 }, (_, i) => i / 50).map((p, i) => `${i ? 'L' : 'M'}${xs(p).toFixed(1)} ${ys(f(p)).toFixed(1)}`).join('');
+const curves = [
+  { n: 3, label: '3 retries', end: 4 },
+  { n: 2, label: '2 retries', end: 3 },
+  { n: 1, label: '1 retry', end: 2 },
+];
+---
+
+<svg viewBox="0 0 400 350" width="100%" role="img" aria-labelledby="rb-am-t rb-am-d">
+  <title id="rb-am-t">How many attempts each request sends, by failure rate</title>
+  <desc id="rb-am-d">
+    A chart of attempts per request against the share of attempts that fail, from 0 to 100%.
+    With 3 retries the curve rises slowly at first, 1.11 at 10% failures and 1.88 at 50%, then
+    steeply to 4 at 100%. With 2 retries it ends at 3, with 1 retry at 2. With a retry budget of
+    10%, the curve follows 1 plus the failure rate until it reaches 1.1, then stays flat at 1.1
+    however many attempts fail.
+  </desc>
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">attempts per request</text>
+
+  {[1, 2, 3, 4].map((a) => (
+    <g>
+      <path d={`M${X0} ${ys(a)} L${X1} ${ys(a)}`} stroke-width="0.8" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+      <text x={X0 - 8} y={ys(a) + 5} font-size="15" text-anchor="end" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{a}×</text>
+    </g>
+  ))}
+  <path d={`M${X0} ${Y1} L${X1} ${Y1}`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  {[0, 0.5, 1].map((p) => (
+    <text x={xs(p)} y={Y1 + 22} font-size="15" text-anchor={p === 0 ? 'start' : p === 1 ? 'end' : 'middle'}
+      style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{p * 100}%</text>
+  ))}
+  <text x={X1} y={Y1 + 46} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">share of attempts that fail</text>
+
+  {curves.map((c) => (
+    <g>
+      <path d={path((p) => attempts(p, c.n))} fill="none" stroke-width="2.5" style="stroke: var(--viz-bad)"
+        stroke-dasharray={c.n === 3 ? undefined : c.n === 2 ? '7 4' : '2 4'} />
+      <text x={X1 - 4} y={c.n === 3 ? ys(c.end) - 8 : ys(c.end) + 22} font-size="15" text-anchor="end" style="fill: var(--viz-bad)">{c.label}</text>
+    </g>
+  ))}
+
+  <path d={path((p) => Math.min(1 + p, 1.1))} fill="none" stroke-width="3" style="stroke: var(--viz-ok)" />
+  <text x={X1 - 4} y={ys(1.1) - 10} font-size="15" text-anchor="end" style="fill: var(--viz-ok)">10% budget: at most 1.1×</text>
+
+  <circle cx={xs(0.5)} cy={ys(attempts(0.5, 3))} r="4" style="fill: var(--viz-bad)" />
+  <text x={xs(0.5) - 8} y={ys(attempts(0.5, 3)) - 10} font-size="14" text-anchor="end" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">1.88×</text>
+</svg>

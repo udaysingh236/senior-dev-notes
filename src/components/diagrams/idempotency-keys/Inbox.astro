@@ -1,0 +1,64 @@
+---
+// A consumer that receives message m-81 twice. The message id is the idempotency key: inserting it
+// into a processed-messages table in the same transaction as the effect decides whether to apply it.
+const segs = [
+  { label: 'm-80', tone: 'flow' },
+  { label: 'm-81', tone: 'flow' },
+  { label: 'm-81', tone: 'warn' },
+  { label: 'm-82', tone: 'flow' },
+];
+---
+
+<svg viewBox="0 0 400 430" width="100%" role="img" aria-labelledby="ik-inbox-t ik-inbox-d">
+  <title id="ik-inbox-t">A consumer deduplicates redelivered messages with a processed-messages table</title>
+  <desc id="ik-inbox-d">
+    A queue delivers messages m-80, m-81, m-81 again, and m-82. For each message the consumer opens
+    one database transaction and first inserts the message id into a processed-messages table with
+    ON CONFLICT DO NOTHING. If one row was inserted, it applies the effect, such as updating a
+    balance, in the same transaction. If no row was inserted, the message was already handled, and
+    it skips the effect. It commits, and only then acknowledges the message to the queue.
+  </desc>
+  <defs>
+    <marker id="ik-inbox-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">at-least-once in, effect once out</text>
+
+  {/* The queue: a segmented bar. The second m-81 is the redelivery. */}
+  {segs.map((s, i) => (
+    <g>
+      <rect x={8 + i * 74} y="40" width="70" height="34" rx="4" stroke-width="1.5"
+        style={`fill: var(--viz-${s.tone}-soft); stroke: var(--viz-${s.tone})`} />
+      <text x={43 + i * 74} y="62" font-size="15" text-anchor="middle" style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">{s.label}</text>
+    </g>
+  ))}
+  <text x="310" y="62" font-size="14" style="fill: var(--viz-warn)">redelivered</text>
+  <path d="M160 78 L160 104" stroke-width="2" marker-end="url(#ik-inbox-arrow)" style="stroke: var(--viz-ink)" />
+
+  <rect x="8" y="108" width="384" height="40" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="20" y="134" font-size="16" style="fill: var(--viz-ink)">consumer: BEGIN</text>
+  <path d="M160 150 L160 174" stroke-width="2" marker-end="url(#ik-inbox-arrow)" style="stroke: var(--viz-ink)" />
+
+  {/* One transaction around the key and the effect. */}
+  <rect x="8" y="178" width="384" height="182" rx="10" stroke-width="1.5" stroke-dasharray="6 4" style="fill: none; stroke: var(--viz-muted)" />
+  <text x="384" y="196" font-size="14" text-anchor="end" style="font-style: italic; fill: var(--viz-muted)">one transaction</text>
+  <rect x="20" y="204" width="360" height="52" rx="6" stroke-width="1.5" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="30" y="225" font-size="14" style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">INSERT INTO processed (message_id)</text>
+  <text x="30" y="245" font-size="14" style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">VALUES ('m-81') ON CONFLICT DO NOTHING</text>
+
+  <path d="M100 258 L100 280" stroke-width="2" marker-end="url(#ik-inbox-arrow)" style="stroke: var(--viz-ok)" />
+  <path d="M290 258 L290 280" stroke-width="2" marker-end="url(#ik-inbox-arrow)" style="stroke: var(--viz-warn)" />
+  <rect x="20" y="284" width="170" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="30" y="306" font-size="15" font-weight="700" style="fill: var(--viz-ink)">1 row: first time</text>
+  <text x="30" y="328" font-size="14" style="fill: var(--viz-ink)">apply the effect</text>
+  <rect x="210" y="284" width="170" height="62" rx="6" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="220" y="306" font-size="15" font-weight="700" style="fill: var(--viz-ink)">0 rows: seen it</text>
+  <text x="220" y="328" font-size="14" style="fill: var(--viz-ink)">skip the effect</text>
+
+  <path d="M160 362 L160 384" stroke-width="2" marker-end="url(#ik-inbox-arrow)" style="stroke: var(--viz-ink)" />
+  <text x="172" y="380" font-size="15" style="fill: var(--viz-ink)">COMMIT, then ack</text>
+
+  <text x="4" y="418" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">ack first and a crash loses the message</text>
+</svg>

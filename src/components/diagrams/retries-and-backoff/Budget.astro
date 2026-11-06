@@ -1,0 +1,59 @@
+---
+// A ratio retry budget as a token bucket: every new request adds 0.1 token (up to 10), every retry
+// spends 1, and a retry with no token to spend is not sent. Two days for a client sending 100 new
+// requests a second, with up to 3 retries per request.
+const days = [
+  { label: 'a blip: 5% of attempts fail', earn: 10, want: 5, sent: 5, tone: 'ok', note: 'bucket stays full: every retry is sent' },
+  { label: 'an outage: every attempt fails', earn: 10, want: 300, sent: 10, tone: 'bad', note: '10 retries/s sent, 290 fail at once' },
+];
+const U = 1.1; // drawing units per retry per second
+---
+
+<svg viewBox="0 0 400 380" width="100%" role="img" aria-labelledby="rb-bu-t rb-bu-d">
+  <title id="rb-bu-t">A retry budget is a token bucket filled by new requests</title>
+  <desc id="rb-bu-d">
+    A bucket holds up to 10 tokens. Every new request adds a tenth of a token; every retry takes
+    one token, and a retry that finds less than one token is not sent: the request fails at once.
+    A client sends 100 new requests a second, so the bucket gains 10 tokens a second. On a day when
+    5% of attempts fail, it wants about 5 retries a second, fewer than it earns, so the bucket stays
+    full and every retry is sent. During an outage where every attempt fails, 3 retries per request
+    would mean 300 retries a second; the bucket allows 10 a second, so load on the server rises by
+    10%, not 300%.
+  </desc>
+  <defs>
+    <marker id="rb-bu-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">retries are paid for by successes</text>
+
+  {/* The bucket. */}
+  <path d="M150 58 L162 150 L238 150 L250 58" fill="none" stroke-width="2.5" style="stroke: var(--viz-ink)" />
+  {Array.from({ length: 10 }, (_, i) => (
+    <circle cx={172 + (i % 5) * 14} cy={138 - Math.floor(i / 5) * 16} r="5.5" stroke-width="1.2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  ))}
+  <text x="200" y="174" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">holds up to 10 tokens</text>
+
+  <path d="M40 70 L140 92" stroke-width="2" marker-end="url(#rb-bu-arrow)" style="stroke: var(--viz-ink)" />
+  <text x="4" y="58" font-size="15" style="fill: var(--viz-flow)">+0.1 per new request</text>
+  <path d="M256 104 L356 82" stroke-width="2" marker-end="url(#rb-bu-arrow)" style="stroke: var(--viz-ink)" />
+  <text x="396" y="62" font-size="15" text-anchor="end" style="fill: var(--viz-warn)">−1 per retry</text>
+  <text x="396" y="122" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">none left:</text>
+  <text x="396" y="140" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">fail at once</text>
+
+  <text x="4" y="208" font-size="15" style="fill: var(--viz-muted)">100 new requests/s earn 10 tokens/s</text>
+
+  {days.map((d, i) => {
+    const y = 238 + i * 66;
+    return (
+      <g>
+        <text x="4" y={y} font-size="15" style="fill: var(--viz-ink)">{d.label}</text>
+        <rect x="4" y={y + 8} width={Math.min(d.want, 330) * U} height="16" rx="2" stroke-width="1.2" stroke-dasharray="4 3"
+          style="fill: none; stroke: var(--viz-warn)" />
+        <rect x="4" y={y + 8} width={Math.max(d.sent * U, 3)} height="16" rx="2" stroke-width="1.2"
+          style={`fill: var(--viz-${d.tone === 'ok' ? 'ok' : 'warn'}-soft); stroke: var(--viz-${d.tone === 'ok' ? 'ok' : 'warn'})`} />
+        <text x="4" y={y + 44} font-size="14" style={`fill: var(--viz-${d.tone})`}>{d.note}</text>
+      </g>
+    );
+  })}
+</svg>

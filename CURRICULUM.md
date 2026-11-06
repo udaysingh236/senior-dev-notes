@@ -119,7 +119,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 3 | Event-driven architecture | event-driven-architecture | 38 | planned |
 | 4 | Log-based messaging (Kafka) | log-based-messaging | new | planned |
 | 5 | Delivery semantics: at-most, at-least, exactly once | delivery-semantics | new | planned |
-| 6 | Idempotency keys | idempotency-keys | 1 | pilot |
+| 6 | Idempotency keys | idempotency-keys | 1 | published (2026-11-06) |
 | 7 | Transactional outbox | transactional-outbox | new | planned |
 | 8 | CQRS and event sourcing | cqrs-and-event-sourcing | new | planned |
 | 9 | Dead letter queues | dead-letter-queues | 39 | planned |
@@ -130,8 +130,8 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Timeouts | timeouts | 10 | planned |
-| 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | planned |
+| 1 | Timeouts | timeouts | 10 | published (2026-11-06) |
+| 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | published (2026-11-06) |
 | 3 | Circuit breakers | circuit-breakers | 13 | pilot |
 | 4 | Bulkheads | bulkheads | new | planned |
 | 5 | Rate limiting | rate-limiting | 2 | published (2026-10-17) |
@@ -153,15 +153,16 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 4 | OAuth 2.0 and OpenID Connect | oauth-and-oidc | 46 | planned |
 | 5 | JWTs and key rotation | jwt-and-key-rotation | 47 | planned |
 | 6 | DPoP: sender-constrained tokens | dpop | new | published (2026-10-28) |
-| 7 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
-| 8 | Secrets management | secrets-management | 19 | planned |
-| 9 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
-| 10 | SQL injection | sql-injection | 42 | planned |
-| 11 | Cross-site scripting (XSS) | xss | 43 | planned |
-| 12 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
-| 13 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
-| 14 | Web application firewalls | waf | 52 | planned |
-| 15 | DDoS protection | ddos-protection | 53 | planned |
+| 7 | Passkeys and WebAuthn | passkeys | new | planned |
+| 8 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
+| 9 | Secrets management | secrets-management | 19 | planned |
+| 10 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
+| 11 | SQL injection | sql-injection | 42 | planned |
+| 12 | Cross-site scripting (XSS) | xss | 43 | planned |
+| 13 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
+| 14 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
+| 15 | Web application firewalls | waf | 52 | planned |
+| 16 | DDoS protection | ddos-protection | 53 | planned |
 
 ## 10. Performance & runtime — `performance`
 
@@ -206,7 +207,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 ## 13. AI-era systems — `ai-systems`
 
-This track grows as new things are learned. Add to it with `/add-topic`.
+How the systems around AI models work: tool protocols, retrieval, vector search, caching and the limits of model APIs.
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
@@ -232,10 +233,12 @@ Each case study ties many concepts together and links back to their pages.
 | 7 | Design a distributed cache | distributed-cache | new | planned |
 | 8 | Design a web crawler | web-crawler | new | planned |
 | 9 | How IRCTC Tatkal booking works | irctc-tatkal-booking | new | published (2026-10-22) |
+| 10 | How Google Authenticator works (TOTP) | google-authenticator | new | published (2026-11-06) |
 
 ## Inbox
 
 Topic ideas saved with `/save-topic`, oldest first. `/add-topic` offers these first and moves each
 one into its track's table when the page is written. Bullets, not a table: the site build reads
 only the track tables above.
+
 

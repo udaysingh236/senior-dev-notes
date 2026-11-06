@@ -1,0 +1,19 @@
+---
+// A worker pool calling a dependency that sometimes never answers, with the call timeout as a slider. See brownout-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="timeouts-brownout"
+  title="A dependency that sometimes never answers, behind a pool of workers"
+  description="A service with a fixed pool of workers, shown as a grid of cells. Each request takes a worker and calls one dependency. Healthy calls answer in about 40 ms, with a slowest 1% around 160 ms; a share of calls never answer. A cell is blue while its worker waits on a call that will answer, amber while it waits on one that never will, and a bar along its bottom fills towards the timeout. Requests that find every worker busy wait in a queue of up to 40; past that they are rejected at once. The bar at the bottom splits the last two seconds of requests into answered (green), timed out (amber) and rejected (red)."
+  watchFor="At the defaults, 5% of calls hang and the timeout is 2 s. Those 5% of requests take about 70% of all worker time, the pool fills with amber cells, and from a quarter to half of all requests, depending on the moment, are rejected without being tried, most of them requests that would have succeeded. Lower the timeout to 300 ms: a hung call now costs 300 ms, the pool has room again, and about 95% are answered: all that ever could be. Keep going to 100 ms: the timeout now cuts into the healthy calls' slow tail, and answered falls to about 89% although the dependency is no worse. Set hangs to 0% and any timeout works: the timeout only matters on the bad day."
+  viewBox="0 0 400 310"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createBrownoutModel } from './brownout-model';
+
+  mountAll('timeouts-brownout', createBrownoutModel);
+</script>

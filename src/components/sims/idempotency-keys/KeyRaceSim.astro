@@ -1,0 +1,19 @@
+---
+// Four key-store designs fed the same payments, server times and crashes. See key-race-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="key-race"
+  title="Same duplicates, same crashes, four key stores"
+  description="A new payment every 250 ms, each sent with an idempotency key. The client waits up to its timeout, and on a timeout, a 409 or a dropped connection retries with the same key up to 4 times (after 0.5, 1, 2 and 4 s). The server takes a random time per attempt around the median and calls the bank halfway through; some attempts crash at a random point. All four lanes see exactly the same server times and crashes. Each square is one payment: green when charged once and the user saw success, red with ×2 when charged twice, amber when charged but the user only saw errors, an empty outline when nothing was charged."
+  watchFor="At the defaults about 3% of payments get a retry while the first attempt is still charging. The first lane charges each of those twice, plus every attempt that crashed after the bank call. The second never charges twice, but every crash leaves its key locked for good: amber and empty squares. Set the client timeout to 0.75 s and the first lane turns red. Set the lease to 1 s: the third lane takes over attempts that were still running and charges twice as often as the first, while the fourth stays green, because the bank recognises its own key. Set the lease to 10 s: the client gives up before it ends, and lanes two to four look the same."
+  viewBox="0 0 400 366"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createKeyRaceModel } from './key-race-model';
+
+  mountAll('key-race', createKeyRaceModel);
+</script>

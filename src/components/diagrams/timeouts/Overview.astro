@@ -1,0 +1,48 @@
+---
+// One HTTP call to a server that sends a 20-byte body one byte a second, against a 3 s setting.
+// A read timeout restarts at every byte; a total deadline does not.
+// Numbers from examples/timeouts (python and js): 20.0 s against 3.0 s.
+const X0 = 20;
+const S = 18; // drawing units per second; 0 to 20 s
+const x = (s: number) => X0 + s * S;
+const bytes = Array.from({ length: 20 }, (_, i) => i + 1);
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="to-ov-t to-ov-d">
+  <title id="to-ov-t">A read timeout bounds silence, not the call</title>
+  <desc id="to-ov-d">
+    A timeline from 0 to 20 seconds. The server answers at once and then sends its 20-byte body
+    one byte every second. A read timeout of 3 seconds restarts each time a byte arrives; every gap
+    is 1 second, so it never fires, and the call ends at 20 seconds with no error. A total deadline
+    of 3 seconds is measured from the start of the call and stops it at 3 seconds. Measured with
+    Python's urlopen(timeout=3) and Node's http.get with timeout 3000: both returned after 20.0 s.
+  </desc>
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">a 20-byte answer, one byte a second</text>
+
+  <text x="4" y="58" font-size="16" style="fill: var(--viz-ink)">bytes arriving</text>
+  {bytes.map((b) => (
+    <rect x={x(b) - 4} y="68" width="8" height="18" rx="2" stroke-width="1.2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  ))}
+
+  <text x="4" y="120" font-size="16" style="fill: var(--viz-ink)">read timeout 3 s: restarts at every byte</text>
+  {bytes.map((b) => (
+    <path d={`M${x(b - 1) + 2} 136 L${x(b - 1) + 2} 130 L${x(b) - 2} 130 L${x(b) - 2} 136`} fill="none" stroke-width="1.5"
+      style="stroke: var(--viz-ok)" />
+  ))}
+  <text x={x(20)} y="158" font-size="15" text-anchor="end" style="fill: var(--viz-ok)">each gap 1 s: never fires; done at 20 s</text>
+
+  <text x="4" y="196" font-size="16" style="fill: var(--viz-ink)">total deadline 3 s: counts from the start</text>
+  <rect x={x(0)} y="206" width={3 * S} height="18" rx="3" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <path d={`M${x(3)} 200 L${x(3)} 232`} stroke-width="2.5" style="stroke: var(--viz-bad)" />
+  <text x={x(3) + 8} y="221" font-size="15" style="fill: var(--viz-bad)">stops the call at 3.0 s</text>
+
+  <path d={`M${x(0)} 262 L${x(20)} 262`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  {[0, 5, 10, 15, 20].map((s) => (
+    <g>
+      <path d={`M${x(s)} 258 L${x(s)} 266`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+      <text x={x(s)} y="284" font-size="15" text-anchor={s === 0 ? 'start' : s === 20 ? 'end' : 'middle'}
+        style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{s} s</text>
+    </g>
+  ))}
+  <text x="4" y="318" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">a byte every 2.9 s keeps it going for ever</text>
+</svg>

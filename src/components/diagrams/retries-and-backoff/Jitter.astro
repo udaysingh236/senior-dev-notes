@@ -1,0 +1,110 @@
+---
+// 600 clients fail at the same moment (a connection reset during a deploy) and retry with
+// exponential backoff: retry k waits about 0.5 s × 2^(k-1), at most 6 retries. The server completes
+// 60 attempts per 100 ms; attempts beyond that in a 100 ms slot fail and back off again.
+// Computed here at build time with a seeded generator, so the drawing is the same on every build.
+// The same model runs in examples/retries-and-backoff (jitter_storm): 2,400 / 1,697 / 1,435 attempts.
+const CLIENTS = 600;
+const PER_SLOT = 60;
+const SLOT = 100; // ms
+const BASE = 500; // ms
+const MAX_RETRIES = 6;
+const SLOTS = 85; // 8.5 s drawn
+
+function mulberry32(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type Kind = 'none' | 'grpc' | 'full';
+function run(kind: Kind) {
+  const r = mulberry32(7);
+  let pending = Array.from({ length: CLIENTS }, () => ({ at: 0, k: 0 }));
+  const hist: number[] = [];
+  let done = 0;
+  let attempts = 0;
+  let lastDone = 0;
+  for (let b = 0; b < 120; b++) {
+    const lo = b * SLOT;
+    const hi = lo + SLOT;
+    const here = pending.filter((x) => x.at >= lo && x.at < hi);
+    pending = pending.filter((x) => x.at >= hi);
+    attempts += here.length;
+    hist.push(here.length);
+    for (let i = here.length - 1; i > 0; i--) {
+      const j = Math.floor(r() * (i + 1));
+      [here[i], here[j]] = [here[j], here[i]];
+    }
+    here.forEach((x, i) => {
+      if (i < PER_SLOT) {
+        done++;
+        lastDone = hi;
+        return;
+      }
+      const k = x.k + 1;
+      if (k > MAX_RETRIES) return;
+      const d = BASE * 2 ** (k - 1);
+      const wait = kind === 'none' ? d : kind === 'grpc' ? d * (0.8 + 0.4 * r()) : r() * d;
+      pending.push({ at: hi + wait, k });
+    });
+  }
+  return { hist: hist.slice(0, SLOTS), done, attempts, lastDone };
+}
+
+const rows = [
+  { kind: 'none' as const, label: 'no jitter: wait exactly 0.5, 1, 2, 4 s' },
+  { kind: 'grpc' as const, label: '±20% jitter (gRPC’s default)' },
+  { kind: 'full' as const, label: 'full jitter: random(0, 0.5, 1, 2, 4 s)' },
+].map((row) => ({ ...row, ...run(row.kind) }));
+
+const X0 = 8;
+const BW = 384 / SLOTS;
+const ROW_H = 116;
+const YMAX = 300; // attempts per slot at the top of a row; the opening 600 is clipped
+const h = (n: number) => (Math.min(n, YMAX) / YMAX) * 64;
+const fmt = (n: number) => n.toLocaleString('en-US');
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="rb-ji-t rb-ji-d">
+  <title id="rb-ji-t">Jitter spreads clients that failed together</title>
+  <desc id="rb-ji-d">
+    Three histograms of attempts per 100 milliseconds over 8.5 seconds, after 600 clients fail at
+    the same moment against a server that completes 60 attempts per 100 milliseconds. With no
+    jitter, every client retries at the same instant each time: spikes of 540, 480 and 420 attempts,
+    with nothing in between; after 8.5 seconds only {rows[0].done} of 600 have succeeded, using
+    {fmt(rows[0].attempts)} attempts. With 20% jitter the spikes widen into humps and all 600 are done by
+    {rows[1].lastDone / 1000} seconds, using {fmt(rows[1].attempts)} attempts. With full jitter the
+    retries spread out to about the server's capacity, and all 600 are done by
+    {rows[2].lastDone / 1000} seconds, using {fmt(rows[2].attempts)} attempts.
+  </desc>
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">600 clients fail at once, then retry</text>
+
+  {rows.map((row, i) => {
+    const base = 44 + i * ROW_H + 64 + 24;
+    const capY = base - h(PER_SLOT);
+    const result = row.kind === 'none'
+      ? `${row.done} of 600 done by 8.5 s · ${fmt(row.attempts)} attempts`
+      : `all done by ${row.lastDone / 1000} s · ${fmt(row.attempts)} attempts`;
+    return (
+      <g>
+        <text x="4" y={base - 72} font-size="15" style="fill: var(--viz-ink)">{row.label}</text>
+        {row.hist.map((n, j) => n > 0 && (
+          <rect x={X0 + j * BW} y={base - h(n)} width={Math.max(BW - 0.8, 1)} height={h(n)} stroke-width="0.6"
+            style={`fill: var(--viz-${n > PER_SLOT ? 'warn' : 'flow'}-soft); stroke: var(--viz-${n > PER_SLOT ? 'warn' : 'flow'})`} />
+        ))}
+        <path d={`M${X0} ${capY} L${X0 + SLOTS * BW} ${capY}`} stroke-width="1.5" stroke-dasharray="5 3" style="stroke: var(--viz-bad)" />
+        <path d={`M${X0} ${base} L${X0 + SLOTS * BW} ${base}`} stroke-width="1.2" style="stroke: var(--viz-stroke)" />
+        <text x="396" y={base + 18} font-size="14" text-anchor="end"
+          style={`fill: var(--viz-${row.kind === 'full' ? 'ok' : row.kind === 'none' ? 'bad' : 'warn'})`}>{result}</text>
+      </g>
+    );
+  })}
+
+  <text x="4" y="410" font-size="14" style="fill: var(--viz-muted)">dashed red: the server’s 60 per 100 ms · amber bars: over it</text>
+</svg>

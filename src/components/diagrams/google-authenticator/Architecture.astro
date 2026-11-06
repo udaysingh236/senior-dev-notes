@@ -1,0 +1,82 @@
+---
+// Hero diagram: enrolment (dashed, once) and verification (solid, every login) for TOTP.
+// Only the six digits cross the network at login; the secret crosses once, in the QR code.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+---
+
+<svg viewBox="0 0 400 436" width="100%" role="img" aria-labelledby="ga-arch-t ga-arch-d">
+  <title id="ga-arch-t">The parts of a TOTP two-step verification system</title>
+  <desc id="ga-arch-d">
+    Left, the phone: its clock gives Unix time to the authenticator app, which holds the stored
+    secret. Right, the server: a login API checks the password and passes the code to a TOTP
+    verifier, which reads the user's row from an encrypted secrets table and asks a key management
+    service to unwrap the key that decrypts it. At enrolment only, shown dashed, the server puts the
+    secret into a QR code on the setup page and the app scans it. At every login, shown solid, only
+    the six-digit code travels from the phone side to the login API.
+  </desc>
+  <defs>
+    <marker id="ga-arch-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="ga-arch-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+  </defs>
+
+  <g font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">
+    <text x="4" y="18">phone</text>
+    <text x="216" y="18">server</text>
+  </g>
+
+  <g font-size="17" font-weight="600" text-anchor="middle">
+    <rect {...box(4, 28, 170, 52)} rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+    <text x="89" y="50" style="fill: var(--viz-ink)">clock</text>
+    <text x="89" y="71" font-size="15" font-weight="400" style="fill: var(--viz-muted)">Unix time</text>
+
+    <rect {...box(4, 110, 170, 62)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+    <text x="89" y="136" style="fill: var(--viz-ink)">authenticator app</text>
+    <text x="89" y="158" font-size="15" font-weight="400" style="fill: var(--viz-muted)">secret, stored</text>
+
+    <rect {...box(4, 300, 170, 58)} rx="6" stroke-width="2" stroke-dasharray="5 4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="89" y="324" style="fill: var(--viz-ink)">QR code</text>
+    <text x="89" y="346" font-size="15" font-weight="400" style="fill: var(--viz-muted)">setup page, once</text>
+
+    <rect {...box(216, 28, 170, 52)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="301" y="50" style="fill: var(--viz-ink)">KMS</text>
+    <text x="301" y="71" font-size="15" font-weight="400" style="fill: var(--viz-muted)">master key</text>
+
+    <rect {...box(216, 110, 170, 62)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="301" y="136" style="fill: var(--viz-ink)">login API</text>
+    <text x="301" y="158" font-size="15" font-weight="400" style="fill: var(--viz-muted)">password, then code</text>
+
+    <rect {...box(216, 196, 170, 62)} rx="6" stroke-width="2.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <text x="301" y="222" style="fill: var(--viz-ink)">TOTP verifier</text>
+    <text x="301" y="244" font-size="15" font-weight="400" style="fill: var(--viz-muted)">window, replay, limit</text>
+
+    <path d="M216 292 a85 10 0 0 1 170 0 v62 a85 10 0 0 1 -170 0 z" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+    <path d="M216 292 a85 10 0 0 0 170 0" fill="none" stroke-width="2" style="stroke: var(--viz-store)" />
+    <text x="301" y="324" style="fill: var(--viz-ink)">secrets table</text>
+    <text x="301" y="345" font-size="15" font-weight="400" style="fill: var(--viz-muted)">encrypted, last step</text>
+  </g>
+
+  <g stroke-width="2" fill="none" style="stroke: var(--viz-flow)" marker-end="url(#ga-arch-a)">
+    <line x1="89" y1="81" x2="89" y2="106" />
+    <line x1="175" y1="141" x2="212" y2="141" />
+    <line x1="301" y1="173" x2="301" y2="192" />
+    <line x1="301" y1="259" x2="301" y2="279" marker-start="url(#ga-arch-a)" />
+    <path d="M387 227 H394 V54 H390" />
+  </g>
+  <g stroke-width="2" fill="none" stroke-dasharray="5 4" style="stroke: var(--viz-warn)" marker-end="url(#ga-arch-w)">
+    <path d="M215 329 H179" />
+    <line x1="89" y1="299" x2="89" y2="177" />
+  </g>
+
+  <g font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">
+    <text x="97" y="99">time</text>
+    <text x="194" y="132" text-anchor="middle" style="fill: var(--viz-flow)">code</text>
+    <text x="380" y="99" text-anchor="end">unwrap key</text>
+    <text x="97" y="244" style="fill: var(--viz-warn)">scan, once</text>
+    <text x="4" y="398">solid: every login. dashed: enrolment, once.</text>
+    <text x="4" y="422">At login only six digits cross the network.</text>
+  </g>
+</svg>

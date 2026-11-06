@@ -1,0 +1,738 @@
+---
+title: How Google Authenticator Works
+description: How an authenticator app and a server agree on six digits every 30 seconds without talking to each other. The shared secret in the QR code, HMAC and dynamic truncation, Unix time as the counter, acceptance windows and clock drift, replay guards, guessing odds under attempt limits, why the server cannot hash the secret, and why none of it stops a real-time phishing relay.
+tagline: Your phone and the server agree on six digits every 30 seconds without exchanging a byte. What do they share, and what does the server have to protect?
+difficulty: intermediate
+track: case-studies
+prerequisites: [password-storage, rate-limiting, tls]
+next: [passkeys, secrets-management, encryption-at-rest, sessions-vs-tokens]
+lastReviewed: 2026-11-06
+sidebar:
+  order: 10
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import Architecture from '../../../components/diagrams/google-authenticator/Architecture.astro';
+import KeyUri from '../../../components/diagrams/google-authenticator/KeyUri.astro';
+import Truncation from '../../../components/diagrams/google-authenticator/Truncation.astro';
+import TimeSteps from '../../../components/diagrams/google-authenticator/TimeSteps.astro';
+import AcceptanceWindow from '../../../components/diagrams/google-authenticator/AcceptanceWindow.astro';
+import SecretStorage from '../../../components/diagrams/google-authenticator/SecretStorage.astro';
+import DriftSim from '../../../components/sims/google-authenticator/DriftSim.astro';
+import GuessSim from '../../../components/sims/google-authenticator/GuessSim.astro';
+
+## The question
+
+Since the day you scanned the QR code, your phone and the server have not exchanged a single byte.
+Put the phone in airplane mode: at 10:42:17 UTC it shows `049719`, and the server, computing on its
+own, gets `049719` too. Thirteen seconds later both switch to `506029`. What are they both reading
+from? Why does the server still accept `049719` if you type it at 10:42:31, after the phone has
+moved on? And why can't the server store the secret behind those digits the way it stores your
+password, as a hash?
+
+The app's side is an open standard, RFC 6238, so every code on this page is exact and reproducible.
+Google does not publish how its own servers check codes; the server side here is how we would build
+a verifier, following the RFCs and NIST's current guidance.
+
+## What the system has to do, in numbers
+
+The requirements are short. Enrol a phone once. After that, the phone shows a code with no network,
+the server checks it, codes change every 30 seconds, and each code works once. Underneath them sit
+the requirements that make it hard: an attacker who has your password must not be able to guess the
+code, a code that leaks must be useless soon, a phone whose clock is a minute off must still work,
+and a breach of the server must not quietly hand over every user's second factor.
+
+| Quantity | Value |
+|---|---|
+| Shared secret | 160 bits recommended, 128 the minimum ([RFC 4226](https://www.rfc-editor.org/rfc/rfc4226)); at least 112 bits of strength ([NIST SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html#single-factor-otp-verifiers), August 2025) |
+| Code | 6 digits: 1,000,000 possible values |
+| Time step | 30 s, the RFC 6238 default |
+| Steps accepted around "now" | at most 1 step of delay recommended ([RFC 6238, section 5.2](https://www.rfc-editor.org/rfc/rfc6238#section-5.2)); many verifiers accept 1 before and 1 after |
+| Failed attempts before the authenticator is disabled | at most 100 consecutive ([NIST SP 800-63B-4, rate limiting](https://pages.nist.gov/800-63-4/sp800-63b.html#throttle)) |
+| Network calls the app makes to show a code | 0 |
+| Work to verify one code | 3 HMAC computations for a ±1 window: microseconds |
+
+There is no throughput problem here, no hot row, no queue. A verifier that checks a million codes a
+minute is one small service. The hard parts are elsewhere: two machines agreeing on a number without
+talking, time that is never quite the same on both, and a secret that the server must keep in a form
+it can use.
+
+## The big picture
+
+The system has two moments: enrolment, once, and verification, at every login. The figure shows
+both; the secret crosses the network only on the enrolment path.
+
+<Figure caption="The secret travels once, inside the QR code. After that the phone and the server each compute the code from the secret and their own clock, and only the six digits cross the network.">
+  <Architecture />
+</Figure>
+
+- **Secrets table.** One row per enrolled user: the secret, encrypted, plus the last step accepted
+  and the learned clock drift. It is the most valuable table in the system, for reasons the deep
+  dives explain.
+- **Key management service (KMS).** Holds the key that encrypts the secrets. Only the verifier can
+  ask it to decrypt.
+- **TOTP verifier.** The only component that ever sees a secret in plaintext. It answers one
+  question, "is code C valid for user U now?", and updates the replay guard and the attempt counter.
+- **Login API.** Checks the password, then asks the verifier about the code. It never touches a
+  secret.
+- **The app and the phone's clock.** The app stores the secret and reads the clock. That is all it
+  needs.
+
+## The hard parts
+
+### The one thing they share: a secret in a QR code
+
+A **shared secret** (or **symmetric key**) is a value that both sides hold and nobody else does.
+Unlike a password, nobody chooses it or remembers it: the server generates 20 random bytes from a
+cryptographically secure random generator, which is 160 bits, so there are 2<sup>160</sup> possible
+secrets. Guessing the secret is not a realistic attack; every attack on this page goes after the
+code, the channel or the storage instead.
+
+Twenty raw bytes cannot go into a URL or be typed by a person, so they are written in **Base32**
+([RFC 4648](https://www.rfc-editor.org/rfc/rfc4648)): an alphabet of 32 characters, `A`–`Z` and
+`2`–`7`, each standing for 5 bits. Five bytes are 40 bits, which is exactly eight characters. A tiny
+example: the byte `s` is `01110011` and `e` is `01100101`. Run them together and cut into groups of
+five: `01110` is 14, the letter `O`; `01101` is 13, `N`; and so on. That is why our demo secret, which
+starts with the bytes `senio`, starts with `ONSW42LP`. Base32 has no `0`, `1` or `8`, and case does
+not matter, so a person can type the "setup key" from the screen without confusing `O` with `0`.
+
+The QR code is a URI in a format Google defined for Authenticator, now used by almost every
+authenticator app. Read it left to right:
+
+<Figure caption="The key URI inside the QR code. Only the secret matters to the maths; everything else is labelling or parameters the app may ignore.">
+  <KeyUri />
+</Figure>
+
+The type is `totp` or `hotp`. The label names the account in the app's list. Google's own
+description of the format ([Key URI format, archived 2021](https://github.com/google/google-authenticator/wiki/Key-Uri-Format))
+says to put the issuer both in the label and in the `issuer` parameter, because older apps read
+only the label, and that its implementations ignore the `algorithm` parameter. That last point is
+why almost every site sticks to SHA-1, 6 digits and 30 seconds: other values work in some apps and
+silently produce wrong codes in others. An IETF draft to standardise the format exists
+([draft-linuxgemini-otpauth-uri, 2023](https://datatracker.ietf.org/doc/draft-linuxgemini-otpauth-uri/))
+but is not an RFC.
+
+The important property is not in the URI; it is what happens to it. The secret crosses the network
+exactly once, inside the HTML or image of the setup page, over TLS. After the scan it never moves
+again. That makes the setup page the most sensitive page in your product: anyone who sees that QR
+code, in a screen share, a screenshot, a support ticket or a logged response body, can generate
+your user's codes forever, and nothing will ever look wrong.
+
+:::caution[Activate only after a confirmation code]
+Do not switch two-step verification on when the QR code is shown. Ask the user to type the first
+code and switch it on only if it verifies. That proves the phone stored the right secret and that
+its clock agrees with yours, before the user depends on it. And never log the provisioning URI or
+the setup page's response body.
+:::
+
+### From a secret and a number to six digits: HOTP
+
+TOTP is built on an older algorithm, **HOTP** (HMAC-based one-time password,
+[RFC 4226](https://www.rfc-editor.org/rfc/rfc4226)), which turns a secret and a counter into a code.
+It needs two building blocks.
+
+A **hash function** takes any input and returns a fixed-size output: SHA-1 returns 20 bytes. It is
+one-way (you cannot get the input back from the output) and a one-bit change in the input gives an
+output with no visible relation to the old one. On its own, a hash does not help: anyone can hash
+the counter 0.
+
+An **HMAC** ([RFC 2104](https://www.rfc-editor.org/rfc/rfc2104)) mixes a secret key into the hash, so
+only someone who holds the key can compute the output for a given input. It is a **message
+authentication code**: proof that the output came from a key holder. With the RFC's test key
+`12345678901234567890`, HMAC-SHA-1 of counter 0 starts `cc 93 cf 18`, and of counter 1 starts
+`75 a4 8a 19`. Neighbouring counters give unrelated outputs, so seeing one code tells an attacker
+nothing about the next. The weaknesses found in SHA-1 are collision attacks (two inputs with the
+same hash), which do not let anyone compute an HMAC without the key; RFC 6238 also allows SHA-256
+and SHA-512 if both sides support them.
+
+HOTP is then four steps:
+
+1. Write the counter as 8 bytes, most significant byte first (**big-endian**). Counter 0 is
+   `00 00 00 00 00 00 00 00`.
+2. Compute HMAC-SHA-1(secret, those 8 bytes): 20 bytes.
+3. **Dynamic truncation**: take the low 4 bits of the last byte as an offset between 0 and 15, read
+   the 4 bytes starting at that offset as one number, and clear its top bit.
+4. Keep the last 6 decimal digits: the number modulo 1,000,000, padded with leading zeros.
+
+<Figure caption="Dynamic truncation for counter 0 with the RFC test key. The last byte picks where to read; four bytes become a 31-bit number; its last six digits are the code.">
+  <Truncation />
+</Figure>
+
+The last byte here is `b0`; its low 4 bits are `0`, so we read bytes 0 to 3, `cc 93 cf 18`. Clearing
+the top bit turns `cc` into `4c`, giving 1,284,755,224, and the last six digits are `755224`, the
+first value in RFC 4226's test table. The offset comes from the hash itself so that the 4 bytes
+used are different, and unpredictable, for every counter. The top bit is cleared because some
+languages read 4 bytes as a signed integer, where a set top bit means a negative number; clearing it
+makes every implementation get the same positive number.
+
+In code, this is the whole algorithm:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="totp.py"
+# runnable version: examples/google-authenticator/python/totp.py
+import hmac
+import struct
+
+STEP = 30  # seconds per time step (RFC 6238 default)
+DIGITS = 6
+
+def hotp(secret: bytes, counter: int, digits: int = DIGITS) -> str:
+    """RFC 4226: HMAC the 8-byte counter, take 4 bytes at an offset, keep the last digits."""
+    mac = hmac.new(secret, struct.pack(">Q", counter), "sha1").digest()
+    offset = mac[-1] & 0x0F  # low 4 bits of the last byte: 0..15
+    number = int.from_bytes(mac[offset:offset + 4], "big") & 0x7FFFFFFF  # drop the top bit
+    return str(number % 10**digits).zfill(digits)  # a string: keep leading zeros
+
+def totp(secret: bytes, unix_time: float, digits: int = DIGITS) -> str:
+    """RFC 6238: HOTP where the counter is the number of 30 s steps since 1970-01-01 UTC."""
+    return hotp(secret, int(unix_time // STEP), digits)
+
+# hotp(b"12345678901234567890", 0) -> '755224', the first RFC 4226 test value
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="totp.mjs"
+// runnable version: examples/google-authenticator/js/totp.mjs
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const STEP = 30; // seconds per time step (RFC 6238 default)
+const DIGITS = 6;
+
+function counterBytes(counter) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(counter)); // 8 bytes, big-endian
+  return buf;
+}
+
+/** RFC 4226: HMAC the 8-byte counter, take 4 bytes at an offset, keep the last digits. */
+export function hotp(secret, counter, digits = DIGITS) {
+  const mac = createHmac('sha1', secret).update(counterBytes(counter)).digest();
+  const offset = mac[mac.length - 1] & 0x0f; // low 4 bits of the last byte: 0..15
+  const number = mac.readUInt32BE(offset) & 0x7fffffff; // drop the top bit
+  return String(number % 10 ** digits).padStart(digits, '0'); // a string: keep leading zeros
+}
+
+/** RFC 6238: HOTP where the counter is the number of 30 s steps since 1970-01-01 UTC. */
+export function totp(secret, unixTime, digits = DIGITS) {
+  return hotp(secret, Math.floor(unixTime / STEP), digits);
+}
+
+// hotp(Buffer.from('12345678901234567890'), 0) -> '755224', the first RFC 4226 test value
+```
+  </TabItem>
+</Tabs>
+
+One detail people get wrong: the code is a string of six characters, not a number. A code like
+`049719` stored or compared as an integer becomes `49719`, and one code in ten is rejected for
+no visible reason. Taking a 31-bit number modulo 1,000,000 is also very slightly uneven
+(2<sup>31</sup> is not a multiple of a million), which makes codes below `483648` about one part in
+2,000 more likely than the rest. That is far too small to help a guesser.
+
+### Replacing the counter with the clock: TOTP
+
+With HOTP, the phone and the server each keep a counter. The phone adds one every time you ask for
+a code; the server adds one every time a code succeeds. Press the button five times without logging
+in and the phone is five ahead, so the server has to try a **look-ahead window** of the next few
+counters ([RFC 4226, section 7.4](https://www.rfc-editor.org/rfc/rfc4226#section-7.4)). The two
+counters are state that can drift apart, and fixing it needs a resynchronisation step.
+
+**TOTP** ([RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)) removes that state. The counter is
+not stored anywhere; both sides compute it from the clock:
+
+`T = floor(unix_time / 30)`
+
+**Unix time** is the number of seconds since 1970-01-01 00:00:00 UTC. It is the same number
+everywhere on Earth at the same instant: your phone may display IST and the server may log UTC, and
+daylight saving may change tonight, but none of that touches Unix time. So T is the number of
+30-second steps since 1970, and both sides arrive at the same T without any message.
+
+<Figure caption="Every 30 seconds of Unix time is one step, and each step has one code. The phone and the server compute the same step number from their own clocks.">
+  <TimeSteps />
+</Figure>
+
+Worked through with our demo secret: at 10:42:17 UTC on 6 November 2026, Unix time is
+1,793,961,737. Divided by 30 that is step 59,798,724, and we are 17 seconds into it. HOTP of that
+step is `049719`. At 1,793,961,750, thirteen seconds later, the division gives 59,798,725 and the
+code becomes `506029`.
+
+This answers how the phone gives the right number without internet. It needs two things at the
+moment you look: the secret, which it stored at enrolment, and the current time, which its clock
+hardware keeps counting whether the phone is online or not. A phone corrects that clock when it can:
+from the mobile network's time signal (NITZ), from NTP servers over the internet, and on some
+Android devices from GPS satellites
+([Android automatic time detection](https://source.android.com/docs/automotive/time/automatic_time_detection)).
+None of those is needed at the moment the code is computed. Google says the app generates codes
+without an internet connection or mobile service, and since version 7.0 it uses the phone's system
+time; the app's own "time correction" setting is gone
+([Google Authenticator help](https://support.google.com/accounts/answer/1066447), as of November 2026).
+
+So "offline" does not mean "independent of time". If someone sets the phone's clock five minutes
+wrong by hand, every code is rejected, even with full signal. The phone is offline-capable, not
+clock-independent.
+
+### Typing time, clock drift and the acceptance window
+
+A server that accepts only the code for its own current step fails real users in two ways.
+
+The first is the **step boundary**. You read the code 29 seconds into a step and type it in four
+seconds. By the time it arrives, the server is in the next step and computes a different code. Our
+example reads `049719` at :29 and submits it after different delays:
+
+```text
+read at :29, arrives  0 s later -> naive ok       window +-1 ok
+read at :29, arrives  4 s later -> naive REJECTED window +-1 ok
+read at :29, arrives 15 s later -> naive REJECTED window +-1 ok
+read at :29, arrives 35 s later -> naive REJECTED window +-1 REJECTED
+```
+
+The second is **clock drift**. A phone's clock is driven by a quartz crystal whose rate is slightly
+off; a clock off by 20 parts per million gains or loses about 1.7 seconds a day (illustrative
+arithmetic, not a measured phone). A phone that stays offline, or has automatic time turned off,
+drifts until someone corrects it. Servers drift too when their NTP sync breaks.
+
+The fix is an **acceptance window**: compute the codes for a few steps around the current one and
+accept any of them. RFC 6238 recommends accepting at most one step of delay; many verifiers accept
+one step before and one after, so a code is accepted for up to 90 seconds of server time. NIST asks
+for the same reasoning in its own words: a TOTP lifetime set by expected clock drift in either
+direction, plus network delay, plus the time a person needs to type
+([SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html#single-factor-otp-verifiers)).
+
+<Figure caption="With a ±1 window the server accepts three codes at any moment. The replay guard then removes every step at or before the last one accepted, so a used code never works again.">
+  <AcceptanceWindow />
+</Figure>
+
+A wider window covers more drift, but every extra step adds two more valid codes for a guesser,
+as the next section shows. **Drift tracking** gets both: when a code matches at an offset, record
+that offset (in steps) on the user's row and centre the next window there
+([RFC 6238, section 6](https://www.rfc-editor.org/rfc/rfc6238#section-6)). A phone that gains a
+little every day is followed step by step instead of falling off the edge.
+
+Drift tracking has its own trap. The phone goes back online, corrects its clock, and the learned
+drift of +6 steps is now wrong by six steps: a window of ±1 around +6 rejects every correct code,
+and the user is locked out by a fix. So also try the window around the server's own clock, and
+reset the drift to wherever the code matched. Our example runs a phone that gains 2 seconds a day
+for 90 days, with a login every 3 days, then corrects its clock:
+
+```text
+failed logins out of 31: fixed window 23, drift tracking 0
+day 93: the phone corrects its clock (back online); learned drift is now wrong
+  login 1: drift only -> rejected drift + fallback -> ok (drift now +0)
+```
+
+The simulation runs this over four months. Each mark is one login, drawn at the number of steps the
+code is ahead of the server; the pale green bar behind it is what the server accepted at that moment.
+
+<DriftSim />
+
+What the run shows: a fixed window handles typing delay but not slow drift, tracking follows the
+drift, and the fallback window is what keeps tracking safe when the phone fixes its own clock.
+
+### Guessing, replay and the attempt counter
+
+The threat model for the code is an attacker who already has the password. With a window of ±1
+there are 3 valid codes out of 1,000,000 at any moment, so one guess succeeds with probability
+3 in a million. What decides the outcome is how many guesses the server allows:
+
+| Window | Valid codes | One guess | 100 guesses | Guesses for a 50% chance |
+|---|---|---|---|---|
+| 0 | 1 | 0.0001% | 0.010% | 693,147 |
+| ±1 | 3 | 0.0003% | 0.030% | 231,049 |
+| ±2 | 5 | 0.0005% | 0.050% | 138,629 |
+
+With no limit, an attacker making 10 guesses a minute against a ±1 window has a 4% chance in a day
+and 26% in a week. With NIST's limit of at most 100 consecutive failures, then disabling the
+authenticator, the attacker gets 100 guesses and a 0.03% chance. NIST chose 100 with exactly this
+trade-off in mind: low odds for the guesser, few lockouts for real users.
+
+The word "consecutive" hides the trap. A counter of consecutive failures resets when the real user
+logs in successfully. A patient attacker stops at 99, waits for the user's next login to reset the
+counter, and spends 99 more. A user who logs in three times a day gives the attacker about 108,000
+guesses a year, and a 28% chance. The simulation shows the counter's saw-tooth and the attacker's
+odds over a year.
+
+<GuessSim />
+
+What the run shows: the limit only holds if failures are counted over a period longer than the gap
+between the user's logins. In practice that means three things. Keep a second budget of failures per
+day and per month that a success does not reset. Tell the user when codes failed since their last
+login. And treat a run of wrong codes after a correct password as what it is: proof that someone
+else knows the password. Force a password reset rather than only locking the second factor.
+
+A **replay** is a valid code used a second time. A code typed into a phishing page, read over a
+shoulder or captured from a log is still inside its 90-second window. Both RFC 6238 ("MUST NOT
+accept the second attempt") and NIST ("accept a given OTP only once") require the verifier to refuse
+it. The simplest guard is a single column: the highest step ever accepted for this user. Accept a
+step only if it is greater than that, then store it. That also rejects older codes once a newer one
+has been used, which a list of used codes would not.
+
+The guard is a race between two requests that carry the same code in the same millisecond. If both
+read `last_step`, both see it smaller, and both write, both log in. Make the check part of the
+write:
+
+```sql
+UPDATE totp_enrolment
+SET last_step = :step, drift = :drift, failures = 0
+WHERE user_id = :user_id AND last_step < :step;
+-- 1 row updated: this request won. 0 rows: the step was already used; reject.
+```
+
+### Where the secrets live: server, phone and cloud
+
+A password is stored as a slow, salted hash because the server never needs the password itself:
+it hashes what you type and compares. A TOTP verifier cannot do that. To check a code it must
+compute HMAC(secret, step), and HMAC needs the secret itself. <mark>The server has to be able to
+read every user's secret.</mark>
+
+<Figure caption="A password is stored as a one-way hash; a TOTP secret has to be stored in a form the verifier can decrypt. A copy of the secrets table plus the key generates every user's codes, forever.">
+  <SecretStorage />
+</Figure>
+
+So a dump of the secrets table is worse than a dump of password hashes. There is nothing to crack:
+the attacker computes every user's codes, offline, for as long as the enrolments last, and no failed
+attempt ever shows up in your logs. What you can do:
+
+- **Encrypt each secret with a key the database does not hold.** **Envelope encryption**: each
+  secret is encrypted with a data key, and the data key is encrypted by a master key that lives in
+  a KMS or a hardware security module and never leaves it. A stolen backup holds ciphertext only.
+- **Decrypt in one place.** Make the verifier a separate service with its own credentials, the only
+  one allowed to call the KMS for these keys. The login API asks "is this code valid?" and never sees
+  a secret. NIST's wording is the same idea: keys "strongly protected" by access controls that limit
+  them to the components that need them.
+- **Plan for rotation.** You can re-encrypt secrets under a new master key at any time. You cannot
+  change a secret without the user's phone: a real breach means every user enrols again.
+- **Hash the recovery codes.** Backup codes are **look-up secrets**: the server only compares, so
+  store them hashed, like passwords, and mark each one used.
+
+The phone holds the same secrets, and how it keeps them changes the threat model. Google
+Authenticator's "Transfer codes" export turns selected secrets into one or more QR codes for a new
+phone ([Google Authenticator help](https://support.google.com/accounts/answer/1066447)), so a photo
+of that screen is a copy of every second factor in it. Since April 2023 the app can also sync
+secrets to the user's Google Account ([Google Security Blog, April 2023](https://security.googleblog.com/2023/04/google-authenticator-now-supports.html)).
+That fixes the old problem of a lost phone locking people out of everything. It also means the
+"something you have" is now whatever can sign in to that Google Account. When sync launched,
+researchers pointed out that the synced secrets were not end-to-end encrypted, and Google said it
+planned to add that ([The Hacker News, April 2023](https://thehackernews.com/2023/04/google-authenticator-app-gets-cloud.html)).
+Apple's Passwords app (iOS 18) generates the same codes and syncs them through iCloud Keychain
+([Help Net Security, October 2024](https://www.helpnetsecurity.com/2024/10/15/how-to-create-verification-codes-in-apple-passwords-app/)).
+NIST's current guidance allows syncing an OTP secret, as long as the sync service meets its
+requirements for synced authenticators.
+
+### What TOTP cannot stop: a relay in real time
+
+Everything so far protects the code from guessing and reuse. Nothing protects it from being typed
+into the wrong website. A **real-time phishing proxy** (also called adversary-in-the-middle) sits
+between you and the real site, forwards each page and each answer, and does it fast enough that
+your code is still inside its window. Walk through the order of messages:
+
+<StepThrough
+  title="A phishing proxy relays a TOTP code"
+  description="You sign in on a look-alike domain that forwards everything to the real site. Your code is valid, unused and on time, so the real site accepts it and gives the session to the proxy."
+  actors={[
+    { id: 'you', label: 'You', kind: 'client' },
+    { id: 'proxy', label: 'Fake site' },
+    { id: 'site', label: 'Real site' },
+  ]}
+  steps={[
+    { from: 'you', to: 'proxy', label: 'password', text: 'You open a link to a look-alike domain and type your password. The page is a live copy of the real one, fetched a moment ago.' },
+    { from: 'proxy', to: 'site', label: 'password', text: 'The proxy sends your password to the real site at once. The real site checks it: correct.' },
+    { from: 'site', to: 'proxy', label: 'need code', text: 'The real site asks for the second factor.', dashed: true, tone: 'warn' },
+    { from: 'proxy', to: 'you', label: 'need code', text: 'The proxy shows you the same prompt. Nothing looks unusual.', dashed: true, tone: 'warn' },
+    { from: 'you', to: 'proxy', label: '049719', text: 'You read the code from your phone and type it. It is correct: your phone computed it from the real secret.' },
+    { from: 'proxy', to: 'site', label: '049719', text: 'Two seconds later the proxy submits it. It is inside the window and has never been used, so the replay guard accepts it.', tone: 'bad' },
+    { from: 'site', to: 'proxy', label: 'session', text: 'The real site issues a session cookie. The proxy keeps it and can now act as you until the session ends.', dashed: true, tone: 'bad' },
+  ]}
+  summary="Every check passed: the password was right, the code was right, on time and used once. A TOTP code says nothing about which website it was typed into, so it cannot tell the real site from a relay."
+/>
+
+NIST says it directly: authenticators whose output a person types in "SHALL NOT be considered
+phishing-resistant", because nothing binds the code to the session it is used for
+([SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)). CISA classes app-based OTP the
+same way: resistant to push bombing, vulnerable to phishing
+([CISA, October 2022](https://www.cisa.gov/sites/default/files/publications/fact-sheet-implementing-phishing-resistant-mfa-508c.pdf)).
+This is not theoretical. Reddit's February 2023 breach began with a fake intranet page that collected an employee's
+password and second-factor code ([Malwarebytes, February 2023](https://www.malwarebytes.com/blog/news/2023/02/reddit-systems-compromised-by-phish-attack.-heres-what-you-need-to-do-next)).
+The 0ktapus campaign sent fake Okta pages by SMS and collected 9,931
+credentials and 5,441 MFA codes from more than 130 organisations, relaying them through Telegram
+([Group-IB, August 2022](https://www.group-ib.com/blog/0ktapus/)). Microsoft described a proxy kit
+used against more than 10,000 organisations that stole the session cookie issued after MFA
+([Microsoft Security, July 2022](https://www.microsoft.com/en-us/security/blog/2022/07/12/from-cookie-theft-to-bec-attackers-use-aitm-phishing-sites-as-entry-point-to-further-financial-fraud/)).
+
+What does stop it is a factor that the browser binds to the website. With **passkeys** (WebAuthn),
+the browser puts the origin it is actually on into the data the key signs
+([W3C Web Authentication Level 3](https://www.w3.org/TR/webauthn-3/)). On the proxy's domain, the
+signature names the proxy's origin, and the real site rejects it. The user cannot make the mistake,
+because the user is not the one copying the secret output.
+
+:::note[From the trenches]
+TOTP is still a large improvement over a password alone: it ends credential stuffing, password
+reuse and offline guessing. Ship it, keep it for users who have nothing else, and build the path
+to passkeys next to it. The mistake is to call it phishing-proof in a security review.
+:::
+
+## When things go wrong
+
+| Failure | What users see | Design response |
+|---|---|---|
+| Phone clock set wrong by hand, or drifting offline | Every code rejected, with full signal | Drift tracking with a fallback window; an error that says "check your phone's time is set automatically" |
+| Server NTP broken, clock 45 s behind | Codes read late in a step fail for everyone at once | Alert on server clock offset; a ±1 window absorbs it while you fix NTP |
+| Code stored or compared as an integer | Codes starting with 0 fail: 1 attempt in 10 | Compare 6-character strings, in constant time |
+| Provisioning URI in logs, support tickets or analytics | Nothing, until an account is taken over | Never log the setup page's body; activate only after a confirmation code |
+| Secrets table leaked with its key | Nothing: the attacker generates valid codes silently | Envelope encryption, decrypt only in the verifier, re-enrol everyone after a breach |
+| Lost phone, no sync, no recovery codes | Locked out of every account on that phone | Recovery codes, hashed; a second factor; or sync, with its own risk |
+| Authenticator synced to a phished account | The second factor falls with the first | Admins: prefer phishing-resistant factors for staff, as Retool's incident shows below |
+
+:::danger[A synced authenticator inside a phished account]
+In August 2023 an attacker sent Retool employees an SMS to a fake identity portal, then phoned one of
+them with a deepfaked voice and got one more code. With it they added their own device to the
+employee's Okta account and reached the employee's Google account, where Google Authenticator had
+synced the employee's codes. Retool says access to that one Google account gave the attacker all of
+the employee's MFA codes, then the VPN and internal admin tools, and 27 cloud customers' accounts were
+taken over ([Retool, September 2023](https://retool.com/blog/mfa-isnt-mfa)). The codes worked
+exactly as designed. The second factor had quietly come to depend on the first.
+:::
+
+## Build a piece of it
+
+The verifier, production-shaped: a window around the learned drift plus a fallback window around
+the server's clock, the replay guard, an attempt limit, and a constant-time comparison so response
+time does not reveal how many digits matched. It runs against the same demo secret as the rest of
+the page.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="totp.py"
+# runnable version: examples/google-authenticator/python/totp.py
+@dataclass
+class Enrollment:
+    """What the server keeps per user. In a database: one row, secret encrypted at rest."""
+    secret: bytes
+    last_step: int = -1  # highest step ever accepted: the replay guard
+    drift: int = 0       # learned offset of the phone's clock, in steps
+    failures: int = 0    # consecutive failed attempts
+
+MAX_FAILURES = 10
+
+def verify(e: Enrollment, code: str, now: float, window: int = 1, fallback: bool = True) -> str:
+    if e.failures >= MAX_FAILURES:
+        return "locked"
+    server_step = int(now // STEP)
+    centre = server_step + e.drift
+    steps = {centre + k for k in range(-window, window + 1)}
+    if fallback:  # the phone may have corrected its clock since the drift was learned
+        steps |= {server_step + k for k in range(-window, window + 1)}
+    for step in sorted(steps, key=lambda s: (abs(s - centre), s)):  # most likely step first
+        if step <= e.last_step:
+            continue  # this step, or a later one, was already used: a replay
+        if hmac.compare_digest(hotp(e.secret, step), code):
+            # In SQL: one conditional UPDATE ... WHERE last_step < :step (see the page)
+            e.last_step, e.drift, e.failures = step, step - server_step, 0
+            return "ok"
+    e.failures += 1
+    return "rejected"
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="totp.mjs"
+// runnable version: examples/google-authenticator/js/totp.mjs
+/** Constant-time compare: the time taken does not depend on where the codes differ. */
+const same = (a, b) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+
+const MAX_FAILURES = 10;
+
+/** What the server keeps per user. In a database: one row, secret encrypted at rest. */
+export const enrollment = (secret) => ({ secret, lastStep: -1, drift: 0, failures: 0 });
+
+export function verify(e, code, now, window = 1, fallback = true) {
+  if (e.failures >= MAX_FAILURES) return 'locked';
+  const serverStep = Math.floor(now / STEP);
+  const centre = serverStep + e.drift;
+  const steps = new Set();
+  for (let k = -window; k <= window; k++) {
+    steps.add(centre + k);
+    if (fallback) steps.add(serverStep + k); // the phone may have corrected its clock
+  }
+  const ordered = [...steps].sort((a, b) => Math.abs(a - centre) - Math.abs(b - centre) || a - b);
+  for (const step of ordered) { // most likely step first
+    if (step <= e.lastStep) continue; // this step, or a later one, was already used: a replay
+    if (same(hotp(e.secret, step), code)) {
+      // In SQL: one conditional UPDATE ... WHERE last_step < :step (see the page)
+      Object.assign(e, { lastStep: step, drift: step - serverStep, failures: 0 });
+      return 'ok';
+    }
+  }
+  e.failures += 1;
+  return 'rejected';
+}
+```
+  </TabItem>
+</Tabs>
+
+Both files first check themselves against the RFC 4226 and RFC 6238 test vectors, then run the
+experiments quoted on this page. The replay run shows why the guard matters even with a correct
+window:
+
+```text
+first use      : ok
+same code, +5 s: rejected  (a phished code replayed)
+window-only verifier would say: ok
+```
+
+Full code and run instructions:
+[`examples/google-authenticator/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/google-authenticator).
+
+## Trade-offs, and what we'd change
+
+- **Window size.** ±1 with drift tracking covers typing time and slow drift for 3 valid codes. A
+  fallback window doubles that to 6 while the learned drift is non-zero. Widening the window to
+  "fix" drift complaints is the wrong lever; tracking is the right one.
+- **30 s steps and 6 digits.** Longer steps or 8 digits are allowed by the RFC but not honoured by
+  every app, so a site that changes them gets support tickets for codes that "never work". The
+  defaults are the interoperable choice; buy security with attempt limits instead.
+- **Consecutive vs budgeted failures.** A consecutive counter is what users understand, and what
+  NIST caps. Add a long-period budget and a "someone tried codes" notice, or the cap is weaker than
+  it looks.
+- **Sync vs device-only.** Sync trades lockouts for a larger attack surface. For consumers, losing a
+  phone is the more common disaster; for staff with admin access, require a phishing-resistant
+  factor and do not rely on what an app syncs.
+- **TOTP vs SMS vs passkeys.** TOTP beats SMS codes (no SIM swap, works offline) and loses to
+  passkeys on phishing. Offer passkeys first and TOTP as the fallback.
+- **Scale does not change the design.** At 10× users the verifier is still a few HMACs per login.
+  What grows is the value of the secrets table, so the investment goes into key management and
+  isolation, not into throughput.
+
+## Interview corner
+
+"Design two-factor authentication" or "implement TOTP" tests whether you know where the security
+actually lives. A strong 45 minutes:
+
+1. Requirements (5 min): offline codes, one use, drift, lockout, recovery.
+2. The algorithm (10 min): shared secret, HMAC over a counter, truncation, the counter as Unix time / 30.
+3. Verification (15 min): the window, drift tracking, the replay guard as a conditional write,
+   attempt limits and their odds.
+4. Storage and enrolment (10 min): why the secret cannot be hashed, envelope encryption, a
+   verifier service, the confirmation code, recovery codes.
+5. Limits (5 min): relay phishing and why passkeys fix it.
+
+The follow-ups interviewers usually ask:
+
+- **"How does the app work offline?"** Both sides derive the counter from Unix time; the phone needs
+  only the stored secret and its own clock.
+- **"Can you store the secret hashed?"** No: the verifier must compute HMAC with it. Encrypt it,
+  isolate the decryption, hash only the recovery codes.
+- **"What stops someone reusing a code they saw?"** The last accepted step per user, updated with a
+  conditional write so two concurrent requests cannot both win.
+- **"Is TOTP phishing-resistant?"** No. Walk through the relay and contrast it with origin-bound
+  WebAuthn signatures.
+
+## Check yourself
+
+<details>
+<summary>1. Your server's NTP sync broke and its clock is now 45 seconds behind. Your verifier uses a ±1 window with no drift tracking. What do users see?</summary>
+
+The phone's step is usually one or two ahead of the server's. When the phone is one step ahead the
+code passes at the edge of the window; when the 45 seconds push it two steps ahead, it fails. So
+some logins fail and some pass, depending on where in the step users read the code: an
+intermittent failure for everyone at once. Monitor the server's clock offset; drift tracking per
+user would hide a server-side problem rather than fix it.
+
+</details>
+
+<details>
+<summary>2. Codes are checked with `int(code) == int(expected)`. Users say it works "most of the time". What breaks, and how often?</summary>
+
+Leading zeros. Parsing to an integer is fine for comparison if both sides are parsed, but if either
+side is formatted without padding (an integer column, a code generator that returns a number) the
+strings differ for codes starting with 0: one in ten. Keep codes as 6-character strings and compare
+with a constant-time function.
+
+</details>
+
+<details>
+<summary>3. Two login requests carrying the same valid code arrive in the same millisecond. Your verifier reads `last_step`, checks the code, then writes `last_step`. How many logins succeed?</summary>
+
+Possibly both. Each request reads the old `last_step`, finds the step newer, and writes. That is
+the read-then-write race. Make the check part of the write, `UPDATE ... SET last_step = :step
+WHERE user_id = :id AND last_step < :step`, and treat zero rows updated as a replay.
+
+</details>
+
+<details>
+<summary>4. You lock the second factor after 100 consecutive failures, and a success resets the count. An attacker has the password and is patient. The user logs in twice a day. What are the attacker's odds in a year with a ±1 window?</summary>
+
+They guess 99 times after each of the user's logins: about 99 × 2 × 365 ≈ 72,000 guesses, each
+with a 3 in a million chance, so roughly 19%. Count failures over a longer budget that a success
+does not reset, tell the user about failed codes, and force a password reset, since the password is
+clearly known.
+
+</details>
+
+<details>
+<summary>5. Why can recovery codes be stored with bcrypt or Argon2, but TOTP secrets cannot?</summary>
+
+A recovery code is compared, not computed with: hash what the user typed and compare it with the
+stored hash. A TOTP verifier must compute HMAC(secret, step) for the current step, which needs the
+secret itself, so it can only be stored encrypted, with the decryption key kept elsewhere.
+
+</details>
+
+## Recap
+
+- The phone and the server share one thing, a random **secret** delivered once in the QR code. The
+  setup page is the most sensitive page you have.
+- **HOTP** turns a secret and a counter into six digits: HMAC-SHA-1, dynamic truncation, modulo a
+  million. Codes are strings, leading zeros included.
+- **TOTP** makes the counter `floor(unix_time / 30)`, which is why the app works offline: it needs
+  only the secret and its own clock.
+- An **acceptance window** absorbs typing time; **drift tracking**, with a fallback window around
+  the server's clock, absorbs drifting phones.
+- Each code works once (**replay guard** as a conditional write), and an attempt limit only holds if
+  failures are counted beyond the gap between the user's logins.
+- The server must keep secrets readable, so a table leak is total: **envelope encryption** and a
+  single decrypting verifier. And no TOTP setup stops a real-time phishing relay; passkeys do.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'passkeys', why: 'The phishing-resistant factor: origin-bound signatures with WebAuthn.' },
+  { slug: 'password-storage', why: 'Slow salted hashes, and why they work for passwords and recovery codes but not TOTP secrets.' },
+  { slug: 'encryption-at-rest', why: 'Envelope encryption and KMS, for the secrets table.' },
+  { slug: 'secrets-management', why: 'Keeping the master key and the verifier credentials out of reach.' },
+  { slug: 'rate-limiting', why: 'The machinery behind attempt limits and failure budgets.' },
+  { slug: 'sessions-vs-tokens', why: 'What the relay actually steals after MFA: the session.' },
+]} />
+
+## Further reading
+
+**Standards and official guidance**
+
+- [RFC 6238: TOTP (2011, in force)](https://www.rfc-editor.org/rfc/rfc6238) — the time step, the recommended window and the resynchronisation advice.
+- [RFC 4226: HOTP (2005, in force)](https://www.rfc-editor.org/rfc/rfc4226) — HMAC over a counter, dynamic truncation, secret length, throttling and the test vectors.
+- [RFC 2104: HMAC (1997, in force)](https://www.rfc-editor.org/rfc/rfc2104) — the keyed hash underneath.
+- [RFC 4648: Base32 (2006, in force)](https://www.rfc-editor.org/rfc/rfc4648) — the encoding of the setup key.
+- [NIST SP 800-63B-4 (August 2025)](https://pages.nist.gov/800-63-4/sp800-63b.html) — OTP verifier rules, the 100-failure limit, replay resistance and why OTP is not phishing-resistant.
+- [CISA: Implementing phishing-resistant MFA (2022)](https://www.cisa.gov/sites/default/files/publications/fact-sheet-implementing-phishing-resistant-mfa-508c.pdf) — where app-based OTP sits among MFA methods.
+- [W3C Web Authentication Level 3 (2026)](https://www.w3.org/TR/webauthn-3/) — how passkeys bind a signature to the origin.
+
+**Google Authenticator and other apps**
+
+- [Google Authenticator help (read November 2026)](https://support.google.com/accounts/answer/1066447) — offline codes, system time since version 7.0, transfer and sync.
+- [Google Security Blog: Authenticator sync (2023)](https://security.googleblog.com/2023/04/google-authenticator-now-supports.html) — why sync was added.
+- [Google: Key URI format (archived 2021)](https://github.com/google/google-authenticator/wiki/Key-Uri-Format) and [IETF draft otpauth URI (2023)](https://datatracker.ietf.org/doc/draft-linuxgemini-otpauth-uri/) — what the QR code contains.
+- [Android automatic time detection](https://source.android.com/docs/automotive/time/automatic_time_detection) — where a device's clock gets corrected from.
+- [The Hacker News: sync without end-to-end encryption (2023)](https://thehackernews.com/2023/04/google-authenticator-app-gets-cloud.html) and [TechCrunch (2023)](https://techcrunch.com/2023/04/24/google-authenticator-can-now-sync-2fa-codes-to-the-cloud/) — the sync launch and the concerns raised.
+- [Help Net Security: codes in Apple Passwords (2024)](https://www.helpnetsecurity.com/2024/10/15/how-to-create-verification-codes-in-apple-passwords-app/) — TOTP in iOS 18.
+
+**Incidents**
+
+- [Retool: when MFA isn't MFA (2023)](https://retool.com/blog/mfa-isnt-mfa) — a synced authenticator inside a phished account.
+- [Group-IB: 0ktapus (2022)](https://www.group-ib.com/blog/0ktapus/) — thousands of OTP codes relayed from fake login pages.
+- [Microsoft: AiTM phishing to BEC (2022)](https://www.microsoft.com/en-us/security/blog/2022/07/12/from-cookie-theft-to-bec-attackers-use-aitm-phishing-sites-as-entry-point-to-further-financial-fraud/) — stealing the session after MFA.
+- [Malwarebytes: the Reddit breach (2023)](https://www.malwarebytes.com/blog/news/2023/02/reddit-systems-compromised-by-phish-attack.-heres-what-you-need-to-do-next) — a fake intranet page that collected passwords and 2FA codes.
+
+**Code**
+
+- [Python `hmac.compare_digest`](https://docs.python.org/3/library/hmac.html#hmac.compare_digest) and [Node `crypto.timingSafeEqual`](https://nodejs.org/api/crypto.html#cryptotimingsafeequala-b) — constant-time comparison.

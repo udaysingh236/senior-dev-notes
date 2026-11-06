@@ -1,0 +1,50 @@
+---
+// Anatomy of the otpauth:// key URI inside the enrolment QR code.
+const rows = [
+  { y: 8, h: 56, code: ['otpauth://totp/'], note: 'type: time-based (or hotp)', tone: 'flow' },
+  { y: 74, h: 56, code: ['Example:uday@example.com'], note: 'label: the name in the app’s list', tone: 'flow' },
+  { y: 140, h: 78, code: ['?secret=ONSW42LPOJSGK5TO', 'N52GK4ZNMRSW23ZB'], note: '160 bits in Base32: the only part the maths uses', tone: 'bad' },
+  { y: 228, h: 56, code: ['&issuer=Example'], note: 'issuer, repeated for older apps', tone: 'flow' },
+  { y: 294, h: 78, code: ['&algorithm=SHA1', '&digits=6&period=30'], note: 'the defaults; some apps ignore other values', tone: 'muted' },
+];
+---
+
+<svg viewBox="0 0 400 380" width="100%" role="img" aria-labelledby="ga-uri-t ga-uri-d">
+  <title id="ga-uri-t">The parts of the key URI in the QR code</title>
+  <desc id="ga-uri-d">
+    The URI otpauth://totp/Example:uday@example.com?secret=ONSW42LPOJSGK5TON52GK4ZNMRSW23ZB&amp;issuer=Example&amp;algorithm=SHA1&amp;digits=6&amp;period=30,
+    split into its parts. The scheme and type say time-based. The label is the name shown in the app.
+    The secret, highlighted, is 160 bits written in Base32 and is the only part used to compute
+    codes. The issuer is repeated for older apps. Algorithm, digits and period are the defaults, and
+    some apps ignore other values.
+  </desc>
+  {
+    rows.map((r) => (
+      <g>
+        <rect
+          x="4"
+          y={r.y}
+          width="392"
+          height={r.h}
+          rx="6"
+          stroke-width={r.tone === 'bad' ? 2.5 : 1.5}
+          style={
+            r.tone === 'bad'
+              ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)'
+              : r.tone === 'muted'
+                ? 'fill: var(--viz-surface); stroke: var(--viz-stroke)'
+                : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'
+          }
+        />
+        {r.code.map((line, i) => (
+          <text x="14" y={r.y + 24 + i * 22} font-size="17" font-weight="600" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+            {line}
+          </text>
+        ))}
+        <text x="14" y={r.y + r.h - 10} font-size="15" style="fill: var(--viz-muted)">
+          {r.note}
+        </text>
+      </g>
+    ))
+  }
+</svg>

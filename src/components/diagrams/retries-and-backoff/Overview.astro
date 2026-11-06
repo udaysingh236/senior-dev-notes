@@ -1,0 +1,62 @@
+---
+// The sustaining loop behind a retry storm: a short trigger, then retries keep the server overloaded.
+// Numbers match the simulation on the page: 70% load, 1 s client timeout, 3 retries.
+const boxes = [
+  { y: 52, tone: 'warn', lines: ['Trigger: the server runs at half', 'speed for a few seconds'] },
+  { y: 136, tone: 'flow', lines: ['Queue wait passes the clients’', '1 s timeout: attempts fail'] },
+  { y: 240, tone: 'flow', lines: ['Clients retry: 70 requests/s', 'become up to 280 attempts/s'] },
+  { y: 324, tone: 'bad', lines: ['The server, at 100/s, works on', 'attempts nobody waits for'] },
+];
+const BX = 8;
+const BW = 300;
+const BH = 56;
+---
+
+<svg viewBox="0 0 400 440" width="100%" role="img" aria-labelledby="rb-ov-t rb-ov-d">
+  <title id="rb-ov-t">Retries keep an overload going after its cause has gone</title>
+  <desc id="rb-ov-d">
+    Four boxes in a loop. A trigger makes the server run at half speed for a few seconds. The queue
+    wait passes the clients' 1 second timeout, so attempts fail. Clients retry, so each request sends
+    up to 4 attempts: 280 attempts a second against a server that completes 100. The server spends
+    its capacity on attempts whose clients already gave up, which keeps the queue wait above the
+    timeout, and the loop returns to failing attempts. The trigger is not part of the loop: it can
+    end and the loop continues. A retry budget cuts the arrow from failure to retry; backoff only
+    moves the retries later.
+  </desc>
+  <defs>
+    <marker id="rb-ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="24" font-size="17" font-weight="700" style="fill: var(--viz-ink)">a retry storm feeds itself</text>
+
+  {boxes.map((b) => (
+    <g>
+      <rect x={BX} y={b.y} width={BW} height={BH} rx="8" stroke-width="2"
+        stroke-dasharray={b.tone === 'warn' ? '6 4' : undefined}
+        style={`fill: var(--viz-${b.tone}-soft); stroke: var(--viz-${b.tone})`} />
+      {b.lines.map((l, i) => (
+        <text x={BX + 12} y={b.y + 24 + i * 21} font-size="16" style="fill: var(--viz-ink)">{l}</text>
+      ))}
+    </g>
+  ))}
+
+  {/* Down arrows between boxes. */}
+  {[0, 1, 2].map((i) => (
+    <path d={`M${BX + 60} ${boxes[i].y + BH + 2} L${BX + 60} ${boxes[i + 1].y - 3}`} stroke-width="2" marker-end="url(#rb-ov-arrow)" style="stroke: var(--viz-ink)" />
+  ))}
+  <text x={BX + 72} y={boxes[0].y + BH + 19} font-size="14" style="fill: var(--viz-muted)">starts it</text>
+
+  {/* The brakes, on the arrow from failure to retry. */}
+  <text x={BX + 72} y={boxes[1].y + BH + 20} font-size="14" style="fill: var(--viz-ok)">budget: cuts this arrow to +10%</text>
+  <text x={BX + 72} y={boxes[1].y + BH + 38} font-size="14" style="fill: var(--viz-muted)">backoff: same arrow, later</text>
+
+  {/* The loop back up: what keeps it going. */}
+  <path d={`M${BX + BW + 2} ${boxes[3].y + BH / 2} L360 ${boxes[3].y + BH / 2} L360 ${boxes[1].y + BH / 2} L${BX + BW + 6} ${boxes[1].y + BH / 2}`}
+    fill="none" stroke-width="2.5" marker-end="url(#rb-ov-arrow)" style="stroke: var(--viz-bad)" />
+  <text x="372" y={(boxes[1].y + boxes[3].y + BH) / 2} font-size="15" text-anchor="middle" transform={`rotate(-90 372 ${(boxes[1].y + boxes[3].y + BH) / 2})`}
+    style="fill: var(--viz-bad)">keeps going</text>
+
+  <text x="4" y="420" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">the trigger is outside the loop: it can end</text>
+</svg>

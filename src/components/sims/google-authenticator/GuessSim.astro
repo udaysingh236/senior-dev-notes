@@ -1,0 +1,19 @@
+---
+// A year of an attacker with the password guessing codes against an attempt limit. See guess-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="ga-guess"
+  title="Guessing codes against a lock: what “consecutive” costs"
+  description="Two panels. The top strip shows the last 48 hours of the server's consecutive-failure counter: an amber line that climbs as the attacker guesses 10 codes a minute, a red dashed line where the authenticator would lock, and blue plus signs where the real user logged in and reset the counter. The attacker always stops one short of the lock. The bottom chart runs over a year: a red line is the chance the attacker has guessed a valid code so far, a faint dashed line shows where it will be by the end of the year, and a red cross marks the day this run's attacker got in, if it did."
+  watchFor="At the defaults (±1 window, lock at 100, the user logging in 3 times a day, consecutive failures only) the strip is a saw-tooth: 99 failures, a wait, a reset at the user's login, 99 more. The chance climbs to about 28% in a year. Set 'User logs in' to never: the attacker gets 99 guesses in total and the chance stays at 0.03%. Put it back and switch 'Failures counted' to '+ per 30 days': the saw-tooth stops after the first climb each month and the year ends near 0.4%. Then set 'Lock after' to 'no limit': this run's attacker is in within three weeks. Widening the window raises every curve in proportion."
+  viewBox="0 0 400 306"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createGuessModel } from './guess-model';
+
+  mountAll('ga-guess', createGuessModel);
+</script>

@@ -1,0 +1,84 @@
+---
+// The life of one idempotency key row: claimed by an atomic insert, held under a lease while the
+// work runs, finished with the stored response, deleted when its retention ends. On the right,
+// what a request carrying the same key gets in each state.
+const X = 8;
+const W = 178;
+const H = 62;
+const states = [
+  { y: 50, tone: 'stroke', title: 'no row', lines: ['key never seen,', 'or expired'] },
+  { y: 160, tone: 'warn', title: 'in progress', lines: ['owner, lease until,', 'recovery point'] },
+  { y: 270, tone: 'ok', title: 'finished', lines: ['status and body', 'stored'] },
+  { y: 380, tone: 'stroke', title: 'deleted', lines: ['retention ended', '(24 h, 30 days…)'] },
+];
+const arrows = [
+  { from: 0, label: 'INSERT … ON CONFLICT', sub: 'DO NOTHING wins' },
+  { from: 1, label: 'last phase commits', sub: 'with the response' },
+  { from: 2, label: 'purge job', sub: '' },
+];
+const answers = [
+  { y: 146, tone: 'warn', lines: ['409: in progress,', 'retry the same key'] },
+  { y: 192, tone: 'flow', lines: ['lease over: take it', 'over and resume'] },
+  { y: 256, tone: 'ok', lines: ['same body: replay', 'the stored response'] },
+  { y: 302, tone: 'bad', lines: ['other body: 422,', 'a client bug'] },
+];
+---
+
+<svg viewBox="0 0 400 468" width="100%" role="img" aria-labelledby="ik-ov-t ik-ov-d">
+  <title id="ik-ov-t">The life of an idempotency key row</title>
+  <desc id="ik-ov-d">
+    Four states down the left. No row: the key was never seen or has expired. An insert with ON
+    CONFLICT DO NOTHING claims it, and only one concurrent insert can win. In progress: the row
+    holds the owner, a lease end time and a recovery point. When the last phase commits, the row
+    becomes finished, with the status and body stored. A purge job deletes it when retention ends.
+    On the right, what a request with the same key gets: while in progress, 409 and retry the same
+    key; once the lease is over, it takes the row over and resumes; when finished, with the same
+    body, a replay of the stored response; with a different body, 422.
+  </desc>
+  <defs>
+    <marker id="ik-ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="24" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one key row, four states</text>
+  <text x="222" y="116" font-size="14" style="fill: var(--viz-muted)">a repeat with this key gets:</text>
+
+  {states.map((s) => (
+    <g>
+      <rect x={X} y={s.y} width={W} height={H} rx="8" stroke-width="2"
+        stroke-dasharray={s.tone === 'stroke' ? '6 4' : undefined}
+        style={`fill: ${s.tone === 'stroke' ? 'none' : `var(--viz-${s.tone}-soft)`}; stroke: var(--viz-${s.tone === 'stroke' ? 'muted' : s.tone})`} />
+      <text x={X + 12} y={s.y + 22} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{s.title}</text>
+      {s.lines.map((l, i) => (
+        <text x={X + 12} y={s.y + 41 + i * 17} font-size="14" style="fill: var(--viz-muted)">{l}</text>
+      ))}
+    </g>
+  ))}
+
+  {arrows.map((a) => {
+    const y1 = states[a.from].y + H + 2;
+    const y2 = states[a.from + 1].y - 3;
+    return (
+      <g>
+        <path d={`M${X + 30} ${y1} L${X + 30} ${y2}`} stroke-width="2" marker-end="url(#ik-ov-arrow)" style="stroke: var(--viz-ink)" />
+        <text x={X + 42} y={y1 + 19} font-size="14" style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">{a.label}</text>
+        {a.sub && <text x={X + 42} y={y1 + 37} font-size="14" style="fill: var(--viz-muted)">{a.sub}</text>}
+      </g>
+    );
+  })}
+
+  {/* What a repeat with the same key gets, beside the state that decides it. */}
+  {answers.map((a) => (
+    <g>
+      <path d={`M${X + W + 4} ${a.y + 20} L218 ${a.y + 20}`} stroke-width="1.5" stroke-dasharray="3 3" style="stroke: var(--viz-muted)" />
+      <rect x="220" y={a.y} width="176" height="40" rx="6" stroke-width="1.5"
+        style={`fill: var(--viz-${a.tone}-soft); stroke: var(--viz-${a.tone})`} />
+      {a.lines.map((l, i) => (
+        <text x="230" y={a.y + 17 + i * 17} font-size="14" style="fill: var(--viz-ink)">{l}</text>
+      ))}
+    </g>
+  ))}
+
+  <text x="4" y="462" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">the row is a lock and a log: who works on it, how far they got</text>
+</svg>
