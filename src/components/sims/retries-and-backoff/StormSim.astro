@@ -1,0 +1,19 @@
+---
+// An open system with one queue: a short trigger, then each retry policy either recovers or stays stuck. See storm-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="retries-storm"
+  title="A server slows down for a few seconds. Does it come back?"
+  description="New requests arrive at a steady rate whatever happens to earlier ones. One server completes 100 attempts a second from a first-in, first-out queue. Clients give up on an attempt after 1 s, but the attempt stays in the queue, and the server still spends time on it. At 5 s the server drops to half capacity for the trigger length, then returns to full speed. The chart shows attempts per second over the last 20 s, split into first tries (blue) and retries (amber), with the requests that succeeded in time as a green line and capacity as a dashed red line. The bar below it is how long a new attempt waits in the queue, against the 1 s clients wait."
+  watchFor="At the defaults (backoff with jitter, 3 retries, 70% load, a 6 s trigger) the server recovers its speed at 11 s and never recovers its users: the queue wait stays above 1 s, every answer arrives after its client gave up, and attempts settle at about 4 per request. Switch the policy to the retry budget and press Reset: the same trigger costs a few seconds, then everything is answered. Back on backoff, set the trigger to 2 s: it recovers. The trigger's length decides whether the system tips over; the retries decide whether it stays there. Try 90% load with the budget: even 1.1× is too much, which is the job of load shedding."
+  viewBox="0 0 400 300"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createStormModel } from './storm-model';
+
+  mountAll('retries-storm', createStormModel);
+</script>

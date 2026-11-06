@@ -1,0 +1,42 @@
+---
+// A hedged request: a second copy goes to another replica if the first has not answered by the
+// p95 latency, and whichever answers first wins. Illustrative numbers: median 12 ms, p95 40 ms,
+// the first copy stuck behind a slow disk until 180 ms.
+const X0 = 8;
+const S = 2; // drawing units per ms; 0 to 190 ms
+const x = (ms: number) => X0 + ms * S;
+---
+
+<svg viewBox="0 0 400 290" width="100%" role="img" aria-labelledby="rb-he-t rb-he-d">
+  <title id="rb-he-t">A hedged request races a second copy after the p95</title>
+  <desc id="rb-he-d">
+    A timeline from 0 to 190 milliseconds. The first copy of a read goes to replica A at 0 and is
+    stuck behind a slow disk; it would answer at 180 milliseconds. At 40 milliseconds, the p95
+    latency, the client has no answer and sends a second copy to replica B, which answers 12
+    milliseconds later, at 52. The client uses B's answer and cancels the copy on A. Only the 5% of
+    requests slower than the p95 send a second copy, so the extra load is about 5%.
+  </desc>
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one slow replica, one hedge</text>
+
+  <text x="4" y="62" font-size="16" style="fill: var(--viz-ink)">copy 1 → replica A</text>
+  <rect x={x(0)} y="72" width={(52 - 0) * S} height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <rect x={x(52)} y="72" width={(180 - 52) * S} height="20" rx="3" stroke-width="1.5" stroke-dasharray="4 3" style="fill: none; stroke: var(--viz-muted)" />
+  <text x={x(56)} y="87" font-size="14" style="fill: var(--viz-muted)">cancelled; would have taken 180 ms</text>
+
+  <text x="4" y="132" font-size="16" style="fill: var(--viz-ink)">copy 2 → replica B, sent at the p95</text>
+  <rect x={x(40)} y="142" width={12 * S} height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x={x(56)} y="157" font-size="14" style="fill: var(--viz-ok)">answers at 52 ms: used</text>
+
+  <path d={`M${x(40)} 66 L${x(40)} 100 M${x(40)} 138 L${x(40)} 182`} stroke-width="1.5" stroke-dasharray="5 3" style="stroke: var(--viz-flow)" />
+  <text x={x(40) + 4} y="196" font-size="14" style="fill: var(--viz-flow)">p95 = 40 ms: no answer yet, send copy 2</text>
+
+  <path d={`M${x(0)} 224 L${x(190)} 224`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  {[0, 50, 100, 150].map((ms) => (
+    <g>
+      <path d={`M${x(ms)} 220 L${x(ms)} 228`} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+      <text x={x(ms)} y="246" font-size="15" text-anchor={ms === 0 ? 'start' : 'middle'}
+        style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">{ms} ms</text>
+    </g>
+  ))}
+  <text x="4" y="278" font-size="15" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">only the slowest 5% send a second copy</text>
+</svg>
