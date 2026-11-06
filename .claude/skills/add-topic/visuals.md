@@ -8,7 +8,9 @@ Every page should let the reader see the idea, and where it moves, watch it move
 
 ## Minimum per topic
 
-- One overview (hero) diagram at "The core idea".
+- One mental-model diagram in Part 1 ("The idea in plain words"): the simplest picture of the
+  idea, a handful of boxes, plain labels, no internals. A fresher should understand it from its
+  caption alone.
 - One diagram per major mechanism or variant.
 - At least one interactive simulation, or a step-through when the concept is a sequence rather than
   something that changes over time.
@@ -19,14 +21,20 @@ Every page should let the reader see the idea, and where it moves, watch it move
 - Algorithm topics: one sim mode per algorithm, plus a compare mode that runs them side by side on
   the same input when that teaches something.
 - Protocol and flow topics (TLS, OAuth, DCR, 2PC): a step-through sequence diagram.
-- Comparison pages (`template-compare.mdx`): one overlap (hero) diagram, one small diagram per
+- Comparison pages (`template-compare.mdx`): the Part 1 mental-model picture of all the concepts
+  together, then in Part 2 one overlap diagram, one small diagram per
   concept drawn in the same layout so they can be compared at a glance, and a decision-flow
   diagram or list. Add a sim where the concepts behave differently under load (for example layer 4
   vs layer 7 balancing with long-lived connections).
-- Case studies (`template-case-study.mdx`): one architecture (hero) diagram of at most ~8 boxes,
+- Case studies (`template-case-study.mdx`): the Part 1 mental-model diagram, then in Part 2 one
+  architecture diagram of at most ~8 boxes,
   one diagram per deep dive, and a sim for each of the one or two hardest mechanisms (for a booking
   system: the inventory data structure, and two transactions racing for the same row). A
   step-through only where the order of messages is itself the hard part.
+
+- Byte-, bit- or field-level diagrams (a hash output, a packet header, a bitmask) only in Part 2,
+  after the concept has had its four steps in prose. Label what the reader is looking at and why
+  in plain words on the diagram itself.
 
 ## Diagram rules (SVG)
 

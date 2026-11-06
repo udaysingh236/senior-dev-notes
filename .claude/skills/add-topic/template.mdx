@@ -21,37 +21,66 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
 
 {/*
   Section order is fixed. Heading wording can be adapted to the topic.
-  Word counts are ceilings, not targets. The page usually reads in 30–45 minutes, 50 at most
-  (style-guide.md, "Length"), with at most ~150 lines of code. Delete every comment before publishing.
+  Every page has two parts (style-guide.md, "Owner's standing feedback"):
+  Part 1 "Understand it" (sections 1-4) explains the whole idea to a fresher in plain words;
+  Part 2 "How it really works" (sections 5 onwards) is the depth, building on Part 1.
+  Word counts are guides, not ceilings for explanation. The page usually reads in 40-60 minutes,
+  75 at most (style-guide.md, "Length"), with at most ~150 lines of code.
+  Every new concept gets the four steps (style-guide.md, "Introducing a new concept").
+  Delete every comment before publishing.
 */}
 
-{/* 1. THE HOOK (40–120 words)
-    A sharp technical question or surprising fact the reader has never thought about, which the
-    page answers. No narrative, no characters (style-guide.md, "The opening"). */}
+{/* ===================== PART 1: UNDERSTAND IT (8-15 minutes) ===================== */}
+
+{/* 1. THE QUESTION (40-100 words)
+    A question a fresher understands and wants answered, using only words they already know.
+    No narrative, no characters (style-guide.md, "The opening"). The answer starts in section 2,
+    on the same screen. */}
 ## One client, one bad minute
 
-{/* 2. THE PROBLEM, PROPERLY (300–500 words)
-    Why this problem exists at all and what it costs, with numbers. Define the key terms here.
-    Skip anything a working engineer already knows. */}
-## Why this problem exists
-
-{/* 3. WHAT PEOPLE TRY FIRST (300–450 words)
-    The naive fix, shown in a short snippet or diagram, and exactly how and why it breaks.
-    Also: the neighbouring concepts this gets confused with, and the difference. */}
-## The obvious fix, and why it breaks
-
-{/* 4. THE CORE IDEA (150–300 words)
-    The precise idea in one paragraph. An analogy only if it truly helps, and where it stops working.
-    The hero diagram goes here. */}
-## The core idea
+{/* 2. THE IDEA IN PLAIN WORDS (500-900 words)
+    The whole idea from start to finish, told with ONE running example and real numbers, in plain
+    words. What problem it solves, what people would try first in one sentence, and how the idea
+    fixes it. No jargon: any term needed gets the four steps. An everyday analogy if it helps,
+    and where it stops working.
+    The mental-model diagram goes here: the simplest picture, a handful of boxes, no internals. */}
+## The idea in plain words
 
 <Figure caption="One sentence that repeats the key point of the diagram in words.">
   <Overview />
 </Figure>
 
-{/* 5. HOW IT WORKS (the longest section, 2,500–3,000 words across all H3s)
+{/* 3. THE BUILDING BLOCKS (0-900 words; skip if section 2 needed none)
+    One H3 per concept the rest of the page relies on, each with the four steps: what it is,
+    why it exists, a worked example with numbers, then the technical version.
+    For rate limiting: a request rate, a burst, a counter, a time window. */}
+## The building blocks
+
+### What "rate" and "burst" mean
+
+{/* 4. IF YOU STOP HERE
+    3-5 bullets a fresher could repeat to a friend. This closes Part 1. */}
+:::tip[If you stop here]
+- Bullet a fresher could repeat.
+:::
+
+{/* ===================== PART 2: HOW IT REALLY WORKS ===================== */}
+
+{/* 5. GOING DEEPER (250-500 words)
+    Opens with the sharp question for experienced readers (2-4 sentences): the hard problem the
+    rest of the page answers. Then the problem properly, with numbers and costs. Build on Part 1;
+    do not restate it. */}
+## Going deeper
+
+{/* 6. WHAT PEOPLE TRY FIRST (300-450 words)
+    The naive fix, shown in a short snippet or diagram, and exactly how and why it breaks.
+    Also: the neighbouring concepts this gets confused with, and the difference. */}
+## The obvious fix, and why it breaks
+
+{/* 7. HOW IT WORKS (the longest section, 2,500-4,000 words across all H3s)
     One H3 per mechanism, algorithm or variant. For each:
-    intuition → mechanics step by step → diagram, sim or step-through → worked example with numbers
+    the four steps for any new concept it needs → intuition → mechanics step by step, one idea per
+    paragraph → diagram, sim or step-through → worked example with numbers
     → strengths and weaknesses → when to pick it.
     Use <StepThrough> for flows and handshakes. */}
 ## How it works, piece by piece
@@ -68,13 +97,13 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
 
 ### Sliding window counter
 
-{/* 6. SIDE BY SIDE
+{/* 8. SIDE BY SIDE
     (200–350 words) A comparison table of the variants across 4–6 dimensions (accuracy, memory, burst handling,
     complexity, distributed-friendliness…), then a short "how to choose" paragraph.
     If there is a compare mode in the sim, show it here. */}
 ## Choosing between them
 
-{/* 7. BUILD IT
+{/* 9. BUILD IT
     (200–400 words) Naive → correct → production-shaped. Python and JavaScript in synced tabs.
     At most ~150 lines on the page across all snippets in one language; the rest stays in
     examples/<slug>/, linked. Runnable twin for every snippet. */}
@@ -93,25 +122,25 @@ import RateLimiterSim from '../../../components/sims/rate-limiting/RateLimiterSi
   </TabItem>
 </Tabs>
 
-{/* 8. IN THE REAL WORLD
+{/* 10. IN THE REAL WORLD
     (400–600 words) How 3 real systems, companies or tools do it (docs, engineering blogs, open-source code).
     Config snippets where useful. Facts that can change get "as of <Month YYYY>". */}
 ## How real systems do it
 
-{/* 9. FROM THE TRENCHES
+{/* 11. FROM THE TRENCHES
     (400–600 words) The 4–5 gotchas that hurt most: failure modes, sourced real incidents, debugging tips.
     :::caution for mistakes, :::danger for outage or security risks. */}
 ## Gotchas and war stories
 
-{/* 10. TRADE-OFFS
+{/* 12. TRADE-OFFS
     (200–350 words) What it costs, what it doesn't solve, and when NOT to use it. */}
 ## Trade-offs and when not to use it
 
-{/* 11. INTERVIEW CORNER
+{/* 13. INTERVIEW CORNER
     (250–400 words) How this shows up in interviews, 3–4 typical questions, and what a strong answer covers. */}
 ## Interview corner
 
-{/* 12. CHECK YOURSELF
+{/* 14. CHECK YOURSELF
     4–5 questions. Answers hidden in <details>, short. Mix recall with "what would happen if…". */}
 ## Check yourself
 
@@ -122,11 +151,11 @@ Answer, with the reasoning.
 
 </details>
 
-{/* 13. RECAP
+{/* 15. RECAP
     6 bullets a reader could revise from the night before an interview. */}
 ## Recap
 
-{/* 14. WHERE TO GO NEXT
+{/* 16. WHERE TO GO NEXT
     One item per `next` slug, each with a line on why it's the natural next step.
     <NextTopics> resolves slugs to the correct page URLs and shows
     unwritten topics as "coming soon" instead of broken links. */}
@@ -137,7 +166,7 @@ Answer, with the reasoning.
   { slug: 'circuit-breakers', why: 'Protecting yourself from a dependency that is drowning.' },
 ]} />
 
-{/* 15. FURTHER READING
+{/* 17. FURTHER READING
     Every source used, grouped: Specs & official docs / Engineering blogs / Explainers & talks.
     One line each on what it's good for. */}
 ## Further reading

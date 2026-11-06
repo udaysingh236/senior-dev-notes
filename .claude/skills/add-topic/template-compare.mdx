@@ -20,23 +20,50 @@ import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
 {/*
   Use this template when the page's job is to separate 2–4 concepts that readers confuse.
   The deep mechanics of each concept live on its own page; this page links to them and does
-  not repeat them. Reading budget: usually 30–40 minutes, never padded (style-guide.md, "Length").
+  not repeat them.
+  Every page has two parts (style-guide.md, "Owner's standing feedback"):
+  Part 1 "Understand it" (sections 1-3) explains each concept to a fresher in plain words;
+  Part 2 "How it really works" (sections 4 onwards) compares them in depth.
+  Reading budget: usually 35–50 minutes, 60 at most, never padded (style-guide.md, "Length").
+  Every new concept gets the four steps (style-guide.md, "Introducing a new concept").
   Section order is fixed. Heading wording can be adapted. Delete every comment before publishing.
 */}
 
-{/* 1. THE HOOK (40–120 words)
-    A sharp question that shows the concepts are not what the reader thinks, for example a
-    behaviour one of them has that the others don't. No narrative (style-guide.md, "The opening"). */}
+{/* ===================== PART 1: UNDERSTAND IT (8-15 minutes) ===================== */}
+
+{/* 1. THE QUESTION (40–100 words)
+    A question a fresher understands: why are these different things, when they seem to do the
+    same job? Only words the reader knows. No narrative (style-guide.md, "The opening"). */}
 ## The question
 
-{/* 2. WHAT THEY HAVE IN COMMON (200–400 words)
-    The shared baseline, explained once: what all of them are, where they sit, what problem they all
-    touch. After this section the reader should see why the names get mixed up. */}
+{/* 2. EACH ONE IN PLAIN WORDS (150–300 words per concept)
+    One short H3 per concept: what it is in one plain sentence, why it exists, and the same running
+    example (one request, one user) passing through it. An everyday analogy if it helps, and where
+    it stops working. Then the mental-model diagram: all of them in one simple picture. */}
+## Each one in plain words
+
+{/* 3. IF YOU STOP HERE
+    One bullet per concept ("X is for…"), plus one on how they relate. This closes Part 1. */}
+:::tip[If you stop here]
+- X is for…
+:::
+
+{/* ===================== PART 2: HOW IT REALLY WORKS ===================== */}
+
+{/* 4. GOING DEEPER (60–150 words)
+    The sharp question for experienced readers: a behaviour one of them has that the others
+    don't, which the rest of the page explains. */}
+## Going deeper
+
+{/* 5. WHAT THEY HAVE IN COMMON (200–400 words)
+    The shared baseline in depth: what all of them can see and change, where they sit, what
+    problem they all touch. Build on Part 1, do not restate it. After this section the reader
+    should see exactly why the names get mixed up. */}
 ## What they have in common
 
-{/* 3. EACH ONE ON ITS OWN (250–500 words per concept)
+{/* 6. EACH ONE ON ITS OWN (250–500 words per concept)
     One H3 per concept, same shape every time so the reader can compare:
-    its one job in a sentence → what it can see (layer, headers, identity) → what it can change
+    the four steps for any new term → what it can see (layer, headers, identity) → what it can change
     → a small diagram → typical tools → "reach for it when…" → link to its deep page.
     No deep mechanics here; that is what the deep page is for. */}
 ## Each one on its own
@@ -47,7 +74,7 @@ import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
 
 ### API gateway
 
-{/* 4. HOW THEY OVERLAP (200–400 words)
+{/* 7. HOW THEY OVERLAP (200–400 words)
     The hero diagram: nesting or layers that show how the concepts relate (for example a gateway is
     a reverse proxy with more jobs; load balancing is one of those jobs). Say plainly that these are
     roles, and one product can play several of them. */}
@@ -57,18 +84,18 @@ import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
   <Layers />
 </Figure>
 
-{/* 5. SIDE BY SIDE
+{/* 8. SIDE BY SIDE
     A comparison table, 6–8 rows (main job, network layer, what it knows about the request,
     typical features, where it sits, typical tools, cost of running it). Then a 2–3 sentence summary. */}
 ## Side by side
 
-{/* 6. HOW TO CHOOSE (200–400 words)
+{/* 9. HOW TO CHOOSE (200–400 words)
     A short decision flow: a numbered list or a small flowchart diagram. Start from the reader's
     situation ("one server", "many copies of one service", "many services and outside clients").
     Include "you may not need any of them yet". */}
 ## How to choose
 
-{/* 7. SEE IT IN ACTION
+{/* 10. SEE IT IN ACTION
     One small runnable demo that makes the difference visible, in Python and JavaScript tabs
     (for example one ~50-line process that forwards, then round-robins, then checks an API key,
     each role switched on in turn). Config snippets (nginx, Envoy, YAML) can follow on their own.
@@ -88,22 +115,22 @@ import Layers from '../../../components/diagrams/proxy-lb-gateway/Layers.astro';
   </TabItem>
 </Tabs>
 
-{/* 8. IN REAL STACKS (200–400 words)
+{/* 11. IN REAL STACKS (200–400 words)
     How they are stacked in a real system (CDN → L4 load balancer → gateway → services), and 2–3
     real products that play more than one role. Facts that can change get "as of <Month YYYY>". */}
 ## How real stacks combine them
 
-{/* 9. COMMON CONFUSIONS
+{/* 12. COMMON CONFUSIONS
     3–5 misconceptions, each as a short claim → why it's wrong → what's true.
     :::caution for mistakes that lead to bad designs. */}
 ## Common confusions
 
-{/* 10. INTERVIEW CORNER
+{/* 13. INTERVIEW CORNER
     Comparison questions are interview favourites. 3–4 typical questions and what a strong answer
     covers, including the follow-up an interviewer usually asks next. */}
 ## Interview corner
 
-{/* 11. CHECK YOURSELF
+{/* 14. CHECK YOURSELF
     4 scenario questions: "you have X, which do you add and why?". Answers hidden in <details>. */}
 ## Check yourself
 
@@ -114,11 +141,12 @@ Answer, with the reasoning.
 
 </details>
 
-{/* 12. RECAP
-    One line per concept ("X is for…"), then 2–3 bullets on how they relate. */}
+{/* 15. RECAP
+    The differences that matter under load, in 4–6 bullets. Part 1's "If you stop here" already
+    holds the one-line definitions; do not repeat them. */}
 ## Recap
 
-{/* 13. WHERE TO GO NEXT
+{/* 16. WHERE TO GO NEXT
     The deep page for each concept compared, plus anything else natural. */}
 ## Where to go next
 
@@ -128,7 +156,7 @@ Answer, with the reasoning.
   { slug: 'api-gateways', why: 'Auth, rate limits and routing for many services behind one front door.' },
 ]} />
 
-{/* 14. FURTHER READING
+{/* 17. FURTHER READING
     Every source used, grouped: Specs & official docs / Engineering blogs / Explainers & talks.
     One line each on what it's good for. */}
 ## Further reading

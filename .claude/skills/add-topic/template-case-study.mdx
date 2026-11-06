@@ -17,42 +17,85 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/irctc-tatkal-booking/MentalModel.astro';
 import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Architecture.astro';
 
 {/*
   Use this template when the page traces one real system end to end and pulls many concepts
-  together. Each concept gets a short deep dive here and links to its own page for the full story.
-  Reading budget: usually 35–50 minutes, never padded (see "Length" in style-guide.md).
-  Most companies publish little about their internals. Present the page as how you would build a
-  system like this, with one sentence near the top saying the internals are not public. Cite the
-  real rules and numbers you use (quotas, timings, scale) inline. Never present a guess as how the
-  company does it. Do not explain the product from the user's side; the reader has used it.
+  together. Each concept gets a deep dive here and links to its own page for the full story.
+  Every page has two parts (style-guide.md, "Owner's standing feedback"):
+  Part 1 "Understand it" (sections 1-4) explains how the system works to a fresher, in plain
+  words, before any architecture; Part 2 "How it really works" (sections 5 onwards) is the depth.
+  Reading budget: usually 45-65 minutes, 75 at most, never padded (style-guide.md, "Length").
+  Most companies publish little about their internals. Present Part 2 as how you would build a
+  system like this, with one sentence saying the internals are not public. Cite the real rules
+  and numbers you use (quotas, timings, scale) inline. Never present a guess as how the company
+  does it. Do not explain the product from the user's side; the reader has used it. Do explain
+  what happens underneath each thing the user does (what scanning a QR code stores, what the
+  server checks when a code is typed).
+  Every new concept gets the four steps (style-guide.md, "Introducing a new concept").
   Section order is fixed. Heading wording can be adapted. Delete every comment before publishing.
 */}
 
-{/* 1. THE HOOK (40–120 words)
-    The hardest technical question in this system, one the reader has never asked themselves
-    (one berth, three journeys, three requests in the same second: what is locked?). Then one
-    sentence: internals are not public, this is how we would build it. No narrative. */}
+{/* ===================== PART 1: UNDERSTAND IT (8-15 minutes) ===================== */}
+
+{/* 1. THE QUESTION (40-100 words)
+    A question a fresher understands and wants answered, about how the system can possibly work
+    (two machines agree on six digits without talking; a lakh people want 400 seats in one minute).
+    Only words the reader knows. No narrative. The answer starts in section 2. */}
 ## The question
 
-{/* 2. REQUIREMENTS AND NUMBERS (250–450 words)
+{/* 2. HOW IT WORKS, IN PLAIN WORDS (600-1,000 words)
+    The whole system from start to finish, following ONE running example (one user, one booking,
+    one code) through each thing the user does and what happens underneath it. Plain words, real
+    numbers, no jargon; any term needed gets the four steps. The trick at the heart of the system
+    stated plainly. The mental-model diagram goes here: the simplest picture of the idea, a handful
+    of boxes, no internals (not the architecture diagram). */}
+## How it works, in plain words
+
+<Figure caption="One sentence that repeats the key point of the diagram in words.">
+  <MentalModel />
+</Figure>
+
+{/* 3. THE BUILDING BLOCKS (0-900 words; skip if section 2 needed none)
+    One H3 per concept Part 2 relies on, each with the four steps. For a booking system: a row
+    lock, a transaction, a bitmask. For an authenticator: a shared secret, a one-way function,
+    Unix time. */}
+## The building blocks
+
+{/* 4. IF YOU STOP HERE
+    3-5 bullets a fresher could repeat to a friend. This closes Part 1. */}
+:::tip[If you stop here]
+- Bullet a fresher could repeat.
+:::
+
+{/* ===================== PART 2: HOW IT REALLY WORKS ===================== */}
+
+{/* 5. GOING DEEPER (60-150 words)
+    The hardest technical question in this system, one an experienced engineer has never asked
+    themselves (one berth, three journeys, three requests in the same second: what is locked?).
+    Then one sentence: internals are not public, this is how we would build it. */}
+## Going deeper
+
+{/* 6. REQUIREMENTS AND NUMBERS (250–450 words)
     Functional requirements (what the system must do) and non-functional ones (fairness, no double
     booking, availability at the peak). Back-of-the-envelope numbers: users at the peak, requests
     per second, seats per train, how long a seat stays held. Mark illustrative numbers as such. */}
 ## What the system has to do, in numbers
 
-{/* 3. THE BIG PICTURE (200–400 words)
-    The hero architecture diagram: at most ~8 boxes (edge, waiting room, app servers, inventory,
-    payments, notification). One paragraph per box on why it exists. */}
+{/* 7. THE BIG PICTURE (300–600 words)
+    The architecture diagram: at most ~8 boxes (edge, waiting room, app servers, inventory,
+    payments, notification). It comes after Part 1, never before. One paragraph per box: what it
+    is in plain words (four steps if it is a new concept, for example a KMS), and why it exists. */}
 ## The big picture
 
 <Figure caption="One sentence that repeats the key point of the diagram in words.">
   <Architecture />
 </Figure>
 
-{/* 4. DEEP DIVES (the bulk of the page, 4–6 H3s)
-    One H3 per hard problem. For each: the question → the naive answer and exactly how it fails →
+{/* 8. DEEP DIVES (the bulk of the page, 4–6 H3s, one idea per paragraph)
+    One H3 per hard problem. For each: the four steps for any new concept it needs → the question
+    → the naive answer and exactly how it fails →
     the data model or algorithm → a diagram or sim → numbers → edge cases and races → what it costs
     → link to the concept's own page. Show schemas, queries and lock scopes, not user screens.
     Sims go here and show mechanisms (an inventory grid, two transactions racing), not user flows. */}
@@ -70,12 +113,12 @@ import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Arch
 
 ### Payments: when money leaves but no ticket arrives
 
-{/* 5. WHEN THINGS GO WRONG (250–450 words)
+{/* 9. WHEN THINGS GO WRONG (250–450 words)
     Failure modes at the peak and what the user sees for each. Sourced real incidents only.
     :::danger for the ones that lose money or data. */}
 ## When things go wrong
 
-{/* 6. BUILD A PIECE (200–400 words)
+{/* 10. BUILD A PIECE (200–400 words)
     One small, runnable piece of the system, not the whole thing (for example a seat hold that
     expires, or an idempotent payment callback). Python and JavaScript in synced tabs. At most
     ~150 lines on the page per language; runnable twins in examples/<slug>/. */}
@@ -94,17 +137,17 @@ import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Arch
   </TabItem>
 </Tabs>
 
-{/* 7. TRADE-OFFS (200–400 words)
+{/* 11. TRADE-OFFS (200–400 words)
     The big choices in this design, what each one gives up, and what you would do differently at
     10× or 0.1× the scale. */}
 ## Trade-offs, and what we'd change
 
-{/* 8. INTERVIEW CORNER (250–400 words)
+{/* 12. INTERVIEW CORNER (250–400 words)
     The interview version of this system ("design a ticket booking system"), how to structure the
     45 minutes, and the 3–4 follow-up questions interviewers usually ask. */}
 ## Interview corner
 
-{/* 9. CHECK YOURSELF
+{/* 13. CHECK YOURSELF
     4–5 "what would happen if…" questions about this system. Answers hidden in <details>, short. */}
 ## Check yourself
 
@@ -115,11 +158,11 @@ Answer, with the reasoning.
 
 </details>
 
-{/* 10. RECAP
+{/* 14. RECAP
     6 bullets: one per hard part, plus the big lesson. */}
 ## Recap
 
-{/* 11. WHERE TO GO NEXT
+{/* 15. WHERE TO GO NEXT
     The concept pages the deep dives linked to, and related case studies. */}
 ## Where to go next
 
@@ -128,7 +171,7 @@ Answer, with the reasoning.
   { slug: 'load-shedding', why: 'What to drop first when the whole system is overloaded.' },
 ]} />
 
-{/* 12. FURTHER READING
+{/* 16. FURTHER READING
     Every source used, grouped: Official sources / Engineering blogs / News and explainers.
     One line each on what it's good for. */}
 ## Further reading
