@@ -519,7 +519,7 @@ Four failures to design for, and the answer to each:
 - **Late success.** The callback arrives after the hold expired. Try the allocation again for the
   same journey; if a berth fits, confirm; otherwise refund at once and record why.
 - **Duplicate callback.** The gateway retries. The callback handler looks up the payment ID first; a
-  repeat gets the same answer and does nothing. This is an [idempotency key](https://stripe.com/blog/idempotency)
+  repeat gets the same answer and does nothing. This is an [idempotency key](/messaging/idempotency-keys/)
   with the payment ID as primary key of an outcomes table.
 - **Lost callback.** No handler ever runs. A reconciliation job asks the gateway every few minutes
   for successful payments and settles any it has no outcome for, through the same handler.

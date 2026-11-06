@@ -119,7 +119,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 3 | Event-driven architecture | event-driven-architecture | 38 | planned |
 | 4 | Log-based messaging (Kafka) | log-based-messaging | new | planned |
 | 5 | Delivery semantics: at-most, at-least, exactly once | delivery-semantics | new | planned |
-| 6 | Idempotency keys | idempotency-keys | 1 | pilot |
+| 6 | Idempotency keys | idempotency-keys | 1 | published (2026-11-06) |
 | 7 | Transactional outbox | transactional-outbox | new | planned |
 | 8 | CQRS and event sourcing | cqrs-and-event-sourcing | new | planned |
 | 9 | Dead letter queues | dead-letter-queues | 39 | planned |

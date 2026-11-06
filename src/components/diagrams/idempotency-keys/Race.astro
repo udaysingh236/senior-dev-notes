@@ -1,0 +1,86 @@
+---
+// Two attempts with the same key, 100 ms apart, against a 300 ms bank call.
+// Top: check-then-act, both checks see no row, both charge. Bottom: insert first, the unique
+// index lets one insert win and the other gets a conflict before any money moves.
+// Times match examples/idempotency-keys (bank latency 0.3 s, duplicate 0.1 s later).
+const X0 = 70;
+const PX = 620; // px per second: 0.5 s spans 310 px
+const x = (s: number) => X0 + s * PX;
+const panels = [
+  {
+    y: 36,
+    title: 'check, then act',
+    rows: [
+      { label: 'try 1', bar: [0.01, 0.31], tone: 'flow', start: 'SELECT: none', end: 'INSERT ✓', endTone: 'ok', labelAbove: true },
+      { label: 'try 2', bar: [0.11, 0.41], tone: 'bad', start: 'SELECT: none', end: 'INSERT ✗ unique', endTone: 'bad', labelAbove: false },
+    ],
+    note: 'both checks ran before either insert: two charges',
+    noteTone: 'bad',
+  },
+  {
+    y: 228,
+    title: 'insert first',
+    rows: [
+      { label: 'try 1', bar: [0.01, 0.31], tone: 'flow', start: 'INSERT ✓', end: 'finish ✓', endTone: 'ok', labelAbove: true },
+      { label: 'try 2', bar: null, tone: 'warn', start: 'INSERT: conflict → 409', end: '', endTone: 'warn', labelAbove: false },
+    ],
+    note: 'the index lets one insert win: one charge',
+    noteTone: 'ok',
+  },
+];
+const starts = [0, 0.1];
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="ik-race-t ik-race-d">
+  <title id="ik-race-t">Check-then-act against insert-first, with two attempts 100 ms apart</title>
+  <desc id="ik-race-d">
+    Two timelines from 0 to 500 milliseconds. Try 1 arrives at 0 and try 2, with the same key, at
+    100 ms; the bank call takes 300 ms. Top, check then act: both attempts run SELECT and find no
+    row, because try 1 only inserts the key at 310 ms. Both call the bank, so the customer is
+    charged twice, and try 2's insert fails on the unique constraint after its charge. Bottom,
+    insert first: try 1 inserts the key row before calling the bank. Try 2's insert conflicts with
+    it at 100 ms and gets a 409 before any money moves; only one charge happens.
+  </desc>
+
+  {/* Time axis, shared by both panels. */}
+  {[0, 0.1, 0.2, 0.3, 0.4, 0.5].map((s) => (
+    <g>
+      <line x1={x(s)} y1="30" x2={x(s)} y2="394" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+      <text x={x(s)} y="412" font-size="14" text-anchor="middle" style="font-family: var(--sl-font-mono); fill: var(--viz-muted)">{s * 1000}</text>
+    </g>
+  ))}
+  <text x="4" y="412" font-size="14" style="fill: var(--viz-muted)">ms</text>
+
+  {panels.map((p) => (
+    <g>
+      <text x="4" y={p.y} font-size="17" font-weight="700" style="fill: var(--viz-ink)">{p.title}</text>
+      {p.rows.map((r, i) => {
+        const cy = p.y + 46 + i * 56;
+        const t0 = starts[i];
+        return (
+          <g>
+            <text x="4" y={cy + 5} font-size="15" style="fill: var(--viz-ink)">{r.label}</text>
+            <line x1={x(0)} y1={cy} x2={x(0.5)} y2={cy} stroke-width="1" style="stroke: var(--viz-stroke)" />
+            {r.bar && (
+              <g>
+                <rect x={x(r.bar[0])} y={cy - 9} width={x(r.bar[1]) - x(r.bar[0])} height="18" rx="4" stroke-width="1.5"
+                  style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+                <text x={(x(r.bar[0]) + x(r.bar[1])) / 2} y={cy + 5} font-size="13" text-anchor="middle" style="fill: var(--viz-ink)">bank charge</text>
+              </g>
+            )}
+            <circle cx={x(t0)} cy={cy} r="5" stroke-width="1.5" style={`fill: var(--viz-surface); stroke: var(--viz-${r.bar ? 'ink' : r.tone})`} />
+            <text x={x(t0)} y={r.labelAbove ? cy - 16 : cy + 26} font-size="14" style={`font-family: var(--sl-font-mono); fill: var(--viz-${r.bar ? 'ink' : r.tone})`}>{r.start}</text>
+            {r.bar && r.end && (
+              <g>
+                <circle cx={x(r.bar[1] + 0.01)} cy={cy} r="5" style={`fill: var(--viz-${r.endTone})`} />
+                <text x={Math.min(x(r.bar[1] + 0.01), 396)} y={cy - 16} font-size="14" text-anchor="end"
+                  style={`font-family: var(--sl-font-mono); fill: var(--viz-${r.endTone})`}>{r.end}</text>
+              </g>
+            )}
+          </g>
+        );
+      })}
+      <text x="4" y={p.y + 156} font-size="15" style={`font-family: var(--note-font-display); font-style: italic; fill: var(--viz-${p.noteTone})`}>{p.note}</text>
+    </g>
+  ))}
+</svg>
