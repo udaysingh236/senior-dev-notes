@@ -206,7 +206,7 @@ message-queues → replication → logging → slis-slos-error-budgets
 
 ## 13. AI-era systems — `ai-systems`
 
-This track grows as new things are learned. Add to it with `/add-topic`.
+How the systems around AI models work: tool protocols, retrieval, vector search, caching and the limits of model APIs.
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
