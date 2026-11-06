@@ -153,15 +153,16 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 4 | OAuth 2.0 and OpenID Connect | oauth-and-oidc | 46 | planned |
 | 5 | JWTs and key rotation | jwt-and-key-rotation | 47 | planned |
 | 6 | DPoP: sender-constrained tokens | dpop | new | published (2026-10-28) |
-| 7 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
-| 8 | Secrets management | secrets-management | 19 | planned |
-| 9 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
-| 10 | SQL injection | sql-injection | 42 | planned |
-| 11 | Cross-site scripting (XSS) | xss | 43 | planned |
-| 12 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
-| 13 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
-| 14 | Web application firewalls | waf | 52 | planned |
-| 15 | DDoS protection | ddos-protection | 53 | planned |
+| 7 | Passkeys and WebAuthn | passkeys | new | planned |
+| 8 | IAM and least privilege | iam-and-least-privilege | 48 | planned |
+| 9 | Secrets management | secrets-management | 19 | planned |
+| 10 | Encryption at rest and key management | encryption-at-rest | 50 | planned |
+| 11 | SQL injection | sql-injection | 42 | planned |
+| 12 | Cross-site scripting (XSS) | xss | 43 | planned |
+| 13 | Cross-site request forgery (CSRF) | csrf | 44 | planned |
+| 14 | Server-side request forgery (SSRF) | ssrf | 45 | planned |
+| 15 | Web application firewalls | waf | 52 | planned |
+| 16 | DDoS protection | ddos-protection | 53 | planned |
 
 ## 10. Performance & runtime — `performance`
 
@@ -232,6 +233,7 @@ Each case study ties many concepts together and links back to their pages.
 | 7 | Design a distributed cache | distributed-cache | new | planned |
 | 8 | Design a web crawler | web-crawler | new | planned |
 | 9 | How IRCTC Tatkal booking works | irctc-tatkal-booking | new | published (2026-10-22) |
+| 10 | How Google Authenticator works (TOTP) | google-authenticator | new | published (2026-11-06) |
 
 ## Inbox
 
@@ -240,4 +242,3 @@ one into its track's table when the page is written. Bullets, not a table: the s
 only the track tables above.
 
 
-- 2026-11-06 · How Google Authenticator works (TOTP) · `case-studies/google-authenticator` · case-study — note: how the code on the phone matches the one the server computes, and how it gives the right number even without internet

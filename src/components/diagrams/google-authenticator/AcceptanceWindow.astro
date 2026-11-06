@@ -1,0 +1,57 @@
+---
+// The ±1 acceptance window around the server's step, and the replay guard that cuts off
+// every step at or before the last one accepted.
+const steps = [
+  { n: 'T−2', code: '…', state: 'out' },
+  { n: 'T−1', code: '826528', state: 'used' },
+  { n: 'T', code: '049719', state: 'ok' },
+  { n: 'T+1', code: '506029', state: 'ok' },
+  { n: 'T+2', code: '…', state: 'out' },
+];
+const W = 78.4;
+const style = (s: string) =>
+  s === 'ok'
+    ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'
+    : s === 'used'
+      ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)'
+      : 'fill: var(--viz-surface); stroke: var(--viz-stroke)';
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="ga-aw-t ga-aw-d">
+  <title id="ga-aw-t">The acceptance window and the replay guard</title>
+  <desc id="ga-aw-d">
+    Five steps around the server's current step T. A bracket marks the window of plus or minus one
+    step: T−1, T and T+1. Step T−1 is crossed out in red because the user already logged in with its
+    code, so last_step equals T−1 and every step at or before it is refused. Steps T and T+1 are
+    green and still accepted. Steps outside the window are grey. Below, the two rules: accept a code
+    whose step is inside the window, and only if that step is greater than last_step, then store it.
+  </desc>
+
+  <text x="200" y="22" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">window ±1 around the server’s step T</text>
+  <path d={`M${4 + W + 2} 44 V34 H${4 + 4 * W - 6} V44`} fill="none" stroke-width="2" style="stroke: var(--viz-ink)" />
+
+  {
+    steps.map((s, i) => (
+      <g>
+        <rect x={4 + i * W} y="52" width={W - 6} height="92" rx="6" stroke-width={s.state === 'out' ? 1.2 : 2.5} style={style(s.state)} />
+        <text x={4 + i * W + (W - 6) / 2} y="80" font-size="17" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">
+          {s.n}
+        </text>
+        <text x={4 + i * W + (W - 6) / 2} y="108" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+          {s.code}
+        </text>
+        <text x={4 + i * W + (W - 6) / 2} y="132" font-size="14" text-anchor="middle" style={s.state === 'used' ? 'fill: var(--viz-bad)' : s.state === 'ok' ? 'fill: var(--viz-ok)' : 'fill: var(--viz-muted)'}>
+          {s.state === 'used' ? 'used ✕' : s.state === 'ok' ? 'accept ✓' : 'outside'}
+        </text>
+      </g>
+    ))
+  }
+  <path d={`M${4 + 2 * W - 3} 150 V166`} stroke-width="2" stroke-dasharray="4 3" style="stroke: var(--viz-bad)" />
+  <text x={4 + 2 * W - 3} y="184" font-size="15" text-anchor="middle" font-style="italic" style="fill: var(--viz-bad); font-family: var(--note-font-display)">last_step = T−1</text>
+
+  <rect x="4" y="204" width="392" height="56" rx="8" stroke-width="1.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="228" font-size="16" style="fill: var(--viz-ink)">1. The step is inside the window, and</text>
+  <text x="16" y="250" font-size="16" style="fill: var(--viz-ink)">2. step &gt; last_step. Then store it.</text>
+  <text x="4" y="290" font-size="15" style="fill: var(--viz-muted)">A code is accepted for up to 90 s of server</text>
+  <text x="4" y="312" font-size="15" style="fill: var(--viz-muted)">time, and only once.</text>
+</svg>

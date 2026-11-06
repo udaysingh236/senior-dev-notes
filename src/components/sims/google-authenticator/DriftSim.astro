@@ -1,0 +1,20 @@
+---
+// Four months of logins from a drifting phone against a fixed window, drift tracking, and
+// tracking with a fallback window. See drift-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="ga-drift"
+  title="A drifting phone clock against three verifiers"
+  description="A chart over 120 days. Each login is a mark at its day: its height is how many 30-second steps the code's step is ahead of (above zero) or behind (below zero) the server's step when the code arrives. A green dot means the server accepted it, a red cross means it was rejected. Behind each mark, a pale green bar shows the steps the server would accept at that moment. A dashed blue line shows how far the phone's clock is off, in steps. The button makes the phone correct its clock, as it does when it goes back online with automatic time on."
+  watchFor="At the defaults (a phone gaining 2 s a day, a ±1 window, a fixed window) the first two weeks are green, then the dashed line climbs out of the band and almost every login fails. Switch Server to 'drift tracking': the band climbs with the dots and nothing fails. Now press 'Phone corrects its clock' around day 80: the phone is right again, but the server still expects it several steps ahead, and every login after that is red. Switch to 'tracking + fallback' and repeat: one login lands in the second band around zero and the server re-centres. Finally set drift to 0, the window to 'current step only' and typing time to 30 s: rejections with a perfect clock, from codes that cross a step boundary while being typed."
+  viewBox="0 0 400 290"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createDriftModel } from './drift-model';
+
+  mountAll('ga-drift', createDriftModel);
+</script>

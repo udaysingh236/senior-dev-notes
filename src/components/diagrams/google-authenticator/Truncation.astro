@@ -1,0 +1,65 @@
+---
+// Dynamic truncation for counter 0 with the RFC 4226 test key: offset from the last byte,
+// four bytes from that offset, top bit cleared, modulo one million.
+const mac = 'cc 93 cf 18 50 8d 94 93 4c 64 b6 5d 8b a7 66 7f b7 cd e4 b0'.split(' ');
+const cell = (i: number) => ({ x: 4 + (i % 10) * 39.2, y: i < 10 ? 52 : 100 });
+---
+
+<svg viewBox="0 0 400 384" width="100%" role="img" aria-labelledby="ga-tr-t ga-tr-d">
+  <title id="ga-tr-t">Dynamic truncation, step by step</title>
+  <desc id="ga-tr-d">
+    The 20 bytes of HMAC-SHA-1 of counter 0 with the key 12345678901234567890, in two rows of ten.
+    The last byte, b0, is highlighted: its low four bits are 0, so the offset is 0. Bytes 0 to 3,
+    cc 93 cf 18, are highlighted. Clearing the top bit turns cc into 4c, giving 4c93cf18, which is
+    1,284,755,224. Modulo 1,000,000 that is 755224, the six-digit code.
+  </desc>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">1. HMAC-SHA-1(key, counter 0): 20 bytes</text>
+  <text x="4" y="42" font-size="15" style="fill: var(--viz-muted)">byte 0 is top left, byte 19 bottom right</text>
+  {
+    mac.map((b, i) => {
+      const c = cell(i);
+      const picked = i < 4;
+      const last = i === 19;
+      return (
+        <g>
+          <rect
+            x={c.x}
+            y={c.y}
+            width="36"
+            height="38"
+            rx="4"
+            stroke-width={picked || last ? 2.5 : 1.2}
+            style={
+              picked
+                ? 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'
+                : last
+                  ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'
+                  : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'
+            }
+          />
+          <text x={c.x + 18} y={c.y + 25} font-size="16" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+            {b}
+          </text>
+        </g>
+      );
+    })
+  }
+
+  <text x="4" y="168" font-size="17" font-weight="700" style="fill: var(--viz-ink)">2. Offset = low 4 bits of the last byte</text>
+  <text x="4" y="192" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan style="fill: var(--viz-warn)">b0</tspan><tspan> = 1011 </tspan><tspan font-weight="700" style="fill: var(--viz-warn)">0000</tspan><tspan> → offset 0</tspan>
+  </text>
+
+  <text x="4" y="232" font-size="17" font-weight="700" style="fill: var(--viz-ink)">3. Read bytes 0–3, clear the top bit</text>
+  <text x="4" y="258" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan style="fill: var(--viz-flow)">cc 93 cf 18</tspan><tspan> → 4c 93 cf 18</tspan>
+  </text>
+  <text x="4" y="282" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">= 1,284,755,224</text>
+
+  <text x="4" y="322" font-size="17" font-weight="700" style="fill: var(--viz-ink)">4. Keep the last six digits</text>
+  <rect x="4" y="334" width="392" height="46" rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="364" font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan>1,284,</tspan><tspan font-weight="700">755,224</tspan><tspan> → code </tspan><tspan font-weight="700" style="fill: var(--viz-ok)">755224</tspan>
+  </text>
+</svg>

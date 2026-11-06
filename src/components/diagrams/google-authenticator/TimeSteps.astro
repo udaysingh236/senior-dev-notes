@@ -1,0 +1,69 @@
+---
+// Unix time cut into 30-second steps, one code per step; phone and server land in the same step.
+const steps = [
+  { n: '…723', t: '10:41:30', code: '826528' },
+  { n: '…724', t: '10:42:00', code: '049719', now: true },
+  { n: '…725', t: '10:42:30', code: '506029' },
+  { n: '…726', t: '10:43:00', code: '751337' },
+];
+const W = 98;
+const X0 = 4;
+const phoneX = X0 + W + (W * 17) / 30;
+const serverX = X0 + W + (W * 19) / 30;
+---
+
+<svg viewBox="0 0 400 344" width="100%" role="img" aria-labelledby="ga-ts-t ga-ts-d">
+  <title id="ga-ts-t">Unix time as the counter</title>
+  <desc id="ga-ts-d">
+    At 10:42:17 UTC on 6 November 2026 the phone reads Unix time 1,793,961,737; divided by 30 and
+    rounded down that is step 59,798,724. A timeline shows four consecutive 30-second steps starting
+    at 10:41:30, 10:42:00, 10:42:30 and 10:43:00, with codes 826528, 049719, 506029 and 751337. The
+    phone's moment and the server's moment, two seconds later, both fall in step 59,798,724, so both
+    compute 049719 without exchanging a message.
+  </desc>
+
+  <rect x="4" y="4" width="392" height="84" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="32" font-size="16" style="fill: var(--viz-muted)">10:42:17 UTC, 6 Nov 2026</text>
+  <text x="16" y="56" font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">1,793,961,737 ÷ 30</text>
+  <text x="16" y="78" font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <tspan>= 59,798,724</tspan><tspan font-weight="700">.57</tspan><tspan> → T = 59,798,724</tspan>
+  </text>
+
+  <g font-size="15" font-style="italic" style="font-family: var(--note-font-display)">
+    <text x={phoneX} y="120" text-anchor="middle" style="fill: var(--viz-client)">phone, :17</text>
+  </g>
+  <path d={`M${phoneX} 126 v18`} stroke-width="2.5" style="stroke: var(--viz-client)" />
+
+  {
+    steps.map((s, i) => (
+      <g>
+        <rect
+          x={X0 + i * W}
+          y="146"
+          width={W - 4}
+          height="84"
+          rx="6"
+          stroke-width={s.now ? 2.5 : 1.5}
+          style={s.now ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'}
+        />
+        <text x={X0 + i * W + (W - 4) / 2} y="174" font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">
+          {s.n}
+        </text>
+        <text x={X0 + i * W + (W - 4) / 2} y="206" font-size="18" font-weight={s.now ? 700 : 400} text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+          {s.code}
+        </text>
+        <text x={X0 + i * W + 2} y="252" font-size="14" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">
+          {s.t}
+        </text>
+      </g>
+    ))
+  }
+
+  <path d={`M${serverX} 232 v32`} stroke-width="2.5" style="stroke: var(--viz-server)" />
+  <g font-size="15" font-style="italic" style="font-family: var(--note-font-display)">
+    <text x={serverX} y="282" text-anchor="middle" style="fill: var(--viz-server)">server, :19</text>
+  </g>
+
+  <text x="4" y="314" font-size="16" style="fill: var(--viz-ink)">Both compute T = floor(unix_time / 30).</text>
+  <text x="4" y="336" font-size="16" style="fill: var(--viz-muted)">Time zones and DST never enter: Unix time is UTC.</text>
+</svg>
