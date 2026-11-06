@@ -239,3 +239,5 @@ Topic ideas saved with `/save-topic`, oldest first. `/add-topic` offers these fi
 one into its track's table when the page is written. Bullets, not a table: the site build reads
 only the track tables above.
 
+
+- 2026-11-06 · How Google Authenticator works (TOTP) · `case-studies/google-authenticator` · case-study — note: how the code on the phone matches the one the server computes, and how it gives the right number even without internet
