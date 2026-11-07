@@ -1,12 +1,12 @@
 ---
 title: REST API Design
-description: The parts of REST API design that decide what breaks in production. What a client may do after a timeout, how two editors avoid erasing each other with ETags and If-Match, PATCH formats, status codes a program can act on, Problem Details errors, changing responses without breaking old clients, and long-running operations.
+description: REST API design explained from zero with one small shop API, then in depth. What a client may do after a timeout, how two editors avoid erasing each other with ETags and If-Match, PATCH formats, status codes a program can act on, Problem Details errors, changing responses without breaking old clients, and long-running operations.
 tagline: Not nouns versus verbs. What a client may safely do when the network, another client or an old app version gets in the way.
 difficulty: intermediate
 track: networking
 prerequisites: [how-the-web-works]
 next: [idempotency-keys, api-versioning, pagination, optimistic-vs-pessimistic-locking, rate-limiting, grpc]
-lastReviewed: 2026-10-23
+lastReviewed: 2026-11-07
 sidebar:
   order: 5
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/rest-api-design/MentalModel.astro';
 import AfterTimeout from '../../../components/diagrams/rest-api-design/AfterTimeout.astro';
 import LostUpdate from '../../../components/diagrams/rest-api-design/LostUpdate.astro';
 import StatusActions from '../../../components/diagrams/rest-api-design/StatusActions.astro';
@@ -23,81 +24,275 @@ import LostUpdateSim from '../../../components/sims/rest-api-design/LostUpdateSi
 
 ## The question
 
-A phone sends `POST /payments`, the network drops the response, and the app retries: the customer
-is charged twice. Two staff members edit the same product, one changing the price and one the
-stock, and the price change disappears although both got `200 OK`. The backend adds
-`"status": "on_hold"` to an order response, and the Android app crashes for every user still on
-last month's version. None of these bugs is about URLs, plural nouns or verbs. Which rules of HTTP
-would have prevented each one, and why do so few APIs use them?
+Your shop's app sends `POST /payments` to charge a customer for order 9001. The server charges the
+card, but the phone's network drops before the answer gets back, and after 10 seconds the app stops
+waiting. Did the payment happen? The app cannot know. If it sends the request again, the customer may
+pay twice. If it does not, the customer is told the payment failed when it went through. What should
+the API let the app do?
 
-## Why this problem exists
+The short answer: design the API around the moments when the client cannot be sure what happened,
+and use the rules HTTP already has for each one. For the lost answer, the app puts a unique ticket
+number on the payment and sends the same number on every attempt. The server remembers the numbers
+it has seen, so a repeat gets the first answer back instead of a second charge. The same way of
+thinking handles two other moments of doubt: when someone else changed the data since you read it,
+and when the server's responses have changed since the app was written.
 
-An HTTP API is a contract between programs that never meet. The server team cannot see the
-client's code, and the client cannot see the server's database. Two terms make the contract
-precise. A **resource** is anything the API gives an identity, usually a URL: `/products/42`,
-`/orders/9001/refunds`. A **representation** is what travels over the wire for it at one moment:
-a JSON document with the product's name, price and stock. Clients never touch the resource; they
-read and send representations of it and trust the server to apply them.
+## The idea in plain words
 
-That contract is tested in three places that a demo on a laptop never reaches:
+Follow one small online shop's API through a month. The shop sells a kettle, and its data lives in a
+database on the server. The numbers below are the ones the page's runnable example uses.
 
-1. **The network.** A request can fail before the server sees it, or after the server has done the
-   work but before the response arrives. From the client both look the same: a timeout. Mobile
-   networks produce these all day.
-2. **Other clients.** Two people, or a person and a batch job, edit the same resource. Each read a
-   copy, changed it and sent it back. Whatever the server does with the second copy decides whether
-   the first change survives.
-3. **Time.** Once an API is public, clients you do not control run old code for months: app
-   versions nobody updated, partner integrations nobody maintains. Every change to a response is
-   read by programs written against the old one.
+1. **The API.** The kettle has its own address, `/products/42`. A `GET /products/42` returns
+   `{"name": "Kettle", "price": 1499, "stock": 10}`. Several programs use this API: the customers'
+   phone app and the staff dashboard. None of them can see the server's code or its database; all
+   they have is requests, responses and status codes.
+2. **A payment, and a lost answer.** The app sends `POST /payments` with
+   `{"amount": 1199, "currency": "INR", "order": "9001"}`. The server charges the card after 2
+   seconds, saves payment `pay_0003` and sends back `201 Created`. That response is lost on the way.
+   At 10 seconds the app gives up. From the app's side, three stories look exactly the same: the
+   request never arrived, the server is still working, or the server finished and the answer was lost.
+3. **A ticket number on the payment.** Now give the payment a number. When the customer taps "Pay",
+   the app makes up a long random ID, `8e03978e-40d5-43e8-bc93-6894a57f9324`, and sends it with the
+   request. The server saves "this ID → `pay_0003`" next to the payment. The app sends the request
+   again with the same ID. The server finds the ID, sends back the stored answer, `pay_0003`, and
+   charges nothing. The customer paid once. If the first attempt had never arrived, the second would
+   be the first time the server saw the ID, and it would charge once then.
+4. **Two editors, one kettle.** Asha and Ravi both open the kettle on the staff dashboard at 10:00.
+   Both see the same copy: price 1499, stock 10. Asha changes the price to 1299 and saves the whole
+   product. A minute later, Ravi changes the stock to 9 and saves his whole copy, which still says
+   price 1499. The server stores what it was sent: the price is back to 1499. Both of them saw
+   `200 OK`. Asha's change is gone, and nobody was told.
+5. **A version label on the kettle.** Now let the server label each version of the kettle; it has
+   been changed twice since it was created, so it is at version `v3`. Both editors read `v3`. Each save says "only if the kettle is still at `v3`". Asha's save
+   arrives first: the kettle is at `v3`, so it is saved and becomes `v4`. Ravi's save arrives: the
+   kettle is no longer at `v3`, so the server refuses with `412 Precondition Failed` and changes
+   nothing. Ravi's dashboard reads `v4` (price 1299, stock 10), applies his change again, and saves
+   "only if still `v4`". Both changes survive.
+6. **A new value in an old app.** Orders have a `status` of `pending`, `paid` or `shipped`. Next month
+   the shop adds a fourth, `on_hold`. Last month's version of the phone app is still on many phones,
+   and its code knows only three values. If that code treats an unknown value as an error, the order
+   screen breaks for every customer who has not updated. The rule that prevents this has two halves:
+   the server only adds things and never removes or renames them, and the app treats a value it does
+   not know as "something else" and keeps going.
+7. **The pattern.** Three moments of doubt, three rules. Send the same ticket number, and a repeat is
+   safe. Send the version you read, and a save based on an out-of-date copy is refused instead of
+   silently winning. Only add, and tolerate what is unknown, and old apps keep working. None of the
+   three is about how the URLs are spelled.
 
-Each of these has a standard answer in HTTP itself, defined in
-[RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) and a handful of later RFCs. Most APIs do not use
-them, because none of them shows up until there is real traffic.
+The picture below is that whole month on one screen. Look at the three numbered boxes: each is one
+moment of doubt and the rule that settles it.
+
+<Figure caption="One app talks to one shop API. Three moments when the app cannot be sure: the answer never arrived (send it again with the same key, and the server replays its first answer), someone saved since you read (save only if the version still matches, otherwise 412), and the response has something new (the server only adds; the app ignores what it does not know).">
+  <MentalModel />
+</Figure>
+
+The top of the picture is the part every API tutorial covers: a request goes out, a response comes
+back. The three boxes are what decides whether the API survives real users, and each of them is a
+standard part of HTTP rather than something you invent.
+
+An everyday picture for the ticket number: a restaurant writes each order on a numbered slip. If a
+waiter is not sure the kitchen heard "order 57" and calls it again, the cook sees the same number and
+does not make a second plate. The picture stops working in one place. A cook remembers today's slips
+without trying; a server has to store every number it has seen, and someone has to decide how long
+to keep them. Part 2 comes back to that.
+
+## The building blocks
+
+Seven ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its technical version.
+
+### A resource and its representation
+
+**What it is.** A **resource** is anything the API gives its own address. A **representation** is
+the copy of it that travels in one request or response.
+
+**Why it exists.** The server and its clients are programs that never see each other's code. They
+can only agree on two things: addresses, and the documents that travel to and from them.
+
+**Example.** `/products/42` is the kettle. The JSON `{"name": "Kettle", "price": 1499, "stock": 10}`
+is a representation of it at 10:00. At 10:05 the same resource may be represented by stock 9. The
+app holds a copy; the real kettle lives only in the server's database.
+
+**The technical version.** **REST** (Representational State Transfer) is the style in which an API
+is a set of resources with URLs, read and changed with HTTP's standard methods. `GET` reads a
+resource. `POST` creates a new one (a new product in the list at `/products`) or performs an
+action. `PUT` replaces a resource with the document you send, `PATCH` changes only part of it, and `DELETE` removes it. In the
+industry, "REST API" usually means resource-oriented HTTP with JSON bodies, and this page uses it
+that way. Because a client only ever holds copies, any copy can be out of date the moment it
+arrives: that is where the second moment of doubt comes from.
+
+### Safe and idempotent methods
+
+**What it is.** A method is **safe** if it asks the server for no change. It is **idempotent** if
+sending the same request twice has the same effect as sending it once.
+
+**Why it exists.** When a request may or may not have arrived, the client's question is "what
+happens if I send it again?" These two words are HTTP's answer, given per method and written into
+the standard, so every program between the app and the server can rely on it.
+
+**Example.** `GET /products/42` twice: nothing changes, so it is safe. `DELETE /products/42` twice:
+after the first call the kettle is gone, and after the second it is still gone, so it is idempotent,
+though not safe, because it does change something. `POST /payments` twice: two payments, so it is
+neither.
+
+**The technical version.** HTTP's methods are defined in **RFC 9110** (2022). An **RFC** ("request
+for comments") is one of the numbered documents in which the IETF, the group that standardises
+internet protocols such as HTTP, publishes its standards. RFC 9110 lists `GET`, `HEAD` and
+`OPTIONS` as safe; the safe methods plus `PUT` and `DELETE` as idempotent; and `POST` and `PATCH` as neither, unless the
+server does something extra. Part 2 shows why software acts on that difference by itself.
+
+### A timeout
+
+**What it is.** A **timeout** is the client deciding to stop waiting for an answer after a fixed time.
+
+**Why it exists.** Without one, a request whose answer was lost would wait forever, holding the
+screen, the user and an open connection.
+
+**Example.** The app waits 10 seconds. The server finished the payment after 2 seconds, but the
+response was lost on the way. At 10 seconds the app knows one thing only: no answer came.
+
+**The technical version.** HTTP client libraries let you set a timeout per request, and raise an
+error when it fires. The error cannot say whether the server got the request, because the only
+evidence would have been the response. Choosing the timeout values themselves is the subject of the
+[timeouts page](/resilience/timeouts/); this page is about what the client may do next.
+
+### An idempotency key
+
+**What it is.** An **idempotency key** is a unique ID the client creates once for each action the
+user means to do, and sends on every attempt at that action.
+
+**Why it exists.** `POST` is not idempotent, so the server needs a way to tell "the same payment
+again" from "a second payment". The key is that way.
+
+**Example.** The customer taps "Pay" for order 9001, and the app creates the key
+`8e03978e-40d5-43e8-bc93-6894a57f9324`. Attempt 1 charges the card; the server stores "key →
+`201 Created`, `pay_0003`". Attempt 2 carries the same key; the server finds it and returns the
+stored `201` with `pay_0003` without charging. Tomorrow's order gets a new key.
+
+**The technical version.** The key travels in a request **header**, a name–value line sent with the
+request before its body, named `Idempotency-Key`. Its value is usually a **UUID** (universally unique
+identifier): a random number written as 36 characters. The random kind has about 5 × 10³⁶ possible
+values ([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562), 2024), so two phones creating keys
+independently will practically never pick the same one. The server keeps a table from each key to
+the response it gave the first time.
+
+### A version label: the ETag
+
+**What it is.** An **ETag** is a short label the server sends with a resource, and it changes every
+time the resource changes.
+
+**Why it exists.** To tell "the copy I read" from "what is on the server now", the client needs
+something it can send back that the server can compare.
+
+**Example.** `GET /products/42` at 10:00 returns the kettle and the header `ETag: "v3"`. After
+Asha's save the kettle is at version 4, so a fresh `GET` returns `ETag: "v4"`. Ravi's copy still says
+`"v3"`, and the two labels show that his copy is stale.
+
+**The technical version.** ETag stands for "entity tag" (RFC 9110). It is **opaque**: the client
+must not read meaning into it, only send it back. The server can build it from a version counter, a
+database version number, or a **hash** of the content, a short fingerprint computed from the content
+that changes whenever the content changes. ETags were first used for **caching**, keeping a copy
+of a response to avoid downloading it again: a client asks "send the product only if it changed
+since `"v3"`". This page uses them to protect writes.
+
+### A conditional write: If-Match and 412
+
+**What it is.** A **conditional write** is a save that carries a condition: "do this only if the
+resource is still at the version I read".
+
+**Why it exists.** Without it, the server cannot know that a client's copy is stale, so it overwrites
+a newer change. With it, the server refuses the stale save, and the client finds out.
+
+**Example.** Ravi's `PUT /products/42` carries the header `If-Match: "v3"`. The kettle is at `"v4"`,
+so the server answers `412 Precondition Failed` and changes nothing. Ravi's dashboard reads `"v4"`,
+re-applies stock 9, and sends `If-Match: "v4"`. That save succeeds, and the kettle becomes `"v5"`.
+
+**The technical version.** `If-Match` is a **precondition** header defined in RFC 9110: the server
+must check it before doing the write, and answer `412` if it does not hold. The technique is called
+**optimistic concurrency control**. "Concurrency" means several clients working on the same data at
+the same time; "optimistic" means nobody waits or reserves anything up front, and a conflict is
+detected at save time instead. Part 2 shows the one rule that makes it work on the server.
+
+### Backward compatibility
+
+**What it is.** A change to an API is **backward compatible** if programs written against the old
+version keep working after it.
+
+**Why it exists.** Once an API is public, the server team cannot update the clients. Phones run old
+app versions for months, and other companies' programs that call your API run code that nobody
+maintains.
+
+**Example.** Adding `"warranty_years": 2` to the kettle is compatible for an app that ignores fields
+it does not know. Renaming `price` to `cost` is not: last month's app looks for `price` and finds
+nothing. Adding `on_hold` to an order's status is compatible only if the app's code handles values
+it has never seen.
+
+**The technical version.** Compatibility has two halves: the server makes only additive changes,
+and the client is a **tolerant reader**, one that ignores unknown fields and handles unknown values.
+The hard case is the **enumeration**, a field whose value comes from a fixed list such as `pending`,
+`paid` and `shipped`. Part 2 shows why adding to that list breaks clients that adding a field never
+breaks.
+
+:::tip[If you stop here]
+- An API is a contract between programs that never see each other's code. It is tested when
+  something goes wrong: a lost answer, a second editor, an old app.
+- After a timeout, the client cannot tell whether the server did the work. `GET`, `PUT` and `DELETE`
+  can be sent again. A `POST` can be sent again only if it carries an **idempotency key**, so the
+  server recognises the repeat and replies with its first answer.
+- Two people editing the same thing lose changes silently unless each save says "only if still
+  version `v3`" (**ETag** plus **`If-Match`**). A stale save gets `412`, and the client reads again
+  and redoes its change.
+- Servers only add to responses, and clients ignore what they do not recognise. That is how old app
+  versions keep working.
+:::
+
+## Going deeper
+
+Part 1 gave each moment of doubt a rule. Production asks harder questions. Why does the HTTP
+standard let a client library resend a `PUT` on its own but not a `POST`, and what happens when your
+`PUT` handler quietly breaks that promise? How can an API answer `200 OK` to every save and still
+lose more than half the edits? Why is adding one value to a status field a breaking change, when
+adding a whole new field is not? And what should a client do when the work takes longer than any
+timeout on the way will wait?
+
+Every answer is already in RFC 9110 or a later RFC. Most APIs do not use them, because none of the
+three moments of doubt shows up in a demo on a laptop: the network there never loses a response,
+only one person edits at a time, and every client runs the latest code. They show up with real
+traffic, on mobile networks and with apps that people do not update.
 
 ## The obvious fix, and why it breaks
 
 The usual REST checklist reads like this: plural nouns for collections (`/products`), no verbs in
 URLs, `GET` to read and `POST` to create, `200` for success and `404` for missing, JSON everywhere.
 It is a good checklist. It produces clean, guessable URLs, and it prevents none of the three bugs in
-the opening. A perfectly named `POST /payments` charges twice on a retry; a perfectly named
-`PUT /products/42` loses an edit; a perfectly named `GET /orders/9001` crashes an old app when a new
-enum value appears.
+Part 1. A perfectly named `POST /payments` charges twice on a retry; a perfectly named
+`PUT /products/42` loses an edit; a perfectly named `GET /orders/9001` breaks an old app when a new
+status value appears.
 
 The checklist is about how the API looks. The bugs are about how it behaves when something goes
-wrong, and that is set by three things the checklist rarely mentions: the **semantics** of each
-method (what repeating it does), **preconditions** on writes (what the client claims to have read),
-and **compatibility** rules for responses (what a client must tolerate).
+wrong. That behaviour is set by three things the checklist rarely mentions: the **semantics** of each
+method (what it means, and in particular what repeating it does), preconditions on writes, and
+compatibility rules for responses.
 
-This page uses "REST API" the way the industry does: resource-oriented HTTP with JSON bodies. It is
-often confused with its neighbours, which make different trade-offs. **RPC-style APIs** (and gRPC,
-which gets its own page) expose actions, `chargeCard(...)`, instead of
-resources, and usually run over one generated client. **GraphQL** lets the client describe the
-shape of the data it wants in one query. Both face the same three problems; REST is the one where
-HTTP's own rules solve them, if you use those rules.
+REST is often confused with two neighbours that make different trade-offs:
 
-## The core idea
+- **RPC-style APIs** (remote procedure call) expose actions instead of resources: the client calls
+  `chargeCard(...)` over the network as if it were a local function. **gRPC**, Google's RPC
+  framework, generates that client code from a **schema**, a file that describes every message and
+  its fields; it has its own page.
+- **GraphQL** is a query language in which the client describes the exact shape of the data it wants
+  in one request, and the server returns that shape.
 
-**Design the API around what a client may do when it does not know what happened.** For each
-operation, the contract must answer three questions: can the client repeat it after a timeout,
-how does it prove which version it read before it writes, and which response changes it must
-tolerate. The first answer comes from the method:
-
-<Figure caption="Safe methods change nothing, so repeating them is free. Idempotent methods can be repeated because the second call has the same effect as the first. POST and PATCH are neither, so after a timeout the client may only retry them if the request carries an Idempotency-Key the server honours.">
-  <AfterTimeout />
-</Figure>
-
-Read the table from the right. A client that times out on a `GET` retries and moves on. A client
-that times out on a `POST /payments` without a key is stuck: retrying may charge twice, and not
-retrying may lose a payment the customer believes failed. The rest of this page is the machinery
-that turns every row into "retry it".
+Both face the same three moments of doubt. REST is the style in which HTTP's own rules settle them,
+if you use those rules.
 
 ## How it works, piece by piece
 
 ### Resources and URLs, briefly
 
-Model the **things that have an identity and a lifecycle** as resources, each with a URL, and
-model collections as their parents:
+Model the things that have an identity and a **lifecycle** (they are created, change state over
+time, and may end) as resources, each with a URL. A **collection** is a resource that holds a list of
+others, and it is their parent in the URL:
 
 ```text
 GET    /products?category=kettles      list, filtered
@@ -109,57 +304,74 @@ DELETE /products/42                     delete it
 GET    /orders/9001/refunds             a child collection
 ```
 
-Two decisions matter more than spelling. First, **actions that are not create, read, update or
+Two decisions matter more than spelling. The first: **actions that are not create, read, update or
 delete still get a resource**, because the action itself usually has a lifecycle. Cancelling an
-order is better as `POST /orders/9001/cancellation` (a resource you can later `GET` to see who
-cancelled and when) than as a `status` field a client sets to `"cancelled"`, which invites the
-lost-update problem below and leaves no record. Second, **IDs belong to the server.** `POST
-/products` returns `201 Created` with a `Location: /products/43` header; letting clients choose IDs
-creates collisions unless the IDs are random enough (UUIDs), in which case `PUT /products/<uuid>`
-is a legitimate, idempotent way to create.
+order is better as `POST /orders/9001/cancellation`, a resource you can later `GET` to see who
+cancelled and when. The alternative, a `status` field the client sets to `"cancelled"`, leaves no
+record and invites the lost-update race below.
+
+The second: **IDs belong to the server.** `POST /products` returns `201 Created` with a
+`Location: /products/43` header, which names the new resource's URL. Letting clients choose IDs
+creates collisions, unless the IDs are random UUIDs. Then `PUT /products/<uuid>` is a legitimate way
+to create, and an idempotent one: the second identical `PUT` replaces the product with the same
+content.
 
 ### What a method promises: safe and idempotent
 
-These two words carry most of HTTP's retry semantics, and they are often mixed up.
+Part 1 defined the two words. Here is what a client may do with each method when a request times
+out. Read the table from the right-hand column:
 
-A method is **safe** if the client does not request any change on the server: `GET`, `HEAD`,
-`OPTIONS`. The server may still log the request or count it toward a rate limit; "safe" is about
-what the client asked for, not about the server doing nothing.
+<Figure caption="Safe methods change nothing, so repeating them is free. Idempotent methods can be repeated because the second call has the same effect as the first. POST and PATCH are neither, so after a timeout the client may only retry them if the request carries an Idempotency-Key the server honours.">
+  <AfterTimeout />
+</Figure>
 
-A method is **idempotent** if sending the same request twice has the same intended effect as
-sending it once ([RFC 9110, section 9.2.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2)).
-Every safe method is idempotent, and so are `PUT` and `DELETE`. A worked example on a cart with
-three items:
+A client that times out on a `GET` retries and moves on. A client that times out on a
+`POST /payments` without a key is stuck: retrying may charge twice, and not retrying may lose a
+payment the customer believes failed. The rest of this page is the machinery that turns every row
+into "retry it".
+
+Idempotency is about the **effect on the server**, not the response. Take a cart, cart 7, holding
+three items, where item 3 has a quantity of 1:
 
 | Request | After the first call | After an identical second call | Idempotent? |
 |---|---|---|---|
 | `DELETE /carts/7/items/3` | 2 items; `204` | still 2 items; `404` | Yes: same effect, different response |
 | `PUT /carts/7/items/3 {"qty": 2}` | qty 2 | qty 2 | Yes |
-| `POST /carts/7/items {"sku": "K1"}` | 4 items | 5 items | No |
+| `POST /carts/7/items {"sku": "K1"}` (`sku` is a product code) | 4 items | 5 items | No |
 | `PATCH /carts/7/items/3 {"qty": +1}` (an increment) | qty 2 | qty 3 | No |
 
-Note the first row: idempotency is about the **effect on the server**, not the response. A second
-`DELETE` that answers `404` is still idempotent.
+The first row is the one people get wrong: a second `DELETE` that answers `404` is still idempotent,
+because the cart ends in the same state.
 
-Why does this matter beyond tidiness? Because software retries idempotent requests **on its own**.
-RFC 9110 lets a client repeat an idempotent request automatically if the connection fails before
-the response is read, and says a client should not do so for other methods unless it knows the
-request is safe to repeat. HTTP client libraries, browsers and proxies act on that difference. So
-the method you choose is a promise to every piece of infrastructure between the user and your
-database, and breaking it is a bug that infrastructure will find for you: a `PUT` handler that also
-appends an audit row or sends an email is not idempotent, whatever its method says.
+"Safe" has a similar subtlety. The server may still log a safe request or count it toward a
+[rate limit](/resilience/rate-limiting/) (a cap on how many requests one client may send per second).
+"Safe" is about what the client asked for, not about the server doing nothing.
+
+Why does any of this matter beyond tidiness? Because software retries idempotent requests **on its
+own**. RFC 9110 lets a client repeat an idempotent request automatically if the connection fails
+before the response is read, and says it should not do so for other methods unless it knows the
+request is safe to repeat
+([RFC 9110, section 9.2.2](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2)).
+
+Several programs act on that rule. HTTP client libraries do, and so do browsers and **proxies**:
+programs that sit between the client and the server and forward requests, such as a **load
+balancer**, which spreads incoming requests across several servers. So the method you choose is a
+promise to every piece of software between the user and your database.
+
+Breaking the promise is a bug that this software will find for you. A `PUT` handler that also
+appends an audit row (a row recording who changed what), increments a counter or sends an email is
+not idempotent, whatever its method says. When a proxy repeats it after a dropped connection, the
+email goes out twice.
 
 ### Timeouts are ambiguous: retrying a POST safely
 
-When a request times out, one of three things happened, and the client cannot tell which:
+Of the three stories from Part 1, the first (the request never arrived) is harmless: a retry does
+the work once. The other two are dangerous. If the server is still working, a retry now may run the
+payment twice in parallel. If the server finished and the answer was lost, a retry repeats a payment
+that already happened.
 
-1. The request never reached the server. Nothing happened; retrying is right.
-2. The server is still working on it. Retrying now may run it twice.
-3. The server finished, and the response was lost. It happened; retrying repeats it.
-
-For a payment, cases 2 and 3 are the dangerous ones. The fix is to make the server able to
-recognise a repeat. The client generates a unique **idempotency key** (a random UUID) once per
-operation the user intends, and sends it on every attempt of that operation:
+The idempotency key handles both, as long as the server treats it carefully. On the wire it looks
+like this:
 
 ```http
 POST /payments
@@ -169,94 +381,123 @@ Content-Type: application/json
 {"amount": 1199, "currency": "INR", "order": "9001"}
 ```
 
-The server keeps a table from key to the outcome of the first request. On a request with a key it
-has seen, it does not run the operation again; it returns the stored response. Three details make
-this correct rather than approximately correct:
+The server keeps a table from key to the outcome of the first request. Three details make this
+correct, rather than approximately correct.
 
-- **Store the outcome in the same transaction as the work**, or a crash between the charge and the
-  key record lets the next retry charge again.
-- **Compare the request too.** A key reused with a different body is a client bug, and should be
-  rejected (`422`) rather than answered with a stale response. Stripe stores the first result per
-  key, including errors, compares the parameters of later requests, and may prune keys once they
-  are at least 24 hours old ([Stripe](https://docs.stripe.com/api/idempotent_requests), as of
-  October 2026).
-- **Handle the concurrent repeat.** If the retry arrives while the first attempt is still running
-  (case 2), answer `409 Conflict` and let the client retry later, rather than running both.
+**Store the key with the work, in one transaction.** A **database transaction** is a group of writes
+that the database applies all together or not at all. Say the server inserts the payment row, then
+crashes before inserting the key row. The next retry finds no key and charges again. If both rows go
+into one transaction, a crash in between undoes the payment row too, so there is never a payment
+without its key. When the work is a call to another system that your database cannot undo, such as the
+card company's payment system, write the key first with the state "in progress", and mark it finished after the call.
 
-AWS builds the same idea into its APIs as a caller-supplied client token, the `ClientToken` on EC2
-calls ([AWS Builders' Library, 2021](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-apis/)).
-The IETF is standardising the header as `Idempotency-Key`; as of October 2026 it is still an
-Internet-Draft ([draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)).
-The storage design (expiry, crash recovery, multi-step operations) is the subject of the
-[idempotency keys page](/messaging/idempotency-keys/).
+**Compare the request too.** A key reused with a different body is a client bug, and the server
+should reject it (`422`) rather than answer with a stale response. Stripe stores the first result for
+each key, including errors, compares the parameters of later requests with it, and may delete keys
+once they are at least 24 hours old ([Stripe](https://docs.stripe.com/api/idempotent_requests), as of
+October 2026).
 
-Here are three clients on the same lossy network, making 4 payments a second:
+**Handle the repeat that arrives during the first attempt.** If the retry arrives while the first
+attempt is still running (the second story), the key is found in its "in progress" state. Answer
+`409 Conflict` and let the client retry later, rather than running both.
+
+The idea is not specific to Stripe. AWS builds it into its APIs as a client token supplied by the
+caller, such as the `ClientToken` on calls to EC2, Amazon's service for renting virtual servers
+([AWS Builders' Library, 2021](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-apis/)).
+The IETF is standardising the `Idempotency-Key` header. As of October 2026 it is still an
+**Internet-Draft**, a proposal that has not yet become an RFC
+([draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)).
+How long to keep keys, how to recover after a crash, and how to handle operations of several steps
+are the subject of the [idempotency keys page](/messaging/idempotency-keys/).
+
+Now the whole thing under load. The sim below runs three clients side by side on the same network.
+A user makes one payment every 250 ms (4 a second). The two loss sliders set how often a request
+never reaches the server, and how often the server's response never reaches the client. One client
+never retries, one retries after a timeout with no key, and one retries with a key:
 
 <RetrySim />
 
-The lesson of the sim is that **"never retry" is not the safe choice it looks like.** With 15% of
-responses lost, it never double-charges, but about one payment in seven ends with a customer who
-paid and was told it failed. That customer taps "Pay" again: a retry with no key, made by a human.
-Only the key removes both problems.
+The lesson of the sim is that **"never retry" is not the safe choice it looks like.** With the
+default settings, 90% of requests arrive (10% are lost), and 15% of those lose their response:
+0.9 × 0.15 ≈ 13.5%, about one payment in seven. The "never retry" client never double-charges, but
+each of those payments ends with a customer who paid and was told it failed. That customer taps
+"Pay" again: a retry with no key, made by a human. Only the key removes both problems.
 
 ### Two editors, one resource: conditional requests
 
-The second bug in the opening is the **lost update**: two clients read the same version, each
-changes a different field, and each sends back the whole representation. The server applies both;
-the second overwrites the first. Both clients got `200 OK`, so nobody knows. It is the same race
-the [IRCTC page](/case-studies/irctc-tatkal-booking/#what-exactly-gets-locked) solves inside a
-database, one layer up: here the "transaction" is a human reading a form for thirty seconds.
+Part 1's Asha and Ravi story has a name: the **lost update**. Two clients read the same version, each
+changes something, and each sends back a whole representation. The server applies both, and the
+second overwrites the first. Both clients got `200 OK`, so nobody knows. It is the same race the
+[IRCTC page](/case-studies/irctc-tatkal-booking/#what-exactly-gets-locked) solves inside a database;
+here the race happens through the API instead, and the time between the read and the write is a
+person looking at a form for thirty seconds.
 
-HTTP's fix needs one building block. An **ETag** (entity tag) is a label the server attaches to a
-representation, in the `ETag` response header, that changes whenever the resource changes. It is
-opaque to the client: `"v7"`, a hash of the content, or a database version number all work. Think
-of it as the version stamp on a document in a shared drive.
-
-The client then makes its write **conditional**, by sending back the ETag it read:
-
-- `If-Match: "v7"` on a `PUT`, `PATCH` or `DELETE` means "apply this only if the resource is still
-  at version v7". If someone else has written since, the server refuses with **`412 Precondition
-  Failed`** and changes nothing. The client reads the new version, re-applies its change and tries
-  again.
-- `If-None-Match: *` on a `PUT` means "only if this does not exist yet": a safe way to create at a
-  known URL without overwriting.
-- A server that wants to force clients to do this can answer an unconditional write with
-  **`428 Precondition Required`** ([RFC 6585](https://www.rfc-editor.org/rfc/rfc6585#section-3)).
+Here is that story as two timelines, time running downwards, first without a precondition and then
+with `If-Match`:
 
 <Figure caption="Blind PUTs: both editors get 200 and Asha's price change vanishes. With If-Match, Ravi's stale write is refused with 412; he reads version 4, re-applies his change, and both edits survive.">
   <LostUpdate />
 </Figure>
 
-This is **optimistic locking**, with the ETag as the version column: nobody holds a lock while a
-person thinks, and the loser finds out at write time. Two implementation rules make it work. The
-check and the write must be one step on the server (a conditional `UPDATE ... WHERE version = 7`,
-or a lock around both), or two writers can both pass the check. And the ETag must change on
-**every** write path, including batch jobs and admin tools, or it stops meaning anything.
+The difference is one header on each write, and one status code the client must handle. Besides
+`If-Match`, two related rules are worth knowing:
 
-The same idea appears under other names: Kubernetes objects carry a `resourceVersion`, and an
+- `If-None-Match: *` on a `PUT` means "only if nothing exists at this URL yet": a way to create at a
+  known URL without overwriting someone else's resource.
+- A server that wants to force clients to send a precondition can answer a write without one with
+  **`428 Precondition Required`** ([RFC 6585](https://www.rfc-editor.org/rfc/rfc6585#section-3)).
+
+**The rule that makes it work: check and write in one step.** Picture two saves that both carry
+`If-Match: "v3"`, arriving at the same moment on two **threads** of the server: separate lines of
+execution inside one program, which let it handle several requests at the same time. If the server
+first checks the version, then writes, both can pass the check before either writes, and one edit is
+lost anyway. The check and the write must be **atomic**: one indivisible step that no other request can
+run in the middle of.
+
+In a database, that step is a conditional update. The server sends
+`UPDATE products SET ..., version = 4 WHERE id = 42 AND version = 3`. If the database reports one row
+updated, the save happened and the new ETag is `"v4"`. If it reports zero rows, someone else saved
+first, and the server answers `412`. The database guarantees that only one of the two racing updates
+can match `version = 3`.
+
+This is **optimistic locking**, the optimistic concurrency control from Part 1, with the ETag playing
+the role of a version number stored in each row (a **version column**). The alternative is a **lock**: a marker one request holds on the row so that others
+must wait until it is released. Holding a lock while a person thinks for thirty seconds would block
+every other editor for those thirty seconds; the optimistic version blocks nobody, and the loser
+finds out at save time. The optimistic vs pessimistic locking page (coming soon) compares the two.
+
+One more rule: the ETag must change on **every** write path, including batch jobs and admin tools.
+A script that updates prices directly in the database without bumping the version makes every ETag
+a lie.
+
+The same idea appears under other names. **Kubernetes**, a system that runs programs across many
+machines and is controlled entirely through a REST API, gives every object a `resourceVersion`; an
 update with a stale one is rejected with `409 Conflict`
-([Kubernetes API concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/)); Google's
-API guidelines put an `etag` field on resources and fail a mismatched write with an `ABORTED` error
-([AIP-154](https://google.aip.dev/154)).
+([Kubernetes API concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/)). Google's
+API guidelines put an `etag` field on resources and fail a mismatched write with an `ABORTED` error,
+Google's code for "conflict", which maps to HTTP `409` ([AIP-154](https://google.aip.dev/154)).
 
-Now the race at scale. Several editors keep reading the product, thinking for a while, and writing
-one field back; each edit sets its field to "what I read, plus one", so a lost edit is measurable.
-The product has one field everybody edits (stock) and one field per editor:
+Now the race at scale. In the sim, several editors keep repeating one cycle: read the product, think
+for a while (300 ms by default), then write one field back as "what I read, plus one". Because every
+edit adds exactly one, a lost edit shows up as a missing +1. The product has one field everybody
+edits (stock) and one field per editor. Three lanes write back three ways: a **blind** `PUT` of the whole
+product (one with no precondition), a `PUT` with `If-Match`, and a `PATCH` that sends only the changed field:
 
 <LostUpdateSim />
 
-Three things to take away. Blind `PUT` loses a large share of edits under very ordinary conditions,
-four editors and a third of a second between read and write, and **every one of those writes
-answered `200 OK`**. `If-Match` loses nothing, but because the ETag covers the whole product, it
-also rejects edits to *different* fields, so its retries grow with the number of editors. And a
-`PATCH` that sends only the changed field avoids conflicts between different fields for free, but
-gives no protection when two clients change the same field from a stale read. In practice:
-`PATCH` for independent fields, plus `If-Match` where a field is a read-modify-write.
+Three things to take away. Blind `PUT` loses a large share of edits under ordinary conditions (four
+editors, a third of a second between read and write), and **every one of those writes answered
+`200 OK`**. `If-Match` loses nothing, but because the ETag covers the whole product, it also rejects
+edits to *different* fields, so its retries grow with the number of editors. And a `PATCH` that sends
+only the changed field avoids conflicts between different fields for free, but gives no protection
+when two clients change the same field from a stale read. In practice: `PATCH` for independent
+fields, plus `If-Match` where a field is read, changed and written back.
 
 ### Partial updates: what PATCH actually means
 
 `PATCH` says "change part of this resource", but not how the change is described. The format is a
-choice, announced with `Content-Type`, and the two standard ones behave differently.
+choice. The client names it in the **`Content-Type`** header, the header that says what format the
+body is in, and the two standard formats behave differently.
 
 **JSON Merge Patch** (`application/merge-patch+json`, [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396))
 sends a partial document. Fields present are set, fields absent are left alone, and a field set to
@@ -269,7 +510,9 @@ sends a partial document. Fields present are set, fields absent are left alone, 
 | `{"price": null}` | the `price` field is gone | there is no way to *set* a field to null |
 
 **JSON Patch** (`application/json-patch+json`, [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902))
-sends a list of operations: `add`, `remove`, `replace`, `move`, `copy` and `test`. It can remove one
+sends a list of operations: `add`, `remove`, `replace`, `move`, `copy` and `test`. Each operation
+names its target with a **path** into the document, with `/` between levels: `/stock` is the
+top-level `stock` field, and `/tags/0` is the first element of `tags`. JSON Patch can remove one
 array element or set an explicit null, and its `test` operation is a precondition inside the patch:
 
 ```json
@@ -279,44 +522,48 @@ array element or set an explicit null, and its `test` operation is a preconditio
 ]
 ```
 
-That patch means "if stock is still 10, make it 9"; if the test fails, nothing is applied. Merge
-patch is simpler and covers most product APIs; JSON Patch earns its complexity when clients edit
-lists or when an explicit null means something. Either way, **`PATCH` is not idempotent by
-default** (an `add` to an array applied twice adds two elements), so it needs `If-Match` or a key
-to be retried safely. Google's guidelines take a third route: a field mask listing exactly which
-fields an update touches.
+That patch means "if stock is still 10, make it 9"; if the test fails, nothing is applied.
+
+Merge patch is simpler and covers most product APIs. JSON Patch earns its complexity when clients
+edit lists, or when an explicit null means something. Either way, **`PATCH` is not idempotent by
+default** (an `add` to an array applied twice adds two elements), so it needs `If-Match` or a key to
+be retried safely. Google's guidelines take a third route: a **field mask**, a list of field names
+such as `price,stock` that says exactly which fields an update may touch.
 
 ### Status codes a program can act on
 
-A status code is not decoration for humans; it is the first thing a client program branches on,
-and so are proxies, load balancers, monitoring and retry libraries. Group them by what the client
-should do next:
+A status code is not decoration for humans. It is the first thing a client program branches on, and
+so do proxies, load balancers, monitoring and **retry libraries** (code that resends failed requests
+for you). The useful way to group status codes is by what the client should do next:
 
 <Figure caption="The useful question about a status code is what the client should do next. Retrying a 422 or a 403 only repeats the mistake; giving up on a 503 or a 429 loses work that would have succeeded.">
   <StatusActions />
 </Figure>
 
-The distinctions that matter most in practice:
+The five groups are the whole decision a client makes. The distinctions that matter most in practice:
 
 - **`409` vs `412` vs `422`.** `412` means "your precondition failed": the client's `If-Match` was
   stale. `409` means "this conflicts with the current state" in some other way: a duplicate
-  username, or a request with an idempotency key still in progress. `422` means "I understood the
-  request and it is invalid": a negative amount. A client re-reads on the first two and fixes its
+  username, or a request whose idempotency key is still in progress. `422` means "I understood the
+  request and it is invalid": a negative amount. A client reads again on the first two and fixes its
   input on the third.
-- **`429` and `503` carry `Retry-After`.** It tells the client when to come back; the
-  [rate limiting page](/resilience/rate-limiting/) covers how clients should honour it with jitter.
-- **`502` and `504` are safe to retry only for idempotent requests**, because the upstream may have
-  done the work before the gateway gave up.
-- **Never `200` with an error in the body.** Every retry library, cache and dashboard treats it as
-  success. Monitoring shows 100% success while users see failures.
-- **`404` for a resource the caller may not see**, not `403`, when even revealing that it exists
-  leaks information (an order ID that belongs to someone else).
+- **`429` and `503` carry `Retry-After`**, a response header that says how many seconds to wait before
+  trying again. The [retries and backoff page](/resilience/retries-and-backoff/) covers how clients
+  should honour it, with **jitter** (a small random extra delay, so thousands of clients do not all
+  come back in the same second).
+- **`502` and `504` are safe to retry only for idempotent requests.** Both come from a **gateway**, a
+  server in front of your API that forwards requests to it: `502` means the server behind it gave a
+  bad answer, `504` that it did not answer in time. In both cases the server behind it may already
+  have done the work.
+- **`404`, not `403`, for a resource the caller may not see**, when even revealing that it exists
+  leaks information: an order ID that belongs to someone else.
 
 ### Errors a program can read: Problem Details
 
-The body of an error should be as machine-readable as its status. **Problem Details**
+The body of an error should be as readable by a program as its status. **Problem Details**
 ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457), 2023, which replaced RFC 7807) is the standard
-format, sent as `application/problem+json`:
+format for it, sent with `Content-Type: application/problem+json`. Here is the `412` that Ravi's
+stale save would get:
 
 ```json
 {
@@ -328,71 +575,87 @@ format, sent as `application/problem+json`:
 }
 ```
 
-`type` is a URI that identifies the kind of problem and is the field programs branch on; `title`
-is a short human summary of that type; `detail` explains this occurrence; `instance` identifies
-it. You may add members, for example a list of invalid fields for a `422`. Two rules make errors
-useful: keep `type` values stable (they are part of the contract, like field names), and never put
-stack traces or SQL in `detail`, because error bodies are read by whoever made the request.
+`type` is a **URI**, an identifier written like a URL that need not lead to a page. It names the kind
+of problem, and it is the field programs branch on. `title` is a short human summary of that type,
+`detail` explains this occurrence, and `instance` identifies it. You may add your own fields (the RFC calls
+them members), for example a list of invalid fields for a `422`.
+
+Two rules make errors useful. Keep `type` values stable, because they are part of the contract, like
+field names. And never put **stack traces** (the list of function calls at the moment of a crash) or
+SQL in `detail`, because error bodies are read by whoever made the request.
 
 ### Changing a response without breaking clients
 
-The third bug in the opening is a **compatibility** failure. Every response field and value you
-ship is part of the contract, and old clients will read new responses for a long time. The safe
-rule has two halves, one for each side:
+Part 1's rule was: servers only add, clients tolerate. In detail, these server changes are safe: new
+optional request parameters, new response fields, new endpoints. These are breaking: removing or
+renaming a field, changing its type, making a parameter required, and changing what an existing
+value means.
 
-- **Servers only add.** New optional request parameters, new response fields and new endpoints are
-  safe. Removing or renaming a field, changing its type, making a parameter required, or changing
-  what an existing value means are breaking.
-- **Clients tolerate.** Ignore unknown fields, and treat unknown values of an enumeration as
-  "something I don't recognise" rather than an error. This is often called being a **tolerant
-  reader**.
+The trap between the two halves is the enumeration. Adding `on_hold` to
+`pending | paid | shipped` looks additive from the server. But many apps decode `status` into a
+**closed enum type**: in Kotlin (Android), Swift (iOS) or TypeScript, the code declares the three
+allowed values, and the **JSON decoder**, the library that turns JSON text into typed objects,
+refuses any other value. One unknown value then fails the parsing of the whole response, not one
+field. A new field rarely causes this: most JSON decoders can skip fields they do not know, and apps
+are usually set up that way. A closed enum has no such way out, because an unknown value has nothing
+to turn into.
 
-The trap between the two is the **enumeration**: a field whose value comes from a fixed list, like
-`status` in `pending | paid | shipped`. Adding `on_hold` looks additive from the server, but a
-client that decoded `status` into a closed enum type in Kotlin, Swift or TypeScript fails to parse
-the whole response. Microsoft's API guidelines classify adding a value to a fixed enum as breaking
-for responses, and recommend **extensible enums** whose documentation says new values will appear
-([Microsoft API guidelines](https://github.com/microsoft/api-guidelines)); Zalando's guidelines ask
-clients to implement a fallback for unknown values
-([Zalando](https://opensource.zalando.com/restful-api-guidelines/)). GitHub lists the same split:
-new optional parameters and response fields reach every API version, while removing or renaming
-fields or adding required parameters ships only in a new dated version
-([GitHub](https://docs.github.com/en/rest/about-the-rest-api/breaking-changes), as of October
-2026).
+The guidelines of large API providers agree. Microsoft's classify adding a value to a fixed enum as a
+breaking change for responses, and recommend **extensible enums**, whose documentation says new
+values will appear ([Microsoft API guidelines](https://github.com/microsoft/api-guidelines)).
+Zalando's ask clients to implement a fallback for unknown values
+([Zalando](https://opensource.zalando.com/restful-api-guidelines/)). GitHub sends new optional
+parameters and response fields to every API version, while removing or renaming fields or adding
+required parameters ships only in a new dated version
+([GitHub](https://docs.github.com/en/rest/about-the-rest-api/breaking-changes), as of October 2026).
 
-When a breaking change is unavoidable, it needs a new version and a deprecation period. The
-`Deprecation` response header ([RFC 9745](https://www.rfc-editor.org/rfc/rfc9745), March 2025) lets
-a server tell clients that an endpoint is deprecated, with a date. How to version (URL, header,
-dates) is the subject of the API versioning page (coming soon).
+When a breaking change is unavoidable, it needs a new version and a **deprecation** period: a time
+during which the old behaviour still works but is announced as going away. The `Deprecation` response
+header ([RFC 9745](https://www.rfc-editor.org/rfc/rfc9745), March 2025) lets a server tell clients
+that an endpoint is deprecated, with a date. How to version (URL, header, dates) is the subject of
+the API versioning page (coming soon).
 
 ### Long-running work: 202 and an operation to poll
 
-Some requests take longer than any timeout on the path will wait: generating a report, exporting a
-year of data, provisioning a server. A client that holds the connection open for 40 seconds fails
-behind any gateway with a shorter timeout (the
-[proxy and gateway page](/traffic/proxy-lb-gateway/) explains why every hop has one). The standard
-shape is to accept the work and hand back something to watch:
+Some requests take longer than anything on the way will wait: generating a report, exporting a year
+of data, setting up a server. Every server a request passes through, called a **hop** (a load
+balancer, a gateway), has its own timeout. A client that holds the connection open for 40 seconds
+fails behind any hop with a shorter one; the [proxy and gateway page](/traffic/proxy-lb-gateway/)
+explains why every hop has one.
+
+The standard shape is to accept the work and hand back something to watch. The client then
+**polls**: it asks again every few seconds whether the work is done:
 
 <Figure caption="The server answers at once with 202 Accepted and the URL of an operation. The client polls the operation, which reports progress and finally links to the result. No connection is held open, so no hop times out.">
   <LongRunning />
 </Figure>
 
-The operation is an ordinary resource with a small, fixed shape. Google's guidelines define one
-used across their APIs: a name, a `done` flag, metadata such as progress, and either an `error` or
-a `response` once done ([AIP-151](https://google.aip.dev/151)). Make the initial `POST` idempotent
-with a key, so a retry returns the same operation rather than starting a second export, and tell
-clients how often to poll (a `Retry-After` on the operation, or a webhook when it completes).
-Microsoft's guidelines use about a second as the threshold: work that cannot reliably finish in
-that time should be modelled this way.
+The operation is an ordinary resource with a small, fixed shape. Google's guidelines define one used
+across their APIs: a name, a `done` flag, metadata such as progress, and either an `error` or a
+`response` once done ([AIP-151](https://google.aip.dev/151)).
+
+Two details finish the design. Make the initial `POST` idempotent with a key, so a retry returns the
+same operation rather than starting a second export. And tell clients how often to poll, with a
+`Retry-After` on the operation, or offer a **webhook**: the server calls a URL the client registered
+when the work completes. Microsoft's guidelines use about one second as the threshold: work that
+cannot reliably finish in that time should be modelled this way.
 
 ### Lists: pagination and filtering
 
-Every list endpoint needs a limit, because "return all orders" works until a customer has a
-million. **Offset pagination** (`?offset=40&limit=20`) is quick to implement and skips or repeats
-items when rows are inserted while a client is paging. **Cursor pagination** (`?after=<opaque
-token>&limit=20`) returns a token that encodes where the last page ended, which is stable under
-inserts and cheap for the database. The trade-offs, and how cursors are encoded, are on the
-pagination page (coming soon).
+Every list endpoint needs a limit, because "return all orders" works until a customer has a million.
+Splitting a list into pages is called **pagination**, and there are two common ways.
+
+**Offset pagination** (`?offset=40&limit=20`) means "skip 40 items, return the next 20". It is quick
+to build, but it skips or repeats items when rows change while a client is paging. Example: a client
+reads the newest orders 1 to 20; a new order arrives at the top; the client asks for offset 20, and
+what was order 20 is now at position 21, so it appears again. Large offsets are also slow: to answer
+offset 100,000, the database reads 100,000 rows and throws them away.
+
+**Cursor pagination** (`?after=<opaque token>&limit=20`) returns a token that encodes where the last
+page ended, such as "after order 9001". The next page starts from that item, so inserts do not shift
+it, and the database can jump straight to it using an [**index**](/databases/database-indexing/), a sorted lookup structure kept
+next to the table, like the index at the back of a book. The trade-offs, and how cursors are encoded, are
+on the pagination page (coming soon).
 
 ## Choosing between them
 
@@ -400,8 +663,8 @@ pagination page (coming soon).
 |---|---|---|
 | A client times out on a write | Idempotent methods; `Idempotency-Key` on `POST` | A key table, written in the same transaction as the work |
 | Two clients edit one resource | `ETag` + `If-Match`, `412` | Every write path bumps the version; clients handle `412` |
-| Clients edit different fields | `PATCH` (merge patch) | No protection for read-modify-write on one field |
-| Clients must branch on errors | Correct status codes + Problem Details | Discipline; a shared error catalogue |
+| Clients edit different fields | `PATCH` (merge patch) | No protection when one field is read, changed and written back |
+| Clients must branch on errors | Correct status codes + Problem Details | Discipline; a shared list of error types |
 | The response must change | Additive changes, extensible enums, tolerant clients | Some changes still need a new version |
 | Work outlives timeouts | `202` + operation resource | A polling endpoint and operation storage |
 
@@ -412,8 +675,8 @@ two cover the bugs that cost real money and real trust.
 ## Build it yourself
 
 The example is a small products and payments API with an `ETag` on every product, `If-Match` on
-`PUT`, merge `PATCH`, an `Idempotency-Key` on `POST /payments`, and Problem Details errors. These
-are the two handlers that matter; the rest of the file is plumbing and a demo client.
+`PUT`, merge `PATCH`, an `Idempotency-Key` on `POST /payments`, and Problem Details errors. These are
+the two handlers that matter; the rest of the file is plumbing and a demo client.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -482,6 +745,13 @@ if (req.method === 'POST') {
   </TabItem>
 </Tabs>
 
+Read it like this. The `PUT` handler builds the current ETag from a version counter, compares it with
+the `If-Match` the client sent, and answers `412` with a Problem Details body if they differ;
+otherwise it saves the product and bumps the counter. The `POST` handler turns the request body into
+a **fingerprint**, the body as JSON text with its keys sorted, so the same request always gives the
+same text. If the key is already in the table, it compares fingerprints and either rejects the reuse
+with `422` or replays the stored answer. Only a new key creates a payment.
+
 The demo client runs four scenarios against it:
 
 ```text title="python products_api.py (node products-api.mjs prints the same)"
@@ -500,10 +770,12 @@ The demo client runs four scenarios against it:
    same key, different amount -> 422 Idempotency-Key reused with a different body
 ```
 
-The lock in the Python version is the in-memory equivalent of a conditional `UPDATE`: without it,
-two threads could both see `"v3"` and both write. The Node version needs no lock only because a
-single-threaded handler with no `await` between the check and the write cannot interleave; move the
-data into a real database and you need a conditional `UPDATE ... WHERE version = $expected` instead.
+The Python server handles each request on its own thread, so two requests can run at the same
+moment. `with lock:` lets only one thread at a time run the code inside it, which makes the check
+and the write one step: the in-memory version of the conditional `UPDATE`. Node runs all of your JavaScript on one thread, so the version above needs no
+lock, but only because there is no `await` between the check and the write. Move the data into a
+real database and both need a conditional `UPDATE ... WHERE version = $expected` instead.
+
 The example keeps idempotency keys in memory; production keeps them in the same database as the
 payment, written in the same transaction. Full code and run instructions:
 [`examples/rest-api-design/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/rest-api-design).
@@ -511,98 +783,100 @@ payment, written in the same transaction. Full code and run instructions:
 ## How real systems do it
 
 - **Stripe** requires nothing but accepts an `Idempotency-Key` on every `POST`, stores the first
-  response per key (including errors) and replays it, and rejects a reused key with different
-  parameters ([Stripe](https://docs.stripe.com/api/idempotent_requests)). It versions by date:
+  response for each key (including errors) and replays it, and rejects a reused key with different
+  parameters ([Stripe](https://docs.stripe.com/api/idempotent_requests)). It versions its API by date:
   monthly releases contain only backward-compatible changes, and breaking changes come in two major
-  releases a year; it treats new optional parameters, new response properties, reordered properties
+  releases a year. It treats new optional parameters, new response properties, reordered properties
   and changed ID formats as compatible ([Stripe API versions](https://docs.stripe.com/api-versions),
   as of October 2026).
-- **GitHub** sends an `ETag` on most responses and does not count a `304 Not Modified` answer to an
-  authorised conditional request against the primary rate limit, which makes polling with
-  `If-None-Match` nearly free ([GitHub](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)).
+- **GitHub** sends an `ETag` on most responses. A client can poll with `If-None-Match: "<etag>"`, and
+  if nothing changed the answer is `304 Not Modified` with no body. GitHub does not count such an
+  answer to an authorised request against its main rate limit, which makes polling this way nearly
+  free ([GitHub](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)).
   Its REST API is versioned by calendar date in an `X-GitHub-Api-Version` header, defaulting to
   `2022-11-28`, with each previous version supported for at least 24 months after a new one
   ([GitHub API versions](https://docs.github.com/en/rest/about-the-rest-api/api-versions), as of
   October 2026).
-- **Kubernetes** is a REST API at heart: every object has a `resourceVersion` used for optimistic
-  concurrency, and server-side apply tracks which client owns which field, so two controllers can
-  each manage their own fields of one object without overwriting each other
+- **Kubernetes** gives every object a `resourceVersion` for optimistic concurrency. Its
+  **server-side apply** goes a step further and records which client owns which field of an object,
+  so two programs can each manage their own fields of one object without overwriting each other
   ([server-side apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/)). That is
-  the field-level `PATCH` idea from the sim, made explicit.
-- **Google's API Improvement Proposals** turn these patterns into rules applied across Google
+  the field-level `PATCH` lane from the sim, made explicit.
+- **Google's API Improvement Proposals** (AIPs) turn these patterns into rules applied across Google
   Cloud: `etag` for freshness ([AIP-154](https://google.aip.dev/154)) and an operation resource for
   long-running work ([AIP-151](https://google.aip.dev/151)).
 
 ## Gotchas and war stories
 
 :::caution[Large numbers in JSON]
-JSON itself has no size limit on numbers, but JavaScript reads them as 64-bit floating point, which
-is exact only up to 2^53 − 1 = 9,007,199,254,740,991
+JSON itself has no size limit on numbers, but JavaScript stores every number in one format, called
+**floating point**, which holds whole numbers exactly only up to 2^53 − 1 = 9,007,199,254,740,991
 ([MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER)).
-A 64-bit database ID above that arrives in a browser silently rounded to a neighbouring ID. Send IDs
-as strings.
+Database IDs are often stored in a `BIGINT` column, which goes up to about 9.2 × 10^18, about a
+thousand times higher. An ID above that limit arrives in a
+browser silently rounded to a neighbouring ID. Send IDs as strings.
 :::
 
-- **Money as floats.** `0.1 + 0.2` is not `0.3` in binary floating point. Send amounts as integers
-  in the smallest currency unit with an explicit currency: `{"amount": 1199, "currency": "INR"}`
-  for ₹11.99, as Stripe's API does.
-- **Timestamps without zones.** `"2026-10-23 10:00"` means a different instant in Mumbai and in
-  Frankfurt. Use RFC 3339 with an offset or `Z`: `"2026-10-23T04:30:00Z"`.
-- **ETags that do not change.** An ETag computed from an `updated_at` with one-second resolution
-  gives two writes in the same second the same ETag, and the second writer's `If-Match` succeeds
-  against a version it never read. Use a version counter.
-- **The idempotency record outside the transaction.** Charging the card, then writing the key, then
-  crashing between the two is a double charge on the next retry. Write them together, or write the
-  key first as "in progress" and finish it after.
-- **A `PUT` that is not idempotent.** A handler that increments a counter, appends to a history,
-  or sends a notification on every call breaks the method's promise, and HTTP clients and proxies
-  will retry it on their own.
+- **Money as floats.** Floating-point numbers store most decimal fractions approximately, so
+  `0.1 + 0.2` is `0.30000000000000004`, not `0.3`. Send amounts as whole numbers in the smallest
+  currency unit with an explicit currency: `{"amount": 1199, "currency": "INR"}` is 1,199 paise, or
+  ₹11.99, the way Stripe's API does it.
+- **Timestamps without zones.** `"2026-10-23 10:00"` means a different moment in Mumbai and in
+  Frankfurt. Use **RFC 3339**, the standard text format for a date and time with its offset from UTC
+  (the world's reference time), or `Z` for UTC itself: `"2026-10-23T04:30:00Z"` is 10:00 in Mumbai,
+  which is 5 hours 30 minutes ahead of UTC.
+- **ETags that do not change.** An ETag built from an `updated_at` column that only stores whole
+  seconds gives two writes in the same second the same ETag. The second writer's `If-Match` then
+  succeeds against a version it never read. Use a version counter.
 - **Validation errors as `500`.** A `500` tells clients and retry libraries to try again later; a
   missing field will be missing next time too. Validation is a `4xx`, usually `422` or `400`.
 
 :::danger[A 200 that means failure]
-An API that returns `200 OK` with `{"success": false}` defeats every retry policy, cache rule,
-alert and dashboard built on status codes. Monitoring reports a perfect success rate during an
-outage. Errors are 4xx or 5xx, with a Problem Details body.
+An API that returns `200 OK` with `{"success": false}` defeats every retry policy, cache rule, alert
+and dashboard built on status codes. Monitoring reports a perfect success rate during an outage.
+Errors are 4xx or 5xx, with a Problem Details body.
 :::
 
 ## Trade-offs and when not to use it
 
-Every mechanism on this page has a cost. ETags require every write path, including admin scripts
-and migrations, to bump the version, and every client to handle `412`. Idempotency keys need storage,
-an expiry policy and a decision about what "same request" means. Problem Details and extensible
-enums need a review culture that treats the error catalogue and enum lists as part of the contract.
+Every mechanism on this page has a cost. ETags require every write path, including admin scripts and
+migrations, to bump the version, and every client to handle `412`. Idempotency keys need storage, an
+expiry policy and a decision about what "the same request" means. Problem Details and extensible
+enums need reviewers who treat the list of error types and enum values as part of the contract.
 
 REST over HTTP is not the right shape for everything. Between your own services, where both sides
-are deployed together and calls are frequent and small, **gRPC** gives generated clients, a binary
-format and streaming, and makes compatibility a property of the schema. When many different
-clients need different slices of a large graph of data, **GraphQL** moves the shape of the response
-to the client. When the server needs to tell the client something, **webhooks** or a message stream
-replace polling. REST's strength is the public, long-lived, cacheable API that many unknown clients
-use for years, which is exactly where the rules on this page pay for themselves.
+are deployed together and calls are frequent and small, **gRPC** gives generated clients, a compact
+format that is not text, instead of JSON, and **streaming** (many messages over one open connection), and
+it makes compatibility a property of the schema. When many different clients need different slices
+of a large web of connected data, **GraphQL** lets each client choose the shape of its response. When
+the server needs to tell the client something, webhooks or a message stream replace polling.
+
+REST's strength is the public, long-lived API that many unknown clients use for years, and whose
+responses can be cached by standard HTTP software. That is exactly where the rules on this page pay
+for themselves.
 
 ## Interview corner
 
 **"Design the API for placing an order."** A strong answer goes past the URL list to the failure
-cases: `POST /orders` with an `Idempotency-Key` so a mobile retry cannot create two orders; the
-response `201` with `Location`; `PATCH` with `If-Match` for editing the shipping address; a
+cases: `POST /orders` with an `Idempotency-Key`, so a mobile retry cannot create two orders; a
+`201` response with `Location`; `PATCH` with `If-Match` for editing the shipping address; a
 cancellation as its own resource; Problem Details for errors. The follow-up: *"What happens if the
-client retries while the first request is still running?"* The key is found in an "in progress"
+client retries while the first request is still running?"* The key is found in its "in progress"
 state, and the server answers `409` so the client retries later.
 
 **"PUT vs PATCH vs POST?"** `PUT` replaces the resource with the representation sent and is
 idempotent; `PATCH` changes part of it and is not idempotent by default; `POST` creates or performs
-an action and is neither. Strong answers mention merge patch's `null` rule and that idempotency is
-about effect, not response.
+an action and is neither. Strong answers mention merge patch's `null` rule, and that idempotency is
+about the effect, not the response.
 
-**"How do you stop two users overwriting each other's changes?"** ETag on `GET`, `If-Match` on the
+**"How do you stop two users overwriting each other's changes?"** An ETag on `GET`, `If-Match` on the
 write, `412` on a stale version, an atomic check-and-write on the server, and `428` to force clients
 to send the precondition. Follow-up: *"Isn't that a lot of conflicts?"* Only if the ETag covers far
 more than the edit; field-level `PATCH` or a finer-grained version reduces them.
 
 **"How do you add a field without breaking clients?"** Additive changes are safe if clients are
-tolerant readers; the exception is enumerations, so document enums as extensible and ship unknown-
-value handling in clients before you need it.
+tolerant readers. The exception is enumerations, so document enums as extensible and ship
+unknown-value handling in clients before you need it.
 
 ## Check yourself
 
@@ -629,9 +903,10 @@ answers `409` (retry later), and one that never arrived is processed once.
 <summary>3. You add If-Match to product updates, and your support team's bulk-edit tool starts failing with 412 on nearly every request. What is going on, and what are your options?</summary>
 
 The tool reads many products, then writes them minutes later, while other edits keep changing the
-products' ETags. Each stale write is correctly refused. Options: make the tool re-read and retry on
-`412`; have it send only the fields it changes with `PATCH`, without `If-Match`, where those fields
-are not read-modify-write; or narrow the version so it covers only the fields being edited.
+products' ETags. Each stale write is correctly refused. Options: make the tool read again and retry
+on `412`; have it send only the fields it changes with `PATCH`, without `If-Match`, where those
+fields are not read, changed and written back; or narrow the version so it covers only the fields
+being edited.
 
 </details>
 
@@ -657,10 +932,11 @@ values as a reviewed contract change.
 
 ## Recap
 
-- Design for the failure cases: a timeout, a concurrent editor, an old client.
+- Design for the moments of doubt: a timeout, a concurrent editor, an old client.
 - **Safe** means no change requested; **idempotent** means repeating has the same effect. Software
   retries idempotent requests on its own, so the method is a promise.
-- A timeout on `POST` is ambiguous; an **`Idempotency-Key`** stored with the result makes retries safe.
+- A timeout on `POST` is ambiguous; an **`Idempotency-Key`** stored with the result, in the same
+  transaction, makes retries safe.
 - **ETag + `If-Match`** turns lost updates into `412`s; the check and the write must be atomic.
 - **Merge patch** sets fields and uses `null` to remove; **JSON Patch** is a list of operations with
   a `test` precondition. Neither makes `PATCH` idempotent.
@@ -690,6 +966,7 @@ values as a reviewed contract change.
 - [RFC 7396, JSON Merge Patch](https://www.rfc-editor.org/rfc/rfc7396) and [RFC 6902, JSON Patch](https://www.rfc-editor.org/rfc/rfc6902) (standards in force) — the two PATCH formats.
 - [RFC 9457, Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457) (2023) — the error format.
 - [RFC 9745, The Deprecation HTTP Header Field](https://www.rfc-editor.org/rfc/rfc9745) (2025) — announcing deprecation in responses.
+- [RFC 9562, Universally Unique IDentifiers](https://www.rfc-editor.org/rfc/rfc9562) (2024) — the UUID formats, including the random version 4 used for keys.
 - [IETF draft: The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (draft -07, 2025) — the header being standardised.
 
 **Engineering docs and guidelines**
@@ -700,4 +977,4 @@ values as a reviewed contract change.
 - [Kubernetes: API concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/) and [server-side apply](https://kubernetes.io/docs/reference/using-api/server-side-apply/) (living docs, checked October 2026) — `resourceVersion` and field ownership.
 - [Google AIP-154, resource freshness](https://google.aip.dev/154) and [AIP-151, long-running operations](https://google.aip.dev/151) (living, checked October 2026).
 - [Microsoft REST API guidelines](https://github.com/microsoft/api-guidelines) and [Zalando RESTful API guidelines](https://opensource.zalando.com/restful-api-guidelines/) (living, checked October 2026) — compatibility rules and extensible enums.
-- [MDN: Number.MAX_SAFE_INTEGER](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER) (living reference) — why 64-bit IDs travel as strings.
+- [MDN: Number.MAX_SAFE_INTEGER](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER) (living reference) — why large IDs travel as strings.
