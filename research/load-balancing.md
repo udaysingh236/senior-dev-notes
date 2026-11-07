@@ -88,3 +88,42 @@ effect on stale data, subsetting, or that ejection and locality concentrate load
 Prequal NSDI 2024; Google subsetting ACM Queue 2022; Dropbox 2024; Linkerd docs (living) and 2.20
 announcement 2026; Envoy docs (living); AWS ELB docs (living); AWS networking blog (living); KEP-4444
 (2024); grpc-go docs (living).
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Rewrote the page with Part 1 "Understand it" (one running example: eight backends, one 3× slower,
+513 req/s, every p99 from `examples/load-balancing`) and a new `MentalModel.astro`. Building
+blocks: a load balancer, backends and the pool; requests in flight; utilisation and the line;
+percentiles (p50, p99, tail); the four signals a balancer can see; many balancers (proxy tier,
+sidecars, service mesh, client libraries). The old opening question now opens Part 2.
+
+Fixed in the fresher read:
+
+- Terms used before being explained, now introduced in place: in flight, utilisation, p99 and tail,
+  sidecar and service mesh, gRPC, herd effect, P2C ("sampled"), Little's law and "queueing", EWMA and
+  α, Peak EWMA's decay (e explained as "37% after one quiet second"), RPC, probe, RIF, full mesh,
+  TLS handshake, health check, hash function, "32-bit", rendezvous hashing, seed, rolling deploy,
+  churn, region and zone, NLB/ALB, balancer node, DNS, spillover, Kubernetes Service, outlier
+  ejection, cascade, panic mode, timeout, noisy neighbour, garbage-collection pause, cold cache,
+  slow start, processor core, Envoy's bias exponent, PID controller, HTTP/2, GOAWAY, load shedding,
+  affinity, network hop.
+- Numbers without an origin: 256 requests per refresh (513 × 0.5), 1,850 waiting (60 × 30.9),
+  31 a second (64.2 − 33.3), the 4.5% fair share (33 of 733), 50,000 req/s marked as a larger
+  example, the 25% P2C chance worked step by step.
+- Corrected "a fifth of a request in flight": the example program shows a median of 23 ms with 50
+  balancers, but the mean is higher (78 ms under own-count P2C, computed from the same program), so
+  the page now says "less than one request in flight" and shows 0.2 to 0.8 spread over 8 backends.
+- Figures: Pipeline moved from the start of the mechanisms to "Choosing between them", after every
+  stage it shows (discovery, ejection, panic, zone, subset) has been explained. EjectSim now has a
+  sentence saying the sim calls backends "hosts". Every figure has a sentence before it saying what
+  to look at.
+- Code snippets unchanged (checked line by line against the example files); added a "read it like
+  this" paragraph after each.
+
+What a student can say after Part 1 alone: "A load balancer picks a backend for every request, and
+the goal is that no request waits in a line it could have avoided; taking turns fails because a slow
+backend gets the same share and falls behind. Sending to the backend with the fewest requests in
+progress works with one balancer, but real systems have many balancer copies, and a shared table is
+always old (everyone rushes to the same backend) while each copy's own counts are almost all zero.
+Comparing two random backends stops the rush, remembering how fast each backend answered fills in
+the thin counts, and broken backends are left out, but never too many at once."
