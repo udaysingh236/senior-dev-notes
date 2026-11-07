@@ -1,0 +1,91 @@
+---
+// Part 1 mental model: one request for one 100 KB page from a server 150 ms away (there and
+// back). Five steps, most of them a round trip that waits for the one before. The bar at the
+// bottom is the same 840 ms drawn to scale; the bytes themselves would be a 0.8 ms sliver.
+// The top-right corner is left empty for the Figure's enlarge button.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const rows = [
+  { n: 1, name: 'find the address', what: 'DNS: name → number', cost: '40 ms', at: 'at 40 ms', tone: 'warn' },
+  { n: 2, name: 'open a connection', what: 'TCP: hello, hello back', cost: '150 ms', at: 'at 190 ms', tone: 'warn' },
+  { n: 3, name: 'make it private', what: 'TLS: agree on a key', cost: '150 ms', at: 'at 340 ms', tone: 'warn' },
+  { n: 4, name: 'ask for the page', what: 'HTTP: GET + 50 ms server work', cost: '200 ms', at: 'first byte 540 ms', tone: 'flow' },
+  { n: 5, name: 'receive the rest', what: 'pieces of 14, 29, 57 KB', cost: '300 ms', at: 'last byte 840 ms', tone: 'flow' },
+];
+const top = 44;
+const rowH = 50;
+const gap = 8;
+// The 840 ms bar: 392 units wide, so 1 ms = 392 / 840 units.
+const scale = 392 / 840;
+const segs = [40, 150, 150, 200, 300];
+let acc = 0;
+const bar = segs.map((ms, i) => {
+  const x = 4 + acc * scale;
+  acc += ms;
+  return { x, w: ms * scale, n: i + 1, tone: rows[i].tone };
+});
+const barY = top + 5 * (rowH + gap) + 8;
+---
+
+<svg viewBox="0 0 400 476" width="100%" role="img" aria-labelledby="hw-mm-t hw-mm-d">
+  <title id="hw-mm-t">Where 840 ms go when you load one 100 KB page from 150 ms away</title>
+  <desc id="hw-mm-d">
+    Five steps, one per row, for a browser in Mumbai loading a 100 KB page from a server whose
+    round trip is 150 ms. One: find the address with DNS, 40 ms. Two: open a connection with TCP,
+    one round trip, 150 ms, done at 190 ms. Three: make it private with TLS, one round trip,
+    150 ms, done at 340 ms. Four: send the HTTP GET request; with 50 ms of server work, the first
+    byte arrives at 540 ms. Five: receive the rest in three growing pieces of 14, 29 and 57 KB,
+    two more round trips, the last byte at 840 ms. A bar underneath shows the five steps to scale.
+    Moving the 100 KB itself on a 1 Gbit/s line takes only 0.8 ms of the 840.
+  </desc>
+
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one 100 KB page, server 150 ms there and back</text>
+
+  {
+    rows.map((r, i) => {
+      const y = top + i * (rowH + gap);
+      const soft = r.tone === 'warn' ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)';
+      return (
+        <g>
+          <rect {...box(4, y, 392, rowH)} rx="8" stroke-width="2" style={soft} />
+          <text x="16" y={y + 21} font-size="16" font-weight="700" style="fill: var(--viz-ink)">
+            {r.n}  {r.name}
+          </text>
+          <text x="16" y={y + 41} font-size="15" style="fill: var(--viz-muted)">
+            {r.what}
+          </text>
+          <text x="386" y={y + 21} font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+            {r.cost}
+          </text>
+          <text x="386" y={y + 41} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">
+            {r.at}
+          </text>
+        </g>
+      );
+    })
+  }
+
+  <text x="4" y={barY + 4} font-size="15" style="fill: var(--viz-muted)">the same 840 ms, to scale</text>
+  {
+    bar.map((s) => (
+      <g>
+        <rect
+          x={s.x}
+          y={barY + 14}
+          width={s.w}
+          height="30"
+          stroke-width="1.5"
+          style={s.tone === 'warn' ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'}
+        />
+        <text x={s.x + s.w / 2} y={barY + 35} font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {s.n}
+        </text>
+      </g>
+    ))
+  }
+  <text x="4" y={barY + 64} font-size="15" style="fill: var(--viz-warn)">amber: set-up before asking</text>
+  <text x="396" y={barY + 64} font-size="15" text-anchor="end" style="fill: var(--viz-flow)">blue: the page</text>
+
+  <rect {...box(4, barY + 78, 392, 50)} rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y={barY + 100} font-size="16" font-weight="700" style="fill: var(--viz-ink)">moving the 100 KB at 1 Gbit/s: 0.8 ms</text>
+  <text x="16" y={barY + 120} font-size="15" style="fill: var(--viz-muted)">the rest is waiting for messages to travel</text>
+</svg>
