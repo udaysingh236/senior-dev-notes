@@ -1,0 +1,67 @@
+---
+// Part 1 mental model: the secret is copied once through the QR code; after that the phone and
+// the server each run the same recipe on (secret, time slot) and get the same six digits.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const cols = [
+  { x: 4, head: 'your phone', result: 'shows', tone: 'client' },
+  { x: 206, head: 'the bank’s server', result: 'computes', tone: 'server' },
+];
+---
+
+<svg viewBox="0 0 400 432" width="100%" role="img" aria-labelledby="ga-mm-t ga-mm-d">
+  <title id="ga-mm-t">How the phone and the server agree on the same six digits</title>
+  <desc id="ga-mm-d">
+    At setup, once, the server puts a secret, ONSW42LP and so on, into a QR code and the app saves
+    it. After that, two columns: your phone and the bank's server. Each holds the same secret and
+    reads its own clock, 10:42:17, which is time slot 59,798,724. Each feeds the secret and the slot
+    into the same recipe and gets 049719. You type the phone's 049719, the server compares it with
+    its own result, they match, and you are logged in. At login only the six digits travel.
+  </desc>
+  <defs>
+    <marker id="ga-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-warn); font-family: var(--note-font-display)">at setup, once</text>
+  <rect {...box(4, 26, 392, 50)} rx="8" stroke-width="2" stroke-dasharray="5 4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="200" y="48" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">server → QR code → app saves the secret</text>
+  <text x="200" y="68" font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">ONSW42LPOJSGK5TO…</text>
+
+  <text x="4" y="104" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">every login, no messages between them</text>
+
+  {
+    cols.map((c) => (
+      <g>
+        <text x={c.x + 95} y="132" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {c.head}
+        </text>
+        <rect {...box(c.x, 142, 190, 48)} rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+        <text x={c.x + 95} y="162" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">secret</text>
+        <text x={c.x + 95} y="182" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">ONSW42LP…</text>
+
+        <rect {...box(c.x, 200, 190, 48)} rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+        <text x={c.x + 95} y="220" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">clock 10:42:17 → slot</text>
+        <text x={c.x + 95} y="240" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">59,798,724</text>
+
+        <line x1={c.x + 95} y1="249" x2={c.x + 95} y2="266" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#ga-mm-a)" />
+        <rect
+          {...box(c.x, 270, 190, 40)}
+          rx={c.tone === 'client' ? 14 : 6}
+          stroke-width="2"
+          style={c.tone === 'client' ? 'fill: var(--viz-client-soft); stroke: var(--viz-client)' : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'}
+        />
+        <text x={c.x + 95} y="296" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">same recipe</text>
+
+        <line x1={c.x + 95} y1="311" x2={c.x + 95} y2="326" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#ga-mm-a)" />
+        <text x={c.x + 95} y="350" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">
+          {c.result}
+        </text>
+        <text x={c.x + 95} y="374" font-size="22" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">049719</text>
+      </g>
+    ))
+  }
+
+  <rect {...box(4, 388, 392, 40)} rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="414" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">you type it, the server compares: match ✓</text>
+</svg>
