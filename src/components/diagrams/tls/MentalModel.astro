@@ -1,0 +1,95 @@
+---
+// Part 1 mental model: your browser, the café router that sees every packet, and the bank. Three
+// things happen over that untrusted path: the two ends agree on a key without sending it, the bank
+// proves who it is with a certificate and a signature, and the data travels encrypted and tagged.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const actors = [
+  { x: 4, head: 'you', sub: 'browser', rx: 14, style: 'fill: var(--viz-client-soft); stroke: var(--viz-client)' },
+  { x: 147, head: 'café router', sub: 'Mallory', rx: 6, style: 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)' },
+  { x: 290, head: 'bank', sub: 'server', rx: 6, style: 'fill: var(--viz-server-soft); stroke: var(--viz-server)' },
+];
+const cards = [
+  {
+    y: 104,
+    n: '1',
+    title: 'Agree on a key',
+    lines: ['each side sends a key share in public;', 'the key itself never travels'],
+    tone: 'var(--viz-flow)',
+  },
+  {
+    y: 194,
+    n: '2',
+    title: 'The bank proves who it is',
+    lines: ['certificate: this public key is the bank’s', 'signature over this chat: only it can sign'],
+    tone: 'var(--viz-ok)',
+  },
+  {
+    y: 284,
+    n: '3',
+    title: 'Send the payment, locked',
+    lines: ['encrypted and tagged: no reading, no editing', 'Mallory still sees sizes and timing'],
+    tone: 'var(--viz-server)',
+  },
+];
+---
+
+<svg viewBox="0 0 400 400" width="100%" role="img" aria-labelledby="tls-mm-t tls-mm-d">
+  <title id="tls-mm-t">What TLS does on a path someone else controls</title>
+  <desc id="tls-mm-d">
+    Three boxes in a row: you in your browser, the café router run by Mallory, and the bank's
+    server. Every packet between you and the bank passes through the router. Below, three steps.
+    One: agree on a key; each side sends a key share in public, and the key itself never travels.
+    Two: the bank proves who it is; its certificate says which public key is the bank's, and its
+    signature over this conversation is something only the bank can make. Three: send the payment,
+    locked; it is encrypted and tagged, so Mallory can neither read nor change it, but she still
+    sees sizes and timing. Steps one and two take one round trip, about 40 ms here, before step
+    three.
+  </desc>
+  <defs>
+    <marker id="tls-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">every packet passes through the router</text>
+
+  {
+    actors.map((a) => (
+      <g>
+        <rect {...box(a.x, 30, 106, 56)} rx={a.rx} stroke-width="2" style={a.style} />
+        <text x={a.x + 53} y="54" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {a.head}
+        </text>
+        <text x={a.x + 53} y="75" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">
+          {a.sub}
+        </text>
+      </g>
+    ))
+  }
+  <line x1="114" y1="58" x2="143" y2="58" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#tls-mm-a)" marker-end="url(#tls-mm-a)" />
+  <line x1="257" y1="58" x2="286" y2="58" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#tls-mm-a)" marker-end="url(#tls-mm-a)" />
+
+  {
+    cards.map((c) => (
+      <g>
+        <rect {...box(4, c.y, 392, 80)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+        <rect {...box(4, c.y, 6, 80)} rx="3" style={`fill: ${c.tone}`} />
+        <circle cx="32" cy={c.y + 22} r="12" stroke-width="2" style={`fill: none; stroke: ${c.tone}`} />
+        <text x="32" y={c.y + 27} font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {c.n}
+        </text>
+        <text x="54" y={c.y + 28} font-size="16" font-weight="700" style="fill: var(--viz-ink)">
+          {c.title}
+        </text>
+        <text x="20" y={c.y + 52} font-size="15" style="fill: var(--viz-muted)">
+          {c.lines[0]}
+        </text>
+        <text x="20" y={c.y + 71} font-size="15" style="fill: var(--viz-muted)">
+          {c.lines[1]}
+        </text>
+      </g>
+    ))
+  }
+
+  <text x="200" y="390" font-size="15" font-style="italic" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--note-font-display)">steps 1 and 2: one round trip (40 ms here)</text>
+</svg>
