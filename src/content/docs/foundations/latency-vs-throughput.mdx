@@ -1,12 +1,12 @@
 ---
 title: Latency vs Throughput
-description: What latency and throughput really measure, why latency explodes long before a server is full, Little's law for sizing pools and threads, why one shared queue beats many, how batching trades latency for throughput and when it buys both, and how load tests hide all of it.
-tagline: Latency explodes long before a server is full. The reason is a queue you are not looking at.
+description: What latency and throughput measure, explained from zero with one server and one queue, then in depth. Why latency explodes long before a server is full, Little's law for sizing pools and threads, why one shared queue beats many, how batching trades latency for throughput and when it buys both, and how load tests hide all of it.
+tagline: A server gets slow long before it is full. The reason is a line of waiting requests you cannot see.
 difficulty: beginner
 track: foundations
 prerequisites: [how-the-web-works]
 next: [percentiles-and-tail-latency, back-of-the-envelope-estimation, load-balancing, connection-pooling, caching-strategies, load-shedding, backpressure, autoscaling]
-lastReviewed: 2026-10-25
+lastReviewed: 2026-11-07
 sidebar:
   order: 3
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/latency-vs-throughput/MentalModel.astro';
 import HockeyStick from '../../../components/diagrams/latency-vs-throughput/HockeyStick.astro';
 import LittlesLaw from '../../../components/diagrams/latency-vs-throughput/LittlesLaw.astro';
 import Bottleneck from '../../../components/diagrams/latency-vs-throughput/Bottleneck.astro';
@@ -24,120 +25,253 @@ import BatchSim from '../../../components/sims/latency-vs-throughput/BatchSim.as
 
 ## The question
 
-A service needs 5 ms of work per request and handles 100 requests a second; its average latency
-is 10 ms. Traffic grows to 180 a second, the code does not change, and average latency is now
-50 ms: five times worse for less than twice the load, on a server that is still 10% idle. Then
-someone batches the database writes, and throughput triples while latency *drops*. Why does
-latency explode long before a server is "full", and when does trading latency for throughput make
-both better?
+Your server needs 5 milliseconds of work to answer one request. At 100 requests a second, users wait
+about 10 ms for an answer. Traffic grows to 180 requests a second. The code has not changed and the
+server still has 10% of its time free, yet users now wait about 50 ms: five times longer. Why does
+a server get slow long before it is full?
 
-## Why this problem exists
+The short answer: requests do not arrive evenly. Sometimes several arrive close together, and all
+but one of them must wait in line. The busier the server, the more often that happens and the longer
+the line gets, and the waiting grows much faster than the traffic. The two words in this page's title
+are the two sides of that line: **latency** is how long one request takes, **throughput** is how many
+requests the server finishes per second.
 
-Two words, measured from different sides of the system:
+## The idea in plain words
 
-- **Latency** is how long one request takes, from the moment it is sent to the moment the answer
-  arrives. Users feel latency. It has three parts: time on the network, time **waiting** for a
-  free worker, and **service time**, the time a worker spends actually doing the work.
-- **Throughput** is how many requests are completed per unit of time: 500 requests a second, 2 GB
-  an hour. The business feels throughput; it is what a server can carry.
+Follow one server through the morning. It runs a small API, and every request needs exactly the same
+5 ms of work on average. Call that the **work** per request.
 
-Two neighbours get mixed in. **Bandwidth** is the most a link can carry (1 Gbit/s), not what it
-does carry; throughput is what actually got through. And **utilisation** is the fraction of time
-a worker is busy, and it follows from the other two: arrival rate × service time. At 100 requests
-a second needing 5 ms each, one worker is asked for 100 × 5 ms = 500 ms of work every second, so
-it is busy 50% of the time. At 180 a second it is 900 ms, or 90%. Keep that multiplication in
-mind; it drives everything below.
+1. **What the server can carry.** One request takes 5 ms, and a second has 1,000 ms, so the server can
+   finish at most 1,000 ÷ 5 = 200 requests a second. That is its **capacity**.
+2. **A quiet hour: 100 requests a second.** The server is asked for 100 × 5 ms = 500 ms of work in
+   every second, so it is busy half the time and idle half the time.
+3. **If requests arrived on a timetable**, one every 10 ms, each would find the server free, get its
+   5 ms of work, and leave. Every user would wait exactly 5 ms.
+4. **But requests arrive at random.** Users do not coordinate. In some stretches three requests
+   arrive within 2 ms of each other; in others nothing arrives for 30 ms. Take three requests arriving
+   at 0, 1 and 2 ms. The first is served from 0 to 5 ms. The second must wait until 5 ms, so it waits
+   4 ms and finishes at 10. The third waits until 10, so it waits 8 ms and finishes at 15. The server
+   then sits idle until the next request arrives.
+5. **Averaged over many requests at 100 a second**, the waiting turns out to be about as long as the
+   work itself: 5 ms of waiting plus 5 ms of work, 10 ms in total. That matches the 10 ms in the
+   opening question.
+6. **A busy hour: 180 requests a second.** Now the server is busy 180 × 5 ms = 900 ms of every second:
+   90% of the time. Bunches still arrive, but there is very little idle time between them to work off
+   the line, so a line that forms now takes much longer to clear. On average a request waits 45 ms
+   before its 5 ms of work: 50 ms in total.
+7. **The pattern.** A handy rule for this kind of random traffic: the total time a request takes is
+   about the work divided by the fraction of time the server is free. Free half the time: 5 ÷ 0.5 =
+   10 ms. Free a tenth of the time: 5 ÷ 0.1 = 50 ms. Free a twentieth: 5 ÷ 0.05 = 100 ms. As the server
+   approaches full, the time per request has no upper limit.
 
-The confusion is costly because "make it faster" means two different things. Making one request
-faster (lower latency) is about removing work: caching, a better query, fewer round trips. Making
-the system carry more (higher throughput) is about doing work in parallel or in bulk: more
-servers, more workers, batching. Some changes help both, some trade one for the other, and the
-relationship between them is not a fixed trade-off. It is set by queues.
+<Figure caption="One server and the line in front of it. Latency is the waiting plus the work; throughput is how many finish each second; utilisation is how busy the server is. At 180 requests a second the server is 90% busy and the waiting is nine times the work.">
+  <MentalModel />
+</Figure>
+
+So the two measures pull against each other through the line. Pushing throughput towards the
+server's capacity (from 100 towards 200 a second) makes the line longer, and latency climbs: slowly
+at first, then steeply. A server that is "only 90% busy" is not 10% away from trouble; it is already
+making most requests wait.
+
+An everyday picture: a railway ticket counter with one clerk who takes a minute per passenger. If one
+passenger arrives every two minutes on average, the clerk is busy half the time, but passengers do not
+arrive every two minutes exactly: sometimes three walk up together and two of them wait. Make the
+average one passenger every 66 seconds and the clerk is 90% busy; a bunch at 10 AM is still being
+worked off at 10:20. The picture stops working in one place: a passenger can see the line and leave,
+while a request cannot see anything and waits its turn, holding memory and a connection the whole time.
+
+## The building blocks
+
+Five ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### Latency
+
+**What it is.** **Latency** is how long one request takes, from the moment it is sent to the moment
+the answer arrives.
+
+**Why it exists as a measure.** Users feel latency: a page that takes two seconds feels broken even if
+the server is handling thousands of other people perfectly well.
+
+**Example.** A request that spends 2 ms crossing the network, waits 45 ms in line and then gets 5 ms of
+work has a latency of 2 + 45 + 5 = 52 ms.
+
+**The precise version.** Latency has three parts: time on the network, **waiting time** (in a line for
+a free worker, a free thread, a free database connection), and **service time**, the time a worker
+spends actually doing the work. On this page "work" and "service time" mean the same thing, written S.
+Most of what makes latency surprising is the waiting part.
+
+### Throughput and capacity
+
+**What it is.** **Throughput** is how many requests are finished per unit of time: 180 requests a
+second, 2 GB an hour.
+
+**Why it exists as a measure.** The business feels throughput: it is how many customers, orders or
+messages the system actually serves.
+
+**Example.** Our server finishes 180 requests a second in the busy hour. Its **capacity**, the most it
+could ever finish, is 200 a second, because each takes 5 ms.
+
+**The precise version.** Throughput is what got done; capacity is the ceiling. A neighbour word gets
+mixed in: **bandwidth** is the capacity of a network link (1 Gbit/s), while throughput is what actually
+went through it. When more arrives than the capacity, throughput stays at the capacity and the extra
+waits, so the line grows for as long as the overload lasts.
+
+### Utilisation
+
+**What it is.** **Utilisation** is the fraction of time a worker is busy.
+
+**Why it exists as a measure.** It is the number that predicts waiting. CPU graphs show it, and
+autoscaling rules use it.
+
+**Example.** At 180 requests a second, each needing 5 ms, the server is asked for 180 × 0.005 s = 0.9
+seconds of work every second: 90% utilisation.
+
+**The precise version.** Utilisation u = arrival rate × service time, divided by the number of workers
+if there are several. It must stay below 1 (100%): at 1 or above, work arrives faster than it can be
+done, and the line grows without end.
+
+### A queue
+
+**What it is.** A **queue** is the line of requests waiting for a worker, served in the order they
+arrived.
+
+**Why it exists.** A worker can do one thing at a time. When a request arrives while the worker is
+busy, the system has two choices: reject it, or keep it until the worker is free. Keeping it is the
+queue.
+
+**Example.** At 10:00:00.000 the server is busy with request A. Requests B and C arrive 1 ms apart and
+join the queue: B is first in line, C second. When A finishes, B starts.
+
+**The precise version.** Queues hide everywhere, not only in message brokers: the accept queue of a
+socket, a thread pool's task queue, requests waiting for a database connection, a lock that other
+transactions wait on. Each one turns "too busy right now" into waiting time, which shows up as
+latency. The order "first come, first served" is called **FIFO** (first in, first out).
+
+### Requests in flight
+
+**What it is.** A request is **in flight** from the moment it arrives until it is finished: while it
+waits in the queue and while it is being worked on.
+
+**Why it exists as a measure.** Every request in flight holds something: a thread, memory for its data,
+an open connection, maybe a database connection. Servers run out of those, so the number in flight is
+what you size pools and limits for.
+
+**Example.** At one instant our busy server is working on one request and has four waiting: five
+requests in flight.
+
+**The precise version.** The count goes up and down all the time; what matters is the average over
+time, written L. Part 2 shows a law that links it to throughput and latency, so you can work out any
+one of the three from the other two.
+
+:::tip[If you stop here]
+- **Latency** is how long one request takes: waiting in line plus the work. **Throughput** is how many
+  requests finish per second.
+- Requests arrive at random, so they bunch up, and the ones in a bunch wait in a **queue**.
+- The busier the server (its **utilisation**), the less idle time it has to clear the line, so waiting
+  grows much faster than traffic: about work ÷ (fraction of time free). At 90% busy, the waiting is
+  nine times the work.
+- So "the server is only 80 or 90% busy" already means slow answers. To keep latency low, keep
+  anything users wait on well below full.
+:::
+
+## Going deeper
+
+Part 1 used one server, one queue and a rule of thumb. Real systems raise harder questions. Why does
+an autoscaling rule of "add servers at 80% CPU", which sounds conservative, leave users with answers
+five times slower than they could be? Why does a load test that sends ever more traffic report flat
+latency right up to the point where production falls over? And how can batching, which makes each
+request wait on purpose, triple throughput and make latency *drop*?
+
+The rest of this page builds the tools to answer those: the curve behind the rule of thumb, a law that
+links throughput, latency and requests in flight, what makes waiting worse besides utilisation, why
+shared queues and pipelines behave as they do, when batching helps, and how to measure all of it
+honestly.
 
 ## The obvious fix, and why it breaks
 
-The usual rules of thumb: add servers when CPU passes 80%; watch average latency; load-test with
-50 virtual users and check that latency stays flat. Each one quietly assumes that latency stays
-close to service time until the server is full, and each breaks because of waiting.
+The usual rules: add servers when CPU passes 80%; watch average latency; check with a load test using
+50 virtual users. A **virtual user** is a loop in a load-testing tool that sends a request, waits for the
+answer, and then sends the next one, imitating one person.
 
-At 80% utilisation, a server with random arrivals keeps requests waiting four times longer than
-it spends working on them: average latency is five times the service time. The CPU graph says
-"20% headroom"; users see a service five times slower than it can be. And the load test with 50
-virtual users never sees it, because each virtual user waits for its response before sending the
-next: when the server slows down, the test slows down with it and sends less load, exactly when
-the real world would not. The rest of this page is about the waiting: where it comes from, how big
-it gets, and the levers that shrink it.
+Each rule quietly assumes latency stays close to the service time until the server is full, and each
+breaks because of the waiting from Part 1. At 80% utilisation, the rule from Part 1 says a request takes
+S ÷ 0.2 = 5 times its service time: four parts waiting, one part work. The CPU graph says "20% headroom";
+users see a service five times slower than it could be.
 
-## The core idea
+The 50-virtual-user test never sees this, because each virtual user waits for its answer before
+sending the next request. When the server slows down, the test automatically sends fewer requests, at
+the exact moment real users, who do not wait for each other, would keep arriving. "Measuring them
+honestly" below comes back to this.
 
-**Latency is service time plus waiting, and waiting depends on how busy the server is, sharply.**
-With requests arriving at random, the average time spent in the system is the service time
-divided by (1 − utilisation):
+## How it works, piece by piece
+
+### The curve: latency is work divided by the time left free
+
+Part 1's rule of thumb is a real formula. For one server, with requests arriving independently at
+random and service times that also vary randomly around their average, the average latency is:
+
+**latency = S ÷ (1 − u)**
+
+Here S is the average service time and u is the utilisation as a fraction (0.9 for 90%), so 1 − u is
+the fraction of time the server is free. Plotting it shows its shape:
 
 <Figure caption="Mean latency for one server with random arrivals, in multiples of the work a request needs. The green band is the work itself; the amber area is waiting. Latency doubles at 50% utilisation, is five times the work at 80% and ten times at 90%, and has no limit as utilisation approaches 100%.">
   <HockeyStick />
 </Figure>
 
-That curve is why "the server is only 80% busy" and "the service is five times slower than it
-should be" are both true at once. It also explains the opening: 100 requests a second at 5 ms is
-50% utilisation, so 5 ÷ (1 − 0.5) = 10 ms; 180 a second is 90%, so 5 ÷ (1 − 0.9) = 50 ms.
-
-Two consequences shape the rest of the page. Throughput and latency are linked through the number
-of requests in flight (Little's law), and anything that lowers utilisation or variability, or
-lets servers share one queue, cuts waiting far more than its raw capacity gain suggests.
-
-## How it works, piece by piece
+Read it left to right. Up to about 50% busy, the waiting is at most as long as the work. Between 50%
+and 80%, it grows to four times the work. Past 80% the curve turns almost straight up: going from 90%
+to 95% busy doubles latency again, from 10 to 20 times the work. Engineers call this a "hockey stick"
+for its shape. It is why "the server is only 80% busy" and "the service is five times slower than it
+should be" are both true at the same time.
 
 ### Little's law: the one equation that links them
 
-Before the queues, one rule that holds for almost any system that is not piling up work: **the
-average number of requests in flight equals throughput times average latency.**
+**What it says.** **Little's law**: the average number of requests in flight equals throughput times
+average latency, L = throughput × latency.
 
-Picture a toll plaza. If 20 cars arrive a minute and each spends 3 minutes in the queue and the
-booth, then at any moment about 20 × 3 = 60 cars are somewhere in the plaza. Nothing about the
-booths' speed, the order of service or the size of the cars changes that arithmetic; it only needs
-the plaza to be in a steady state, letting cars out as fast as they arrive on average. The analogy
-breaks in one place: a toll plaza has a visible queue, while a server's "cars" are threads,
-connections and memory, invisible until they run out.
+**Why it matters.** It ties together the three numbers from Part 1, so knowing any two gives you the
+third, and it holds for almost any system that is not piling up work, whatever the order of service,
+the number of servers or the shape of the traffic.
+
+**Example.** Picture a toll plaza. If 20 cars arrive a minute and each spends 3 minutes in the queue
+and at the booth, then at any moment about 20 × 3 = 60 cars are somewhere in the plaza. Nothing about
+the booths' speed or the order of service changes that arithmetic. The analogy breaks in one place: a
+toll plaza's queue is visible, while a server's "cars" are threads, connections and memory, invisible
+until they run out.
 
 <Figure caption="Little's law: what is inside the box equals what goes through per second times how long each stays. Read one way, it tells you how many threads a load needs; read the other way, the most a fixed pool can do.">
   <LittlesLaw />
 </Figure>
 
-Three uses, each one line of arithmetic:
+**The precise version.** The law needs the system to be in a **steady state**: on average, requests
+leave as fast as they arrive. Three uses, each one line of arithmetic:
 
-- **Sizing.** 1,000 requests a second at 200 ms each means 200 requests in flight, so 200 threads,
-  200 coroutines or 200 database connections busy on average, more at peaks.
-- **Ceilings.** A pool of 50 database connections with 20 ms queries can complete at most
-  50 ÷ 0.020 = 2,500 queries a second. Past that, requests wait for a connection, and the waiting
-  shows up as latency, not as an error.
-- **Cost.** In-flight requests hold memory and connections, so latency *is* capacity. Marc Brooker
-  uses this to show that in typical services the slowest 1% of requests can account for about half
-  of mean latency, and therefore about half of the concurrency you pay for
+- **Sizing.** 1,000 requests a second at 200 ms each means 1,000 × 0.2 = 200 requests in flight, so 200
+  threads, 200 coroutines (lightweight threads managed by the program) or 200 database connections busy on average, and more at peaks.
+- **Ceilings.** A pool of 50 database connections, with queries taking 20 ms each, can finish at most
+  50 ÷ 0.020 = 2,500 queries a second (throughput = L ÷ latency). Past that, requests wait for a
+  connection, and the waiting shows up as latency, not as an error.
+- **Cost.** Requests in flight hold memory and connections, so latency *is* capacity: double the
+  latency at the same traffic and you need twice the threads. Marc Brooker uses this to show that in
+  typical services the slowest 1% of requests can account for about half of the average latency, and
+  so for about half of the threads and connections you pay for
   ([Brooker, 2026](https://brooker.co.za/blog/2026/07/29/lorenz-and-little.html)).
 
 Little's law is also a sanity check for dashboards: if your metrics say 1,000 requests a second at
-50 ms but 400 requests in flight, one of the three numbers is wrong.
+50 ms but 400 requests in flight, one of the three numbers is wrong (1,000 × 0.05 = 50, not 400).
 
-### Queues: why waiting starts long before 100%
+### Queues, measured
 
-Why would requests wait at all at 80%, when the server has 20% spare? Because "80%" is an average,
-and requests do not arrive on a timetable.
+Part 1 showed bunches making requests wait. There is a second half to the story that makes high
+utilisation so costly: the idle time between bunches is lost for good. A server cannot do work ahead
+of time for requests that have not arrived yet, so a quiet 10 ms gap does not help the bunch that
+arrives after it. Bunches create waiting; gaps waste capacity; random arrivals produce both. The busier
+the server, the fewer gaps it has to catch up in.
 
-Take a server needing exactly 10 ms per request, and three requests in a 40 ms stretch: 30 ms of
-work in 40 ms, 75% utilisation. If they arrive at 0, 13 and 26 ms, nobody waits. If they arrive at
-0, 2 and 4 ms, the first is served from 0 to 10, the second waits 8 ms (served 10 to 20), the third
-waits 16 ms (served 20 to 30), and the server then sits idle from 30 to 40. Same utilisation, an
-average wait of 8 ms instead of 0. And the idle 10 ms at the end is lost for good: a server cannot
-work ahead on requests that have not arrived yet. Bunching creates waiting, gaps waste capacity,
-and random arrivals produce both. The busier the server, the less
-spare time it has to clear a bunch before the next one, so waits grow faster and faster as
-utilisation rises.
-
-For the simplest random case (one server, independent arrivals, service times that vary randomly
-around their mean) the average latency is **S ÷ (1 − u)**, where S is the average service time and
-u the utilisation. The example code simulates 200,000 requests at each utilisation and lands on
-the formula:
+To check the formula, the example code simulates 200,000 requests with 10 ms of average work at
+different utilisations and measures the average latency:
 
 ```text title="python queue_lab.py (node queue-lab.mjs prints the same)"
 One server, 10 ms of work per request on average
@@ -149,129 +283,160 @@ utilisation   measured  formula S/(1-u)  fixed-time work
         95%    198.6 ms         200.0 ms         104.5 ms
 ```
 
-Here is the same queue running. Move utilisation and watch the measured point ride the curve:
+The "measured" column lands on the formula. Ignore the last column for a moment; the next section is
+about it. Here is the same queue running. Move utilisation and watch the measured point ride the curve:
 
 <QueueSim />
 
 ### Variability: same load, different waits
 
-The last column of that table is the same server with **fixed** service times: every request
-takes exactly 10 ms. At every utilisation it waits about half as long. Waiting is driven by
-utilisation *and* by how unpredictable arrivals and service times are. A common approximation
-(Kingman's formula) puts it as:
+The last column of that table is the same server with **fixed** service times: every request takes
+exactly 10 ms instead of 10 ms on average. At every utilisation it waits about half as long. So waiting
+depends on utilisation *and* on how unpredictable the arrivals and the service times are.
+
+**What variability is.** How much individual values spread around their average. Three requests taking
+10, 10 and 10 ms have no spread; three taking 1, 2 and 27 ms have the same 10 ms average and a large
+spread.
+
+**Why it matters.** A long request in front of the line makes everyone behind it wait; a predictable
+stream lets the server keep up with fewer surprises.
+
+**Example.** A queue serving 5 ms reads and one 5-second export: the export takes the worker for 5
+seconds, and every read that arrives meanwhile waits behind it, even though the average service time
+barely moved.
+
+**The precise version.** Variability is measured as the **coefficient of variation**: the standard
+deviation (the typical distance of a value from the average) divided by the average. Fully random
+arrivals or service times score 1; perfectly regular ones score 0. Kingman's formula, a common
+approximation, combines them:
 
 ```text
 waiting ≈ (variability of arrivals² + variability of service²) / 2  ×  u / (1 − u)  ×  S
 ```
 
-where "variability" is the standard deviation divided by the mean. Random arrivals and random
-service each score 1; perfectly regular ones score 0. The formula says two things the curve alone
-does not. First, halving variability is worth about as much as a large capacity increase at high
-utilisation. Second, the things that make service times erratic in real systems (garbage-collection
-pauses, cache misses, a few huge requests mixed with small ones, a slow disk) cost latency for
-*everyone* behind them in the queue, not only for the slow request. Splitting big and small work
-into separate queues, so a 5-second export never sits in front of a 5 ms read, removes variability
-without adding a single server.
+With random arrivals (1) and fixed service (0), the first factor is (1 + 0) / 2 = 0.5: half the waiting
+of the fully random case, which is the last column of the table. The formula says two things the curve
+alone does not. First, at high utilisation, halving variability is worth about as much as a large
+capacity increase. Second, whatever makes service times erratic in real systems (garbage-collection
+pauses, when the language runtime stops briefly to free unused memory; cache misses, when data is not
+in fast memory and must be fetched from slower storage; a few huge requests among small ones; a slow
+disk) costs latency for *everyone*
+behind them, not only for the slow request. Splitting big and small work into separate queues, so a
+5-second export never sits in front of a 5 ms read, removes variability without adding a single server.
 
 ### One shared queue beats many
 
-Four servers can be fed in two ways: each with its own queue (a load balancer picks a server and
-the request waits there), or one shared queue that hands the next request to whichever server
-frees up first. Same servers, same load:
+Four servers can be fed in two ways. With **a queue per server**, a load balancer (a component that
+spreads incoming requests over several servers) picks a server for each request, and the request waits
+in that server's queue. With **one shared queue**, every request waits in a single line and goes to
+whichever server frees up first. Same servers, same load:
 
 <Figure caption="Four servers at 80% each. With a queue per server, one server can sit idle while another has five waiting. With one shared queue, no server is idle while work waits anywhere, and mean latency falls from 49.6 ms to 17.4 ms.">
   <SharedQueue />
 </Figure>
 
-The shared queue never lets a server idle while work waits elsewhere, so it absorbs bunches four
-times better. It is the single-line queue at a bank or an airport counter, and the reason a
-load balancer that sends each request to the least busy backend (the
-[proxy and load balancer page](/traffic/proxy-lb-gateway/) covers the algorithms) beats round robin
-under load: it approximates one shared queue. The same effect explains why one big pool usually
-beats several small ones, and why splitting a service's capacity across too many isolated
-partitions raises latency even at the same total utilisation.
+The shared queue never lets a server sit idle while work waits elsewhere, so the gaps of one server
+absorb the bunches of another. It is the single snaking line at an airport check-in counter instead
+of one line per desk. It is also why a load balancer that sends each request to the least busy server
+(the [proxy and load balancer page](/traffic/proxy-lb-gateway/) covers the algorithms) beats **round
+robin**, which hands requests to servers in turn regardless of how busy they are: least-busy behaves
+almost like one shared queue. For the same reason one big pool usually beats several small ones, and
+splitting a service's capacity across too many isolated partitions raises latency even at the same
+total utilisation.
 
 ### Pipelines: throughput is the slowest stage
 
-A request rarely meets one server. It passes through stages, and the two quantities combine
-differently along the path:
+A request rarely meets one server. It passes through **stages**, each with its own workers and its own
+queue: the load balancer, the application, a cache, the database. The two measures combine differently
+along that path:
 
 <Figure caption="Throughput of a pipeline is the throughput of its slowest stage. Latency is the sum of the stages, plus the queue that builds in front of the slowest one. Speeding up any other stage changes neither.">
   <Bottleneck />
 </Figure>
 
-This is why optimising the wrong stage is the most common performance mistake: making parsing
-twice as fast here saves 0.25 ms of latency and adds nothing to throughput. Find the stage with
-the highest utilisation first; it is where the queue is. Two related lessons follow. **Adding
-workers** raises throughput only for the stage they are added to, and only until that stage stops
-being the slowest; past that point extra workers only add more requests waiting at the next
-bottleneck, often the database. And **parallelism does not lower the latency of one request** unless
-that request itself is split into parts that run at once, in which case its latency becomes that
-of the slowest part (the percentiles page, coming soon, covers why that makes the tail matter).
+The slowest stage is called the **bottleneck**, after the narrow neck that limits how fast a bottle
+pours. Optimising any other stage is the most common performance mistake: making parsing twice as fast
+in the figure saves 0.25 ms of latency and adds nothing to throughput. Find the stage with the highest
+utilisation first; that is where the queue is.
+
+Two lessons follow. **Adding workers** raises throughput only for the stage they are added to, and only
+until that stage stops being the slowest; past that point, extra workers only add more requests waiting
+at the next bottleneck, often the database. And **parallelism does not lower the latency of one
+request** unless that request is itself split into parts that run at once, in which case its latency
+becomes that of its slowest part (the percentiles page, coming soon, covers why that makes the slowest
+requests matter so much).
 
 ### Why more servers stop helping
 
-Doubling servers doubles throughput only if the servers never wait for each other. Real systems
-share things: a lock, a database row, a cache that must be kept consistent, a leader that every
-write goes through. Two costs grow with the number of servers N, and the **Universal Scalability
-Law** names them:
+Doubling the servers doubles throughput only if the servers never wait for each other. Real systems
+share things: a lock (a flag that lets only one worker touch something at a time), a database row, a cache that must stay consistent, a leader that every write goes
+through. The **Universal Scalability Law** (USL) names two costs that grow as you add servers:
 
-- **Contention** (α): the fraction of work that must happen one at a time, such as acquiring a
-  shared lock. It caps the speed-up, like the single-file stage in a pipeline.
-- **Coherence** (β): the cost of keeping servers in agreement, such as invalidating each other's
-  caches or exchanging state. Every server talks to every other, so this cost grows with N², and
-  past some point adding a server makes the whole system *slower*.
+- **Contention** (written α): the fraction of the work that must happen one server at a time, such as
+  holding a shared lock. Like the slowest stage of a pipeline, it caps the speed-up.
+- **Coherence** (written β): the cost of keeping servers in agreement, such as telling each other to
+  drop stale cache entries. With N servers there are N × (N − 1) ÷ 2 pairs that may need to talk, so
+  this cost grows roughly with N²: past some point, adding a server makes the whole system *slower*.
 
-Relative throughput is N ÷ (1 + α(N − 1) + βN(N − 1)). With a modest 5% contention and 0.1%
-coherence cost:
+Throughput relative to one server is N ÷ (1 + α(N − 1) + βN(N − 1)). With a modest 5% contention
+(α = 0.05) and 0.1% coherence cost (β = 0.001):
 
 | Servers | 1 | 2 | 4 | 8 | 16 | 32 | 64 |
 |---|---|---|---|---|---|---|---|
 | Throughput (× one server) | 1.0 | 1.9 | 3.4 | 5.7 | 8.0 | 9.0 | 7.8 |
 
-Thirty-two servers give nine times one server, and sixty-four give less than thirty-two. The peak
-sits at √((1 − α) ÷ β), about 31 servers here. You find α and β by measuring throughput at a few
-cluster sizes and fitting the curve; the practical lesson is to remove shared state from the hot
-path (partition it, cache it locally, make it read-only) before buying more servers to fight it.
-Aravindh Sampathkumar's SREcon25 talk walks through fitting it to production data
+Thirty-two servers give nine times one server, and sixty-four give less than thirty-two. The peak sits
+at √((1 − α) ÷ β), about 31 servers here. You find α and β by measuring throughput at a few cluster
+sizes and fitting the curve. The practical lesson: remove shared state from the busy path (split it,
+cache it locally, make it read-only) before buying more servers to fight it. Aravindh Sampathkumar's
+SREcon25 talk walks through fitting it to production data
 ([USENIX, 2025](https://www.usenix.org/conference/srecon25emea/presentation/sampathkumar)).
 
 ### Batching: paying latency to buy throughput
 
-Many operations have a large fixed cost per call and a small cost per item: a disk flush
-(`fsync`), a network round trip, a database transaction commit, a system call. If a flush costs
-2 ms whatever it carries, then one flush per write caps you at 500 writes a second, while one
-flush for 100 writes costs about the same 2 ms. **Batching** spreads the fixed cost: wait a little,
-collect several items, send them together.
+**What batching is.** Collecting several items and handling them in one operation instead of one at a
+time.
 
-The price is latency, but only some of the time. At low load, a write that arrives alone waits for
-company that may not come, so it is slower than it needed to be. Near capacity, the unbatched
-writer is queueing anyway, and the batch takes everything waiting in one call, so batching makes
-the queue disappear and latency *falls*. Above the unbatched writer's ceiling, there is no
-contest. Both cases on the same stream:
+**Why it exists.** Many operations have a large **fixed cost** per call and a small cost per item. Three
+common ones: `fsync`, which forces data from memory onto the disk so it survives a crash; a network round
+trip; and a database **commit**, which makes a transaction permanent.
+
+**Example.** If one disk flush costs 2 ms whatever it carries, then flushing after every write caps you
+at 1,000 ÷ 2 = 500 writes a second. One flush for 100 writes costs about the same 2 ms, so the same disk
+could take tens of thousands of writes a second.
+
+**The precise version.** A batcher waits a short **window** to collect items, or until a size limit, and
+sends them together. The price is latency, but only some of the time. At low load, a write that arrives
+alone waits for company that may not come, so it is slower than it needed to be. Near capacity, the
+unbatched writer is queueing anyway, and the batch takes everything waiting in one call, so the queue
+disappears and latency *falls*. Above the unbatched writer's capacity there is no contest: it cannot
+keep up at all. All three cases on the same stream of writes:
 
 <BatchSim />
 
-Real systems expose this as a knob. Kafka's producer waits up to `linger.ms` to fill a batch, and
-Kafka 4.0 (2025) changed its default from 0 ms to 5 ms, trading a few milliseconds per message for
-fewer, fuller requests ([KIP-1030](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1030%3A+Change+constraints+and+default+values+for+various+configurations)).
+Real systems expose this as a setting. Kafka, a widely used message broker, has its producers wait up to
+`linger.ms` to fill a batch, and Kafka 4.0 (2025) changed the default from 0 ms to 5 ms, trading a few
+milliseconds per message for fewer, fuller requests ([KIP-1030](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1030%3A+Change+constraints+and+default+values+for+various+configurations)).
 The cost showed up exactly where the sim predicts: a follow-up proposal, KIP-1224, reports latency
-regressions for low-throughput internal writes after the upgrade and makes the linger adaptive.
-PostgreSQL's `commit_delay` does the same for transaction commits: it waits up to that many
-microseconds so several commits can share one write-ahead-log flush, and only when at least
-`commit_siblings` other transactions are active, so a lone commit does not wait for nobody
-([PostgreSQL docs](https://www.postgresql.org/docs/current/runtime-config-wal.html), as of October
-2026). That condition is the "wait only if others are around" rule the sim's batcher uses.
-TCP's Nagle algorithm is the same trade inside the kernel, with the same low-load cost (the
-[TCP page](/networking/tcp-vs-udp/) measures it).
+regressions for low-traffic internal writes after the upgrade and makes the wait adaptive.
+
+PostgreSQL's `commit_delay` does the same for commits: it waits up to that many microseconds so several
+commits can share one flush of the write-ahead log (the file every change is written to before it
+counts as committed), and only when at least `commit_siblings` other transactions are active, so a lone
+commit does not wait for nobody ([PostgreSQL docs](https://www.postgresql.org/docs/current/runtime-config-wal.html),
+as of October 2026). That condition is the "wait only if others are around" rule the sim's batcher
+uses. TCP's Nagle algorithm is the same trade inside the operating system, with the same cost at low
+load (the [TCP page](/networking/tcp-vs-udp/) measures it).
 
 ### On the network: latency-bound or bandwidth-bound?
 
-The same two words apply to moving data, and which one limits you depends on the size. Sending S
-bytes over a link with round-trip time RTT and bandwidth B takes roughly **a few RTTs + S ÷ B**: the
-round trips for setting up and for TCP's slow start (the
-[page on what happens when you type a URL](/foundations/how-the-web-works/) counts them), plus the
-time to push the bytes through.
+The same two words apply to moving data, and which one limits you depends on the size. Two terms first:
+the **round-trip time** (RTT) is how long a message takes to reach the other side and an answer to come
+back, set mostly by distance; **bandwidth** (B) is how many bytes per second the link can carry.
+Sending S bytes takes roughly **a few RTTs + S ÷ B**: a few round trips to set up the connection and to
+let TCP's **slow start** (TCP sends a little at first and speeds up as acknowledgements come back) open
+up, plus the time to push the bytes through. The
+[page on what happens when you type a URL](/foundations/how-the-web-works/) counts those round trips.
 
 | Transfer, 100 ms RTT, 1 Gbit/s link | Round trips (about 3 × 100 ms) | Pushing bytes (S ÷ B) | Limited by |
 |---|---|---|---|
@@ -280,55 +445,57 @@ time to push the bytes through.
 | A 10 GB backup | 300 ms | 80 s | bandwidth |
 
 For small responses, a 10 Gbit/s upgrade changes nothing users can feel; moving the server closer,
-reusing connections or removing round trips does. For bulk transfers, the opposite. Most API
-traffic is in the first row, which is why latency work pays off for it and bandwidth upgrades do
-not.
+reusing connections or removing round trips does. For bulk transfers it is the opposite. Most API
+traffic is in the first row, which is why latency work pays off for it and bandwidth upgrades do not.
 
 ### Measuring them honestly
 
-Most bad conclusions about latency come from how it was measured. Three traps:
+Most bad conclusions about latency come from how it was measured. Three traps.
 
-**Closed load tests.** A tool with N virtual users, each sending a request and waiting for its
-response before sending the next, generates load that depends on the server's speed. When the
-server slows, the tool sends less: the test backs off at the exact moment it should be applying
+**Closed load tests.** The virtual users from "The obvious fix" make a **closed** test: each waits for
+its answer before sending the next request, so the load depends on how fast the server answers. When
+the server slows down, the tool sends less: it backs off at the exact moment it should be applying
 pressure, and the latency it reports stays deceptively low. An **open** test sends requests on a
-schedule, whatever happens to earlier ones, as real users do.
+schedule (say, 500 a second), whatever happened to earlier ones, as real users do.
 
 <Figure caption="When the server slows down, a closed test (each virtual user waits for its answer) sends fewer requests and reports gentle latency. An open test keeps arriving on schedule, so the queue and the real latency show up.">
   <OpenClosed />
 </Figure>
 
-The k6 documentation describes the closed model's slowdown and names the effect **coordinated
-omission**; its arrival-rate executors give an open model
+The k6 load-testing documentation describes the closed model's slowdown and names the effect
+**coordinated omission**: the slow moments are left out because the test coordinated with the server
+instead of ignoring it. Its "arrival-rate" executors give an open model
 ([k6 docs](https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/), as of
 October 2026).
 
-**Averages.** The mean hides the shape. A service with a 20 ms average can have one request in a
-hundred taking two seconds, and those are the ones users remember. Report percentiles (p50, p99),
-which have their own page (coming soon).
+**Averages.** The average hides the shape. A service with a 20 ms average can have one request in a
+hundred taking two seconds, and those are the ones users remember. Report **percentiles** instead: the
+p50 is the latency half of all requests beat, and the p99 is the latency 99 in 100 requests beat, so it
+shows the slowest 1%. Percentiles have their own page (coming soon).
 
-**Averaged utilisation.** "60% CPU over the last minute" can be 100% for 30 seconds and 20% for
-30. The queue built in the 100% half; the average hides it. Look at utilisation over the same
-short window as your latency target.
+**Averaged utilisation.** "60% CPU over the last minute" can be 100% for 30 seconds and 20% for the
+other 30. The queue built up in the 100% half; the one-minute average hides it. Look at utilisation over
+the same short window as your latency target.
 
 ## Choosing between them
 
 | You want | Lever | What it costs |
 |---|---|---|
-| Lower latency at the same load | Remove work (cache, better query, fewer round trips) | Engineering time; caches need invalidation |
+| Lower latency at the same load | Remove work (cache, better query, fewer round trips) | Engineering time; caches need invalidating |
 | Lower latency at the same capacity | Lower utilisation, lower variability, one shared queue | Idle capacity; separating big and small work |
-| More throughput | More workers or servers at the bottleneck stage | Money; pushes the bottleneck to the next stage |
+| More throughput | More workers or servers at the bottleneck stage | Money; moves the bottleneck to the next stage |
 | More throughput per server | Batching | Latency at low load; a window to tune |
 | Predictable latency under overload | Limit what waits: bounded queues, load shedding | Rejected requests instead of slow ones |
 
-As a working rule: keep the utilisation of anything users wait on below about 70–80% at peak, and
-treat a latency target as a statement about utilisation and variability, not only about code speed.
+As a working rule: keep the utilisation of anything users wait on below about 70–80% at peak, and treat
+a latency target as a statement about utilisation and variability, not only about how fast the code is.
 
 ## Build it yourself
 
-Two pieces. First, the queue simulation behind the table above: requests arrive at random, wait for
-the first free server, and every arrival and departure is recorded, so Little's law can be checked
-against a count taken over time rather than assumed.
+Two pieces. First, the queue simulation behind the table above. Requests arrive at random (the gap
+between arrivals is drawn from an exponential distribution, the standard model for independent
+arrivals), each waits for the first free server, and every arrival and departure is recorded, so
+Little's law can be checked against a count taken over time instead of assumed.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -395,6 +562,11 @@ function simulate(utilisation, servers = 1, fixedService = false, seed = 42) {
   </TabItem>
 </Tabs>
 
+Read it as a timeline. For each request: move the clock forward by a random gap, pick the server that
+frees up first, start the work when both the request and the server are ready, and record when it
+finishes. The second loop walks the arrivals and departures in time order and keeps a running count of
+requests in flight, so the average count can be compared with Little's prediction:
+
 ```text title="the rest of the output"
 Little's law at 80%: 0.08 requests/ms x 49.6 ms = 3.97 predicted in the system; counted over time: 3.97
 
@@ -403,8 +575,8 @@ Four servers at 80% each
   one shared queue:     17.4 ms
 ```
 
-Second, a real micro-batcher with real timers, in front of a backend that handles one call at a
-time at 2 ms per call plus 0.05 ms per item. Writes arrive on an open schedule:
+Second, a real micro-batcher with real timers, in front of a backend that handles one call at a time at
+2 ms per call plus 0.05 ms per item. Writes arrive on an open schedule:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -471,6 +643,10 @@ class Batcher {
   </TabItem>
 </Tabs>
 
+Each `write` puts the item in `pending` and waits. The loop in `run` wakes when something is pending; if
+fewer than three writes are waiting it sleeps for the window to let more arrive, then sends up to 100
+in one backend call and tells every waiting writer it is done.
+
 ```text title="node micro-batcher.mjs (one run; real timers, so numbers vary a little)"
 100 writes/s offered for 2 s:
   one at a time    103 writes/s   p50     2.4 ms   p99     5.3 ms   206 backend calls
@@ -483,87 +659,86 @@ class Batcher {
   batched          987 writes/s   p50     4.0 ms   p99     7.5 ms   534 backend calls
 ```
 
-The three regimes from the sim, with real code: at 100 writes a second batching costs about 2 ms
-at the median; at 400 the unbatched writer queues and batching wins on both median and p99; at
-1,000 the unbatched writer is past its ceiling, completes only 444 a second and its latency grows
-for as long as the load lasts, while the batched writer serves the full rate with about four
-writes per call. Full code and run instructions:
+The three cases from the sim, with real code. At 100 writes a second batching costs about 2 ms at the
+median (p50). At 400, the unbatched writer queues and batching wins on both the median and the p99. At
+1,000, the unbatched writer is past its capacity, finishes only 444 a second, and its latency grows for
+as long as the load lasts, while the batched writer serves the full rate with about four writes per
+call. Full code and run instructions:
 [`examples/latency-vs-throughput/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/latency-vs-throughput).
 
 ## How real systems do it
 
-- **Kafka producers** batch by size (`batch.size`, 16 KB by default) and by time (`linger.ms`, 5 ms
-  by default since Kafka 4.0), sending when either fills; throughput-focused deployments raise both,
+- **Kafka producers** batch by size (`batch.size`, 16 KB by default) and by time (`linger.ms`, 5 ms by
+  default since Kafka 4.0), sending when either fills; throughput-focused deployments raise both,
   latency-focused ones lower them ([KIP-1030](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1030%3A+Change+constraints+and+default+values+for+various+configurations),
   as of October 2026).
-- **PostgreSQL** group-commits: concurrent transactions committing at the same moment share one
-  WAL flush, and `commit_delay` lets it wait for more when enough siblings are active
+- **PostgreSQL** group-commits: transactions committing at the same moment share one write-ahead-log
+  flush, and `commit_delay` lets it wait for more when enough other transactions are active
   ([PostgreSQL docs](https://www.postgresql.org/docs/current/runtime-config-wal.html)).
-- **Load testing tools** such as k6 offer both closed (virtual users) and open (arrival rate)
-  models; only the open one measures the latency real users would see when the server degrades
+- **Load-testing tools** such as k6 offer both closed (virtual users) and open (arrival rate) models;
+  only the open one measures the latency real users would see when the server slows down
   ([k6 docs](https://grafana.com/docs/k6/latest/using-k6/scenarios/concepts/open-vs-closed/)).
-- **Capacity planning by queueing**: SRE teams model services as queues to predict where latency
-  turns up, as in Jeff Poole's SREcon24 talk on applying queueing theory to production metrics
-  ([USENIX, 2024](https://www.usenix.org/conference/srecon24americas/presentation/poole)) and
-  Aravindh Sampathkumar's SREcon25 talk on the utilisation curve and the Universal Scalability Law
+- **Capacity planning with queues**: SRE (site reliability engineering) teams model services as queues
+  to predict where latency turns up, as in Jeff Poole's SREcon24 talk on applying queueing theory to
+  production metrics ([USENIX, 2024](https://www.usenix.org/conference/srecon24americas/presentation/poole))
+  and Aravindh Sampathkumar's SREcon25 talk on the utilisation curve and the Universal Scalability Law
   ([USENIX, 2025](https://www.usenix.org/conference/srecon25emea/presentation/sampathkumar)).
 
 ## Gotchas and war stories
 
 :::caution[Autoscaling on 80% CPU]
-A target of 80% average CPU sounds conservative and means, for a service with random arrivals and
-one queue per instance, latency around five times its service time at the target, and a cliff
-right above it. Scale on latency or queue length, or set CPU targets near 50–70% for anything users
-wait on.
+**Autoscaling** adds or removes servers automatically based on a metric. A target of 80% average CPU
+sounds conservative, but for a service with random arrivals and one queue per server it means latency
+around five times the service time at the target, and a cliff right above it. Scale on latency or queue
+length, or set CPU targets near 50–70% for anything users wait on.
 :::
 
-- **Retries near saturation.** When a service slows down, clients time out and retry, which raises
-  the arrival rate exactly when utilisation is highest, which slows it further. The
+- **Retries near saturation.** When a service slows down, clients give up waiting and retry, which
+  raises the arrival rate exactly when utilisation is highest, which slows it further. The
   [proxy and gateway page](/traffic/proxy-lb-gateway/) shows the multiplication across hops.
-- **A thread pool sized for throughput, not for the bottleneck.** Raising a web server's worker
-  count from 50 to 500 does not help if the database can serve 100 queries at once; it moves 400
-  requests from a visible queue to an invisible one inside the database, where they also slow down
-  the 100 being served. Little's law with the database's real concurrency sizes the pool.
-- **Unbounded queues.** A queue with no limit turns overload into latency without limit: requests
-  wait minutes for answers nobody is still waiting for. Bound the queue and reject early (load
-  shedding has its own page, coming soon).
-- **Batching at low traffic.** A batch window chosen for peak traffic adds its full delay to every
-  lone request at night. Batch only when others are waiting, as PostgreSQL's `commit_siblings` does,
-  or make the window adaptive, as Kafka's KIP-1224 proposes for its coordinators.
+- **A thread pool sized for throughput, not for the bottleneck.** Raising a web server's worker count
+  from 50 to 500 does not help if the database can serve 100 queries at once; it moves 400 requests
+  from a visible queue to an invisible one inside the database, where they also slow down the 100
+  being served. Little's law with the database's real capacity sizes the pool.
+- **Unbounded queues.** A queue with no limit turns overload into latency without limit: requests wait
+  minutes for answers nobody is still waiting for. Limit the queue and reject early (load shedding has
+  its own page, coming soon).
+- **Batching at low traffic.** A batch window chosen for peak traffic adds its full delay to every lone
+  request at night. Batch only when others are waiting, as PostgreSQL's `commit_siblings` does, or make
+  the window adaptive, as Kafka's KIP-1224 proposes.
 
 ## Trade-offs and when not to use it
 
-The queueing formulas on this page are models with assumptions: independent random arrivals, a
-steady state, first-come-first-served. Real traffic has daily cycles, bursts and feedback (retries,
-autoscaling), and real servers slow down as they get busier (lock contention, cache thrashing),
-which bends the curve further up. Use the models for shape and order of magnitude, and confirm
-with an open-model load test against the real service.
+The queueing formulas on this page are models with assumptions: independent random arrivals, a steady
+state, first come first served. Real traffic has daily cycles, bursts and feedback (retries,
+autoscaling), and real servers slow down as they get busier (lock contention, caches thrashing), which
+bends the curve further up. Use the models for shape and rough size, and confirm with an open load test
+against the real service.
 
-The levers also have costs that are not latency. Low utilisation is idle capacity you pay for.
-One shared queue is a single point of contention at very high rates, which is why large systems use
-several queues with work stealing between them. Batching adds code paths for partial failure: one
-bad item in a batch of 100 must not fail the other 99.
+The levers also have costs that are not latency. Low utilisation is idle capacity you pay for. One
+shared queue becomes a point of contention itself at very high rates, which is why large systems use
+several queues and let idle workers take work from busy ones' queues (**work stealing**). Batching adds
+code for partial failure: one bad item in a batch of 100 must not fail the other 99.
 
 ## Interview corner
 
-**"What's the difference between latency and throughput?"** Latency is time per request,
-throughput is requests completed per unit time. A strong answer connects them with Little's law
-and mentions that latency rises sharply with utilisation. The follow-up: *"How many threads do I
-need for 2,000 requests a second at 50 ms?"* 2,000 × 0.05 = 100 on average, with headroom for
-peaks and for the tail.
+**"What's the difference between latency and throughput?"** Latency is time per request, throughput is
+requests finished per unit time. A strong answer links them with Little's law and mentions that latency
+rises sharply with utilisation. The follow-up: *"How many threads do I need for 2,000 requests a second
+at 50 ms?"* 2,000 × 0.05 = 100 on average, with headroom for peaks and for the slowest requests.
 
 **"Why does latency spike before CPU hits 100%?"** Random arrivals bunch up; waiting grows as
-u ÷ (1 − u), so at 80% a request waits four times its service time on average. Mention variability
-and that averaged utilisation hides bursts.
+u ÷ (1 − u) times the service time, so at 80% a request waits four times its service time on average.
+Mention variability, and that averaged utilisation hides bursts.
 
-**"How would you increase throughput of a write-heavy service?"** Find the bottleneck stage, then
-batch where the cost per call is fixed (group commit, bulk inserts, producer batching), add
-parallelism at the bottleneck, and keep queues bounded. Strong answers say batching costs latency at
-low load and how to avoid that.
+**"How would you increase the throughput of a write-heavy service?"** Find the bottleneck stage, then
+batch where the cost per call is fixed (group commit, bulk inserts, producer batching), add parallelism
+at the bottleneck, and keep queues limited. Strong answers say batching costs latency at low load and
+how to avoid that.
 
-**"Your load test shows flat latency up to 5,000 requests a second, but production degrades at
-3,000. Why?"** Likely a closed-model test (coordinated omission), averages instead of percentiles,
-or a test that did not reproduce production's variability (mixed request sizes, cache misses).
+**"Your load test shows flat latency up to 5,000 requests a second, but production slows at 3,000.
+Why?"** Probably a closed test (coordinated omission), averages instead of percentiles, or a test that
+did not reproduce production's variability (mixed request sizes, cache misses).
 
 ## Check yourself
 
@@ -579,10 +754,10 @@ exhausts pools even when traffic is flat.
 <details>
 <summary>2. One server with random arrivals runs at 60% utilisation and 10 ms service time. You can either make the code 25% faster or add a second server behind a shared queue. Which lowers average latency more?</summary>
 
-Faster code: service 7.5 ms, utilisation 45%, latency 7.5 ÷ 0.55 ≈ 13.6 ms, down from 10 ÷ 0.4 = 25
-ms. A second server at 30% each with a shared queue keeps service at 10 ms and almost removes
-waiting: latency a little above 10 ms. The second server wins on latency, the faster code is cheaper
-and also raises the ceiling; at higher utilisation the difference grows.
+Faster code: service 7.5 ms, utilisation 45%, latency 7.5 ÷ 0.55 ≈ 13.6 ms, down from 10 ÷ 0.4 = 25 ms.
+A second server at 30% each with a shared queue keeps service at 10 ms and almost removes waiting:
+latency a little above 10 ms. The second server wins on latency; the faster code is cheaper and also
+raises the ceiling. At higher utilisation the difference grows.
 
 </details>
 
@@ -590,44 +765,42 @@ and also raises the ceiling; at higher utilisation the difference grows.
 <summary>3. Your pipeline is load balancer → app (1,500 req/s capacity) → cache (20,000) → database (600). You double the app servers. What happens to throughput and to latency?</summary>
 
 Throughput stays at about 600 a second, the database's capacity. Latency at peak can get worse: the
-extra app capacity lets more requests reach the database at once, building a longer queue there.
-The fix is at the database (more capacity, fewer queries per request, better caching) or a limit on
+extra app capacity lets more requests reach the database at once, building a longer queue there. The
+fix is at the database (more capacity, fewer queries per request, better caching) or a limit on
 concurrent database work.
 
 </details>
 
 <details>
-<summary>4. A batch window of 20 ms tripled peak throughput, but overnight p50 latency went from 3 ms to 23 ms. Why, and what is the fix?</summary>
+<summary>4. A batch window of 20 ms tripled peak throughput, but overnight median latency went from 3 ms to 23 ms. Why, and what is the fix?</summary>
 
-At night most writes arrive alone and wait the full 20 ms for company that never comes. Batch only
-when other writes are already waiting (send a lone write at once), or scale the window with the
-arrival rate.
+At night most writes arrive alone and wait the full 20 ms for company that never comes. Batch only when
+other writes are already waiting (send a lone write at once), or scale the window with the arrival rate.
 
 </details>
 
 ## Recap
 
-- **Latency** is time per request: network + waiting + service. **Throughput** is completions per
+- **Latency** is time per request: network + waiting + service. **Throughput** is requests finished per
   second. **Utilisation** is arrival rate × service time.
-- **Little's law**: in flight = throughput × latency. It sizes pools and shows that latency is
-  capacity.
-- With random arrivals, latency ≈ S ÷ (1 − u): 2× at 50%, 5× at 80%, 10× at 90%.
+- **Little's law**: in flight = throughput × latency. It sizes pools and shows that latency is capacity.
+- With random arrivals, latency ≈ S ÷ (1 − u): 2× the work at 50%, 5× at 80%, 10× at 90%.
 - **Variability** adds waiting for everyone; separating big and small work removes it.
 - **One shared queue** beats one queue per server; a pipeline's throughput is its **slowest stage**.
-- **Batching** trades latency for throughput at low load and buys both near capacity; batch only
-  when others are waiting.
+- **Batching** trades latency for throughput at low load and buys both near capacity; batch only when
+  others are waiting.
 - Measure with **open** load tests and percentiles, over short windows.
 
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'percentiles-and-tail-latency', why: 'Why averages lie, what p99 means, and why fan-out makes the tail everyone\'s problem.' },
+  { slug: 'percentiles-and-tail-latency', why: 'Why averages lie, what p99 means, and why fan-out makes the slowest requests everyone\'s problem.' },
   { slug: 'back-of-the-envelope-estimation', why: 'Turning these relationships into quick capacity numbers before you build.' },
   { slug: 'load-balancing', why: 'Spreading requests over many queues when every balancer sees only part of the traffic.' },
   { slug: 'connection-pooling', why: 'Little\'s law applied to the scarcest resource in most services: database connections.' },
   { slug: 'caching-strategies', why: 'Taking work off the bottleneck: why the miss ratio, not the hit ratio, sets the database load.' },
   { slug: 'database-indexing', why: 'Cutting the service time at the bottleneck itself: scan vs seek, measured in pages.' },
-  { slug: 'load-shedding', why: 'What to do when arrivals exceed capacity: bounded queues and rejecting early.' },
+  { slug: 'load-shedding', why: 'What to do when arrivals exceed capacity: limited queues and rejecting early.' },
   { slug: 'backpressure', why: 'Slowing producers down instead of letting queues grow without limit.' },
   { slug: 'autoscaling', why: 'Adding capacity automatically, and why the signal you scale on matters.' },
 ]} />
@@ -636,7 +809,7 @@ arrival rate.
 
 **Talks and engineering writing**
 
-- [Marc Brooker: Lorenz and Little, how much does your tail cost?](https://brooker.co.za/blog/2026/07/29/lorenz-and-little.html) (2026) — Little's law turned into a cost model for the latency tail.
+- [Marc Brooker: Lorenz and Little, how much does your tail cost?](https://brooker.co.za/blog/2026/07/29/lorenz-and-little.html) (2026) — Little's law turned into a cost model for the slowest requests.
 - [Jeff Poole: System Performance and Queuing Theory, SREcon24 Americas](https://www.usenix.org/conference/srecon24americas/presentation/poole) (2024) — queueing applied to production metrics.
 - [Aravindh Sampathkumar: The SRE's Crystal Ball, SREcon25 EMEA](https://www.usenix.org/conference/srecon25emea/presentation/sampathkumar) (2025) — the utilisation curve and the Universal Scalability Law.
 

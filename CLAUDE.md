@@ -45,12 +45,15 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`,
    `template-compare.mdx` for "X vs Y vs Z" pages, or `template-case-study.mdx` for "How X works"
    walkthroughs of one real system. Save ideas for later with `/save-topic`.
-2. Reading budget: usually 30–45 minutes, 50 at most, set by the topic and never padded (style guide,
-   "Length"). Pages open with a sharp technical question, not a story, and never repeat themselves.
+2. Write for the fresher first. Every page has two parts: Part 1 "Understand it" explains the whole
+   idea in plain words with one running example, and Part 2 "How it really works" goes deep. Every
+   new concept is explained in four steps before it is used. Length follows understanding: usually
+   40–60 minutes, 75 at most, never padded and never squeezed (style guide, "Length").
 3. Voice, clarity, code and accuracy rules: `.claude/skills/add-topic/style-guide.md`. Read its
-   "Owner's standing feedback" section before writing or rewriting any page: technical core over
-   narrative, no explaining the obvious, no fact-check sections, a hook question, no repetition,
-   and sims that show mechanisms, not steps.
+   "Owner's standing feedback" section before writing or rewriting any page: write for the fresher,
+   Part 1 before Part 2, the four steps for every new concept, technical core over narrative, no
+   fact-check sections, no repetition, sims that show mechanisms, and a fresher read before
+   publishing.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
 5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
    Credit every source in the page's Further reading. No information older than 2020: every

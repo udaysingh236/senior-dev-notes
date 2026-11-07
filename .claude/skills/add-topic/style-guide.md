@@ -2,57 +2,79 @@
 
 How every page should sound, read and teach.
 
-## Owner's standing feedback (October 2026): read this first
+## Owner's standing feedback: read this first
 
-Uday reviewed the first pages (IRCTC Tatkal, reverse proxy vs load balancer vs API gateway) and
-rejected them. Every new or rewritten page must meet these points:
+Uday has reviewed the pages twice. In October 2026 he rejected the first IRCTC Tatkal and proxy
+vs load balancer vs gateway pages for being narrative and shallow. In November 2026, after reading
+every published page, he found the opposite problem: the pages go too fast. Terms such as
+"in flight" and "utilisation" (latency vs throughput), or secrets tables, QR scanners and bytes
+(Google Authenticator), arrive before the reader understands the basic idea. Neither a fresher nor
+Uday could follow them. The plain sentence "when you scan the QR code, the app saves a secret, and
+every 30 seconds it turns that secret and the time into six digits" appeared nowhere on the
+Google Authenticator page.
 
-1. **The reader is technical.** It might be a fresher, but equally often an engineer with 6–8 years
-   of experience. We are not explaining to a non-technical person. Never explain what everybody
-   knows: how to book a ticket, what happens on the screen when you book, how to log in.
-2. **Technical core, not narrative.** The page is about mechanisms: data models, what the
-   database locks, how two requests are kept from getting the same thing, algorithms, failure
-   modes, numbers. The IRCTC page failed because it had no word on how the database is locked, how
-   two people cannot get the same berth, or how one berth is sold between different stations.
-3. **Fact checks are not content.** Listing public facts and rules is not an explanation. Cite facts
+These points combine both rounds. Where an October point conflicted with November, November wins
+and the old point has been rewritten here. Every new or rewritten page must meet all of them.
+
+1. **Write for the fresher first.** The reader we must never lose is a final-year student or new
+   graduate who knows basic programming, HTTP requests and simple SQL. If they can follow every
+   paragraph, the experienced engineer can too, and will skim what they know. Never write a
+   paragraph that only an experienced engineer can follow. Still do not explain how products work
+   from the user's side (booking a ticket, logging in, scanning a QR code with a phone).
+2. **Every page has two parts.** **Part 1, "Understand it"**, explains the whole idea from zero,
+   in plain words, with one running example and the simplest picture. A reader who stops there can
+   explain the topic to a friend. **Part 2, "How it really works"**, is the depth: mechanisms,
+   data structures, numbers, failure modes, production design. Part 2 builds on Part 1 and never
+   uses an idea Part 1 or Part 2 has not explained yet.
+3. **Technical core, not narrative.** Stories about teams, deadlines, users and screens are
+   narrative; cut them. A slow, plain, step-by-step explanation of the mechanism is not narrative;
+   it is the core, and it is never cut. The IRCTC page failed in October because it said nothing
+   about how the database is locked; the November pages failed because they said it too fast.
+4. **Fact checks are not content.** Listing public facts and rules is not an explanation. Cite facts
    inline where they shape the design; never spend a section on them.
-4. **Open with a question the reader never thought of,** so a working engineer thinks "I never
-   asked myself that" and has to read on. A boring opening loses them. No long story before the
-   first explanation; at most a few lines of setup.
-5. **Do not repeat information.** Say each thing once.
-6. **Length follows the topic.** 40–45 minutes was never a request for storylines. Concise but
-   impactful: 30 minutes is fine if that covers the core; 45–50 is the hard maximum. If someone
-   gives us 30 minutes, every minute must be worth it.
-7. **Simulations must be worth looking at.** A sim that walks through the steps of a flow (the
+5. **Two openings.** The page opens with a question a fresher can understand and wants answered,
+   and answers it in plain words within the first screen. The sharp "I never asked myself that"
+   question for experienced readers opens Part 2, not the page.
+6. **Say each thing once.** Do not re-explain a term or mechanism in a later section; build on it.
+   A plain-words version in Part 1 and its precise version in Part 2 are not repetition, as long
+   as Part 2 adds the precision and does not restate the plain version.
+7. **Length follows understanding.** There is no reading-time target. A page takes as long as it
+   needs to explain its topic to a fresher without padding: usually 40–60 minutes, 75 at most.
+   Past that, split it into a basics page and a deep-dive page. Never cut an explanation to save
+   minutes; cut stories, extra examples and extra gotchas first (see "Length").
+8. **Simulations must be worth looking at.** A sim that walks through the steps of a flow (the
    booking steps, a request passing boxes) is not worth building. Sims show mechanisms the reader
    cannot see in a diagram: contention, races, allocation, imbalance, queues, retries multiplying.
    The reader changes an input and sees the outcome change.
-8. **No information older than 2020** (see "Accuracy"). Old blog posts, papers, incidents and
-   measurements describe systems that have changed; use sources from 2020 onwards.
-9. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
-   how they behave differently under load, not feature lists.
-10. **Slow down before each new concept.** Being fast on what everyone knows does not mean being
-   fast on what they don't. Before an algorithm, data structure or mechanism, spend a short
-   paragraph and one tiny worked example on its building blocks: what a "token" and a "bucket"
-   stand for before the token bucket; what a bit, a mask and AND / OR do before a bitmask
-   formula; what a lock is, who waits on it, and what "optimistic" and "pessimistic" mean before
-   locking strategies. Feedback (October 2026): the rate limiting page jumped straight into the
-   algorithms, and the IRCTC page went too quickly through bitmasks and DB locking.
+9. **No information older than 2020** (see "Accuracy").
+10. **Comparison pages follow the same rules.** Compare what each concept can see and decide, and
+   how they behave differently under load, not feature lists. Part 1 still explains each concept
+   in plain words first.
+11. **Every new concept gets four steps, in this order** (see "Introducing a new concept"): what it
+   is in one plain sentence, why it exists, a worked example with real numbers, and only then the
+   technical version. One new idea per paragraph. No sentence uses two terms that have not been
+   explained yet.
+12. **A fresher read before publishing.** Read the finished page as a final-year student who knows
+   only what "Who we write for" lists. Mark every sentence where that reader would stop and
+   ask "what does that mean?" or "why?", and fix every one (see "The fresher read").
 
-The two rewritten pages, `case-studies/irctc-tatkal-booking` and `traffic/proxy-lb-gateway`, are
-the reference for this standard. The older pages (how the web works, DNS, TCP vs UDP, TLS, rate
-limiting) predate it; Uday will have them redone, one page per session, with `/add-topic --update`.
+No published page meets the November standard yet. Every page published before November 2026 will
+be rewritten with `/add-topic --update`, one page per session, starting with Google Authenticator
+(the pilot) and then latency vs throughput. The first page Uday approves under these rules becomes
+the reference.
 
 ## Who we write for
 
-- Anyone from a final-year CS student to an engineer with 6–8 years of experience. Write so the
-  fresher can follow and the experienced engineer still learns something on every screen.
-- The reader is technical. They are giving us 30–45 minutes; every paragraph has to be worth it.
+- Write for a final-year CS student or a new graduate. Engineers with 6–8 years of experience read
+  the site too; they skim Part 1 and read Part 2. Both must find every paragraph worth it.
 - Many read on phones. Many speak English as a second language.
-- Assume they know: Python or JavaScript, HTTP requests and status codes, SQL tables and
-  transactions at a basic level, what a server and a database are, and how everyday products work
-  from the user's side (booking a ticket, paying online, logging in). Never explain those.
-  Anything beyond that, define it in one sentence or link to the page that does.
+- Assume they know: Python or JavaScript, HTTP requests and status codes, SQL tables and basic
+  queries, what a server and a database are, and how everyday products work from the user's side.
+  Never explain those.
+- Everything else gets explained before it is used, even if "every engineer knows it": queues,
+  threads, hashing, encryption keys, bits and bytes, percentiles, locks, transactions, time zones
+  and Unix time, caches, protocols. If unsure, explain it; a reader who knows it loses ten seconds,
+  a reader who doesn't loses the page.
 
 ## The voice: a senior engineer mentoring a junior
 
@@ -62,46 +84,98 @@ They are patient, they enjoy teaching, and they never make you feel stupid.
 
 - Talk to "you". Use "we" when walking through a design together.
 - Explain why before how. Every mechanism exists because something hurt.
+- Explain at the pace of someone sitting next to the reader: one step, check it landed, next step.
+  If a step needs two new ideas, it is two steps.
 - Share judgment, not only facts: "In practice I'd start with X, because…",
   "This is the part people get wrong."
-- Technical depth over narrative. Mechanisms, data structures, failure cases and numbers carry
-  the page; stories do not.
 - Be honest about trade-offs and uncertainty. There are no silver bullets.
 - Warm, with an occasional dry line of humour. Never a joke at the reader's expense.
   No memes, no emoji in body text.
 - Experience-flavoured wisdom is written as general truth ("Teams usually discover…",
   "A classic outage pattern is…"). Never invent first-person anecdotes or fake incidents at real
-  companies. Opening stories are clearly illustrative ("Imagine…"). Real incidents only when
+  companies. Illustrative examples are clearly illustrative ("Imagine…"). Real incidents only when
   sourced, with a link to the public postmortem.
 
-## The opening: a question they never asked themselves
+## The opening
 
-The first 2–4 sentences decide whether a working engineer keeps reading. Open with a sharp
-technical question or a surprising fact that the reader has not thought about, and that the page
-then answers. No scene-setting, no characters, no "imagine you joined a team".
+The first screen decides whether the reader stays. It does two things:
 
-- Good: "Berth 23 is sold Delhi to Agra. Someone else wants it Agra to Bhopal, at the same
-  second as two other people. What exactly does the database lock?"
-- Good: "Put a layer 4 balancer in front of eight gRPC servers and three clients. Five servers
-  will sit idle. Why?"
-- Bad: a paragraph about a team, a deadline, a design review, or what a user sees on the screen.
+1. **A question the fresher understands and wants answered** (2–4 sentences). It may be
+   surprising, but it uses only words the reader already knows.
+   - Good: "Your phone is in airplane mode, yet the six digits in Google Authenticator are exactly
+     what the bank's server expects. The phone and the server have not talked since you scanned
+     a QR code months ago. How do they agree?"
+   - Good: "A server that is 90% busy is not 10% away from trouble. It is already making most
+     requests wait several times longer than they need. Why?"
+   - Bad: a question that needs the page to understand it ("Why does a ±1 step window with drift
+     tracking double the valid codes?"). That question belongs at the start of Part 2.
+   - Bad: a paragraph about a team, a deadline or what a user sees on the screen.
+2. **The answer in plain words**, right after: the first paragraphs of "The idea in plain words"
+   (Part 1). The reader should know the gist before the first scroll.
 
-At most ~120 words before the first real technical content. Short illustrative scenarios are fine
-inside a section when they carry a number or a failure case; long narratives are not.
+## Part 1: "Understand it"
 
-## No repetition, no padding
+Part 1 is a short page of its own. It contains:
 
-- Say each thing once, in the section that owns it. Do not re-explain a term, a mechanism or a
-  number in a later section; link back or use it.
+- **The question** (above).
+- **The idea in plain words.** The whole story from start to finish, told with one running example
+  (one user, one request, one code, one berth) and real numbers. No jargon: if a term is needed,
+  it is introduced with the four steps below. The mental-model diagram goes here: the simplest
+  picture of the idea, a handful of boxes, no internals (`visuals.md`).
+- **The building blocks**, if the plain story needs them: each concept the rest of the page relies
+  on, introduced with the four steps. For Google Authenticator: a shared secret, a one-way
+  function, Unix time. For latency vs throughput: latency, throughput, a queue, "in flight",
+  utilisation.
+- **If you stop here**: a `:::tip[If you stop here]` aside with 3–5 bullets a fresher could repeat
+  to a friend. It closes Part 1.
+
+Part 1 usually takes 8–15 minutes. It does not cover edge cases, numbers from production,
+variants or failure modes; those are Part 2.
+
+## Part 2: "How it really works"
+
+Part 2 opens with a heading such as "Going deeper" and the sharp question for experienced readers
+(2–4 sentences): the hard problem the rest of the page answers. Then the template's deep sections
+in order. Part 2 can use every term Part 1 explained, and introduces every new one with the four
+steps.
+
+## Introducing a new concept
+
+Every algorithm, data structure, protocol detail or term that is not on the "assume they know"
+list gets four steps, in this order, before it is used:
+
+1. **What it is**, in one plain sentence, without other new terms.
+2. **Why it exists**: the problem it solves, in one or two sentences.
+3. **A worked example with real numbers**, small enough to follow in your head.
+4. **The technical version**: the precise definition, the formula, the code, the byte layout.
+
+Example, for HMAC on the Google Authenticator page:
+1. "An HMAC is a fingerprint of a message that only someone holding a secret key can produce."
+2. "The server needs to check that six digits came from your phone's secret, without the secret
+   ever travelling. A plain fingerprint would not do: anyone can fingerprint the number 42."
+3. "With key K, the HMAC of the time-slot number 59,798,724 is 20 bytes that look random. Change
+   the slot to 59,798,725 and all 20 bytes change. Without K you cannot produce either."
+4. Then the RFC detail: SHA-1, 8-byte counter, dynamic truncation, with a diagram.
+
+Further rules:
+
+- One new idea per paragraph. If a paragraph introduces two, split it.
+- No sentence uses two terms that have not been explained yet.
+- Expand every abbreviation on first use and explain it (HMAC, KMS, NTP, P99).
+- Bits, bytes, hex and binary are building blocks too. Before any byte-level diagram, say what a
+  byte is, what hex notation is and why we are looking at bytes at all. Byte-level detail comes
+  only after the plain version, and only when it teaches something.
+- When a section uses a number (80% utilisation, 3 valid codes, 90 seconds), show where the number
+  comes from before using it.
+
+## Say each thing once, without padding
+
+- Say each thing once, in the section that owns it. Later sections build on it or link back.
 - No sections whose only job is to restate: recap is bullets, not prose.
-- Do not explain what every engineer already knows (see "Who we write for"). Spend the words on
-  the parts that are hard, surprising or commonly wrong.
-- Never pad to reach a reading time. If the topic is done in 30 minutes, it is done.
-- "Obvious" means how products work from the user's side (booking a ticket, logging in) and what
-  every working engineer uses daily (HTTP requests, SQL queries). Computer-science building blocks
-  that many engineers rarely touch (bit operations, lock types, isolation levels, queueing,
-  hashing) are not obvious: introduce each one in plain words with a small example the first time
-  it appears, then build on it. See "Slow down before each new concept" above.
+- Do not explain how products work from the user's side or what is on the "assume they know" list.
+  Everything else is not obvious: explain it.
+- Never pad: no filler sentences, no stories that carry no mechanism, no third example that teaches
+  nothing new. Slow is not padding; vague is.
 
 ## The shape of every explanation: left, right, then centre
 
@@ -113,7 +187,7 @@ Before landing on the answer, walk around it:
 - **Centre — the core.** The key idea in plain words, then real depth.
 - **Forward — what's next.** What this unlocks and which topic to read after it.
 
-Inside each mechanism, repeat in miniature:
+Part 1 walks this shape quickly, in plain words; Part 2 walks it again in depth for each mechanism:
 intuition → how it works step by step → worked example with real numbers → where it breaks → when to pick it.
 
 ## Clarity rules
@@ -121,13 +195,12 @@ intuition → how it works step by step → worked example with real numbers →
 - Short paragraphs of 2–4 sentences. A heading, visual or code block at least every ~400 words.
 - Plain words over clever ones. Avoid idioms and slang that don't translate ("ballpark",
   "out of the park", "low-hanging fruit").
-- Define every term the first time it appears: **bold** the term, one plain sentence, link to its
-  own page if one exists.
+- Define every term the first time it appears: **bold** the term, then the four steps above. Link
+  to its own page if one exists, but still explain it enough for this page.
 - Use concrete numbers: "a bucket of 10 tokens refilling at 5 per second", not "some tokens".
-- An everyday analogy only when it truly helps a hard idea, and then say where it stops working.
-  Never for things the reader already understands.
-  Examples should be familiar worldwide. Indian everyday examples (UPI payments, Tatkal ticket
-  rush, festival sale traffic, toll plazas, dabbawalas) are welcome where they fit naturally.
+- An everyday analogy whenever it makes a new idea easier to picture, and then say where it stops
+  working. Examples should be familiar worldwide. Indian everyday examples (UPI payments, Tatkal
+  ticket rush, festival sale traffic, toll plazas, dabbawalas) are welcome where they fit naturally.
 - Never write "simply", "just", "obviously", "trivially" or "easy". They make a struggling reader
   feel bad.
 - Prose for reasoning. Lists for steps, options and checklists. Tables for comparing 3+ options.
@@ -188,24 +261,35 @@ About one aside per 500 words. More than that and they stop being noticed.
 
 ## Length
 
-Readers should finish a page in one sitting. The "min read" in the page header counts about 220
-words a minute plus about 20 lines of code a minute. The length follows the topic, not a target:
+The "min read" in the page header counts about 220 words a minute plus about 20 lines of code a
+minute. Length follows what a fresher needs to understand the topic, not a target:
 
-| Page shape | Usual reading time | Code shown on the page |
-|---|---|---|
-| Single topic (`template.mdx`) | 30–45 min | at most ~150 lines |
-| Comparison (`template-compare.mdx`) | 30–40 min | at most ~100 lines |
-| Case study (`template-case-study.mdx`) | 35–50 min | at most ~150 lines |
+| Page shape | Part 1 | Whole page, usual | Hard maximum | Code shown on the page |
+|---|---|---|---|---|
+| Single topic (`template.mdx`) | 8–15 min | 40–60 min | 75 min | at most ~150 lines |
+| Comparison (`template-compare.mdx`) | 8–15 min | 35–50 min | 60 min | at most ~100 lines |
+| Case study (`template-case-study.mdx`) | 8–15 min | 45–65 min | 75 min | at most ~150 lines |
 
-- 50 minutes is the hard maximum. Past 50, split the page.
-- Under 30 is fine for a small topic, as long as nothing core is missing.
-- Section word counts in the templates are ceilings, not targets.
-
+- Past the hard maximum, split: a basics page (Part 1 plus the first mechanisms) and a deep-dive
+  page, linked to each other. Never squeeze explanations to stay under it.
+- Under the usual range is fine for a small topic, as long as the fresher read passes.
+- Section word counts in the templates are guides, not ceilings for explanation.
 - Everything on the page counts, including `<details>` answers and asides.
-- When a page runs long, cut in this order: anything the reader already knows, repeated
-  explanations, narrative, a fourth or fifth real-world example, extra gotchas, code that the
-  `examples/` folder already holds. Keep the core mechanisms, the failure cases and the worked
-  examples with numbers.
-- A topic that cannot fit in 50 minutes is two topics. Split it into an overview page and child pages
-  rather than going over budget.
-- Short is not the goal; clear is. Every section must teach something the reader didn't know.
+- When a page runs long, cut in this order: narrative, a fourth or fifth real-world example, extra
+  gotchas, interview material that repeats the page, code that the `examples/` folder already
+  holds. Never cut: Part 1, the four steps for a concept, worked examples with numbers, the core
+  mechanisms, the failure cases.
+
+## The fresher read
+
+Before publishing, read the finished page as a final-year student who knows only what "Who we
+write for" lists, top to bottom, without skipping. If you can, give this job to a fresh agent with
+none of the research in its context. List in `research/<slug>.md`:
+
+- every sentence where that reader would ask "what does this word mean?";
+- every place a number or claim appears without where it comes from;
+- every diagram they would not understand from its caption and the sentence before it;
+- every jump where a step is missing ("so the server accepts it" — why?).
+
+Fix every item, then read again until the list is empty. Also check: can the reader, after Part 1
+alone, explain the idea in three sentences to a friend? If not, Part 1 is not done.

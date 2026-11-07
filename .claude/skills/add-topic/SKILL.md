@@ -1,6 +1,6 @@
 ---
 name: add-topic
-description: Research, write, illustrate and publish one topic page on the system design site — question-first deep explanation, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
+description: Research, write, illustrate and publish one topic page on the system design site — a plain-words Part 1 for freshers, then a deep Part 2, SVG diagrams, interactive simulation, Python and JavaScript code — then build, commit and push to the develop branch. Works for topics already in CURRICULUM.md and brand-new ones.
 argument-hint: "[topic, or empty for the next planned one] [notes / links] [--review] [--no-push] [--update]"
 disable-model-invocation: true
 allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node *) Bash(git status *) Bash(git pull *) Bash(git add *) Bash(git commit *) Bash(git push *)
@@ -94,12 +94,19 @@ Keep quotes in notes under 15 words. Notes are for understanding, not for pastin
 ## Phase 3 — Outline
 
 Fill the chosen template's sections with bullet outlines, and give each section a word budget
-that adds up to the page's reading budget (see "Length" in `style-guide.md`). Decide:
+(see "Length" in `style-guide.md`). Plan Part 1 first; it is the part a fresher must not miss.
+Decide:
 
-- the opening hook: the 2–4 sentence question the reader has never asked themselves
+- the opening question a fresher understands, and its plain-words answer (2–4 sentences each)
+- the one running example that Part 1 follows from start to finish, with its numbers
+- Part 1's plain-words story as 5–10 numbered steps, and the "If you stop here" bullets
+- the building blocks: every concept the page uses that is not on the style guide's "assume they
+  know" list, in the order they are first needed, each with its four steps (one plain sentence,
+  why it exists, a worked example with numbers, the technical version)
+- the sharp question that opens Part 2
 - the everyday analogy and where it breaks
 - the list of mechanisms or variants for "How it works"
-- the diagram list: one line each on what it shows
+- the diagram list: one line each on what it shows, starting with the Part 1 mental-model diagram
 - the sim or step-through design: state, controls, and what the reader should notice
 - the code plan: naive → correct → production-shaped, in Python and JavaScript
 - which real systems to cover, the gotchas, the quiz questions, the next topics
@@ -111,10 +118,13 @@ If `--review` was given: show the outline and wait for the user.
 Create `src/content/docs/<track>/<slug>.mdx` from the template chosen in Phase 1.
 
 - Follow the section order and the voice and clarity rules in `style-guide.md`.
-- Stay inside the reading budget in `style-guide.md` (usually 30–45 minutes, 50 at most, as shown
-  by the "min read" in the page header). Never pad to reach a time. When a section runs long, cut
-  or move detail to the page that owns it; don't squeeze the core mechanisms.
-- No repetition across sections, nothing the reader already knows (style guide, "No repetition").
+- Write Part 1 first and read it on its own: a fresher must be able to explain the idea after it.
+- Introduce every new concept with the four steps before using it (style guide, "Introducing a
+  new concept"). One new idea per paragraph; no sentence with two unexplained terms.
+- Length follows understanding (style guide, "Length"): usually 40–60 minutes, 75 at most, as
+  shown by the "min read" in the page header. Never pad, and never cut an explanation to save
+  minutes. Past the maximum, split into a basics page and a deep-dive page and say so.
+- Say each thing once (style guide, "Say each thing once, without padding").
 - Weave in the user's notes from Phase 0.
 - Remove every template comment.
 
@@ -122,6 +132,8 @@ Create `src/content/docs/<track>/<slug>.mdx` from the template chosen in Phase 1
 
 Follow `visuals.md`.
 
+- The first diagram is the Part 1 mental model: the simplest picture of the idea, no internals.
+  Architecture, byte layouts and data structures come in Part 2.
 - Diagrams in `src/components/diagrams/<slug>/`, sims in `src/components/sims/<slug>/`.
 - Reuse `SimShell`, `StepThrough` and `Figure`. If a shared component needs a new capability,
   extend it carefully without breaking other pages.
@@ -146,9 +158,12 @@ Follow `visuals.md`.
 Fix anything that fails. Don't publish with known failures.
 
 - [ ] All sections of the chosen template present, in order, with no leftover template comments
-- [ ] Reading time in the page header fits the topic (usually 30–45 min, 50 at most), with no padding
-- [ ] Opens with a sharp technical question in 2–4 sentences, no narrative; nothing is said twice
-- [ ] Before each algorithm, data structure or mechanism, its building blocks are introduced in plain words with a tiny worked example (style guide, "Slow down before each new concept")
+- [ ] Part 1 explains the whole idea in plain words with one running example, before any architecture, byte layout or production detail, and ends with "If you stop here"
+- [ ] Opens with a question a fresher understands, answered in plain words on the first screen; Part 2 opens with the sharp question; no narrative; nothing is said twice
+- [ ] Every new concept gets the four steps before it is used: plain sentence, why, worked example with numbers, technical version (style guide, "Introducing a new concept")
+- [ ] One new idea per paragraph; no sentence uses two unexplained terms; every number shows where it comes from
+- [ ] The fresher read is done and its list in `research/<slug>.md` is empty (style guide, "The fresher read")
+- [ ] Reading time fits the topic (usually 40–60 min, 75 at most), with no padding and no squeezed explanations
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
 - [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption
