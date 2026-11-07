@@ -157,7 +157,9 @@ same instant it is the same number everywhere.
 The ".57" means we are 57% of the way through the slot, 17 seconds into it, so this slot ends 13
 seconds later, at 10:42:30.
 
-**The technical version.** The standard ([RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)) writes
+**The technical version.** The standard that defines Google Authenticator's codes is RFC 6238. An
+**RFC** is a numbered standards document published by the IETF, the body that standardises how
+internet software works. [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238) writes
 the slot number as `T = floor(unix_time / 30)`; `floor` means "round down". It calls each slot a
 **time step**, which is the name Part 2 uses.
 
@@ -180,8 +182,8 @@ stores passwords: what does that mean if its database leaks?
 
 The app's side is an open standard, RFC 6238, so every code on this page is exact and reproducible.
 Google does not publish how its own servers check codes; the server side here is how we would build
-a **verifier** (the part of the server that checks codes), following the RFCs and NIST's current
-guidance.
+a **verifier** (the part of the server that checks codes), following the RFCs and the current guidance from NIST, the US
+standards institute whose digital identity guidelines are widely followed.
 
 ## What the system has to do, in numbers
 
@@ -639,12 +641,13 @@ so that you do not log in on every page; whoever holds it is treated as you. The
 
 NIST says it directly: authenticators whose output a person types in "SHALL NOT be considered
 phishing-resistant", because nothing ties the code to the website it is typed into
-([SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)). CISA classes app-based codes the
-same way: resistant to push bombing, vulnerable to phishing
+([SP 800-63B-4](https://pages.nist.gov/800-63-4/sp800-63b.html)). CISA, the US cybersecurity agency, classes app-based codes the
+same way: resistant to push bombing (flooding a user with login-approval prompts until they tap yes),
+vulnerable to phishing
 ([CISA, October 2022](https://www.cisa.gov/sites/default/files/publications/fact-sheet-implementing-phishing-resistant-mfa-508c.pdf)).
 This is not theoretical. Reddit's February 2023 breach began with a fake intranet page that collected
 an employee's password and second-factor code ([Malwarebytes, February 2023](https://www.malwarebytes.com/blog/news/2023/02/reddit-systems-compromised-by-phish-attack.-heres-what-you-need-to-do-next)).
-The 0ktapus campaign sent fake Okta login pages by SMS and collected 9,931 credentials and 5,441
+The 0ktapus campaign sent fake login pages for Okta, a widely used company sign-in service, by SMS and collected 9,931 credentials and 5,441
 codes from more than 130 organisations, relaying them through Telegram
 ([Group-IB, August 2022](https://www.group-ib.com/blog/0ktapus/)). Microsoft described a proxy kit
 used against more than 10,000 organisations that stole the session cookie issued after the code
@@ -794,7 +797,8 @@ Full code and run instructions:
   than it looks.
 - **Sync vs device-only.** Sync trades lockouts for a larger attack surface. For consumers, losing a
   phone is the more common disaster; for staff with admin access, require a phishing-resistant factor.
-- **TOTP vs SMS vs passkeys.** TOTP beats SMS codes (no SIM swap, works offline) and loses to passkeys
+- **TOTP vs SMS vs passkeys.** TOTP beats SMS codes (no SIM swap, where an attacker gets
+  your phone number moved to their SIM card; works offline) and loses to passkeys
   on phishing. Offer passkeys first and TOTP as the fallback.
 - **Scale does not change the design.** At 10× users the verifier is still a few HMACs per login.
   What grows is the value of the secrets table, so the effort goes into key management and isolation.

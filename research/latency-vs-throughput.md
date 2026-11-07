@@ -58,3 +58,11 @@ latency for throughput, and under load buys both. Load tests that wait for each 
 
 Brooker 2026; Poole SREcon24 (2024); Sampathkumar SREcon25 EMEA (2025); k6 docs (living, 2026);
 KIP-1030 (2024–25, Kafka 4.0 2025); KIP-1224 (2025); PostgreSQL WAL docs (living, v18).
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Read as a final-year student. Fixed: garbage-collection pauses, cache misses, coroutines and lock used
+without explanation. Part 1 test: "Latency is how long one request takes, throughput is how many finish
+per second. Requests arrive at random, so they bunch up and wait in a queue. The busier the server, the
+less idle time it has to clear the line, so waiting grows much faster than traffic: at 90% busy a
+request waits nine times its work." List is empty.

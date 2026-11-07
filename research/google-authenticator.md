@@ -94,3 +94,11 @@ Google Key URI wiki (archived 2021), IETF otpauth draft (2023), W3C WebAuthn Lev
 Incidents: Retool (2023), Group-IB 0ktapus (2022), Microsoft AiTM (2022), Malwarebytes Reddit (2023).
 News: TechCrunch (2023), The Hacker News (2023), Help Net Security (2024).
 Docs: Python `hmac.compare_digest`, Node `crypto.timingSafeEqual`.
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Read as a final-year student. Fixed: RFC, NIST and CISA named without explanation; push bombing,
+SIM swap and Okta unexplained; Virginia time-zone example (05:42 in November, not 06:42). Part 1 test:
+"Scanning the QR code saves the same random secret on the phone and the server. Every 30 seconds each
+mixes that secret with the current 30-second slot number through the same one-way recipe and keeps six
+digits. So they get the same code without talking, and the phone only needs its clock." List is empty.

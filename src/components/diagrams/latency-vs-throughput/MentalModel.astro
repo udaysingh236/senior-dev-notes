@@ -6,7 +6,7 @@ const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, h
 const waiting = [0, 1, 2, 3];
 ---
 
-<svg viewBox="0 0 400 356" width="100%" role="img" aria-labelledby="lt-mm-t lt-mm-d">
+<svg viewBox="0 0 400 380" width="100%" role="img" aria-labelledby="lt-mm-t lt-mm-d">
   <title id="lt-mm-t">One server, one line: where latency, throughput and utilisation come from</title>
   <desc id="lt-mm-d">
     Requests arrive on the left at 180 a second, at random moments. They join a line of four
@@ -27,8 +27,8 @@ const waiting = [0, 1, 2, 3];
   <text x="140" y="22" font-size="16" font-weight="700" style="fill: var(--viz-ink)">wait in line</text>
   <text x="140" y="42" font-size="15" style="fill: var(--viz-muted)">the queue</text>
 
-  <text x="396" y="22" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink)">done</text>
-  <text x="396" y="42" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">180 / s</text>
+  <text x="396" y="166" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ok)">done</text>
+  <text x="396" y="184" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">180 / s</text>
 
   <line x1="10" y1="96" x2="128" y2="96" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lt-mm-a)" />
   <circle cx="24" cy="96" r="7" style="fill: var(--viz-flow)" />
@@ -49,15 +49,15 @@ const waiting = [0, 1, 2, 3];
   <text x="190" y="160" font-size="15" text-anchor="middle" style="fill: var(--viz-warn)">waiting</text>
   <text x="312" y="160" font-size="15" text-anchor="middle" style="fill: var(--viz-server)">work</text>
 
-  <rect {...box(4, 184, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
-  <text x="16" y="206" font-size="16" font-weight="700" style="fill: var(--viz-ink)">latency = waiting + work</text>
-  <text x="16" y="226" font-size="15" style="fill: var(--viz-muted)">what one user feels: here about 50 ms</text>
+  <rect {...box(4, 208, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="230" font-size="16" font-weight="700" style="fill: var(--viz-ink)">latency = waiting + work</text>
+  <text x="16" y="250" font-size="15" style="fill: var(--viz-muted)">what one user feels: here about 50 ms</text>
 
-  <rect {...box(4, 242, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
-  <text x="16" y="264" font-size="16" font-weight="700" style="fill: var(--viz-ink)">throughput = finished per second</text>
-  <text x="16" y="284" font-size="15" style="fill: var(--viz-muted)">what the server carries: 180 / s, at most 200</text>
+  <rect {...box(4, 266, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="288" font-size="16" font-weight="700" style="fill: var(--viz-ink)">throughput = finished per second</text>
+  <text x="16" y="308" font-size="15" style="fill: var(--viz-muted)">what the server carries: 180 / s, at most 200</text>
 
-  <rect {...box(4, 300, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
-  <text x="16" y="322" font-size="16" font-weight="700" style="fill: var(--viz-ink)">utilisation = how busy the server is</text>
-  <text x="16" y="342" font-size="15" style="fill: var(--viz-muted)">180 × 5 ms = 900 ms of work a second: 90%</text>
+  <rect {...box(4, 324, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="346" font-size="16" font-weight="700" style="fill: var(--viz-ink)">utilisation = how busy the server is</text>
+  <text x="16" y="366" font-size="15" style="fill: var(--viz-muted)">180 × 5 ms = 900 ms of work a second: 90%</text>
 </svg>
