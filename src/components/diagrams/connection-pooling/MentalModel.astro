@@ -1,0 +1,69 @@
+---
+// Part 1 mental model: the app keeps a pool of 8 open connections to a 4-core database and lends
+// them out; requests that find all 8 busy wait their turn inside the app, with a time limit.
+const slots = [0, 1, 2, 3, 4, 5, 6, 7];
+const slotX = (i: number) => 20 + i * 34;
+const cores = [0, 1, 2, 3];
+---
+
+<svg viewBox="0 0 400 456" width="100%" role="img" aria-labelledby="cp-mm-t cp-mm-d">
+  <title id="cp-mm-t">A connection pool: a few open connections, lent out, with a waiting line</title>
+  <desc id="cp-mm-d">
+    Inside your app, a pool keeps 8 connections to the database open. All 8 are lent out, one to
+    each request that is running a query. Requests 9 and 10 wait in a line inside the app, for at
+    most 300 ms, until a connection is returned. Below the app, the PostgreSQL database has 4
+    processor cores, and the 8 connections share them. Opening a connection costs about 10 ms and
+    happens once; a query on an open connection takes about 1 ms. Keeping the number of connections
+    small, about twice the cores, gets the most work out of the database.
+  </desc>
+  <defs>
+    <marker id="cp-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="8" width="392" height="172" rx="10" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="16" y="32" font-size="16" font-weight="700" style="fill: var(--viz-ink)">your app</text>
+
+  <rect x="20" y="46" width="26" height="30" rx="3" style="fill: var(--viz-warn)" />
+  <text x="33" y="66" font-size="15" text-anchor="middle" style="fill: var(--viz-surface)">9</text>
+  <rect x="52" y="46" width="26" height="30" rx="3" style="fill: var(--viz-warn)" />
+  <text x="65" y="66" font-size="15" text-anchor="middle" style="fill: var(--viz-surface)">10</text>
+  <text x="90" y="58" font-size="15" style="fill: var(--viz-warn)">waiting in line: cheap,</text>
+  <text x="90" y="76" font-size="15" style="fill: var(--viz-warn)">at most 300 ms</text>
+  <path d="M48 78 L48 104" stroke-width="2" stroke-dasharray="4 3" style="stroke: var(--viz-warn)" marker-end="url(#cp-mm-a)" />
+
+  <rect x="12" y="108" width="282" height="44" rx="8" stroke-width="1.5" stroke-dasharray="6 4" style="fill: none; stroke: var(--viz-muted)" />
+  {slots.map((i) => (
+    <g>
+      <rect x={slotX(i)} y="116" width="28" height="28" rx="4" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      <text x={slotX(i) + 14} y="135" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{i + 1}</text>
+    </g>
+  ))}
+  <text x="304" y="128" font-size="16" font-weight="700" style="fill: var(--viz-ink)">pool of 8</text>
+  <text x="304" y="148" font-size="15" style="fill: var(--viz-muted)">kept open,</text>
+  <text x="304" y="166" font-size="15" style="fill: var(--viz-muted)">all lent out</text>
+
+  {slots.map((i) => (
+    <path d={`M${slotX(i) + 14} 144 L${slotX(i) + 14} 236`} stroke-width="2" style="stroke: var(--viz-flow)" />
+  ))}
+  <text x="304" y="214" font-size="15" style="fill: var(--viz-flow)">8 connections</text>
+
+  <rect x="4" y="236" width="392" height="96" rx="10" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="16" y="260" font-size="16" font-weight="700" style="fill: var(--viz-ink)">PostgreSQL database</text>
+  <text x="384" y="260" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">4 cores, shared</text>
+  {cores.map((i) => (
+    <g>
+      <rect x={20 + i * 92} y="276" width="80" height="40" rx="6" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-store)" />
+      <text x={60 + i * 92} y="301" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">core {i + 1}</text>
+    </g>
+  ))}
+
+  <rect x="4" y="344" width="392" height="50" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="366" font-size="16" font-weight="700" style="fill: var(--viz-ink)">open once, reuse many times</text>
+  <text x="16" y="386" font-size="15" style="fill: var(--viz-muted)">opening: about 10 ms · one query: about 1 ms</text>
+
+  <rect x="4" y="402" width="392" height="50" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="424" font-size="16" font-weight="700" style="fill: var(--viz-ink)">keep the number small</text>
+  <text x="16" y="444" font-size="15" style="fill: var(--viz-muted)">4 cores: about 8 connections do the most work</text>
+</svg>

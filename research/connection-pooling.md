@@ -137,3 +137,50 @@ query cost (`database-indexing`, `query-optimization`).
   Leaves out: measured costs, hold time vs query time, the budget across pods, what breaks in
   transaction mode, the failure modes (deadlock, timeouts, incidents).
 - Vendor docs (Prisma, Supabase): sizing formula + "use our pooler for serverless". Leaves out why.
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+The page was restructured into Part 1 "Understand it" and Part 2 "How it really works". Before:
+32 min read, opening with measured numbers and terms (TLS, SCRAM, backend, session, p99) before the
+idea. After: 49 min read.
+
+What the rewrite and the fresher read fixed:
+
+- New opening question in plain words, answered on the first screen; new plain tagline and
+  description (the old tagline was a riddle).
+- Part 1 follows one online shop through seven numbered steps with working shown: 10 + 1 = 11 ms
+  per request without a pool, 8 ÷ 0.011 s = 727 req/s (measured 695), 8 × 1,000 = 8,000 with a
+  pool (measured 5,408, 5,408 ÷ 695 = 7.8), 2,370 ÷ 6,598 = 0.36, 8 × 5 = 40 for a 200 ms hold.
+- New mental-model diagram (`MentalModel.astro`): app with a pool of 8 and two waiting requests,
+  database with 4 cores.
+- Building blocks, each in four steps: a database connection (TCP, Unix socket, TLS, session,
+  process, backend), a transaction, a lock, CPU cores, waiting in line with a time limit (queue,
+  acquire, release, acquire timeout), hold time and Little's law.
+- Terms now explained before use in Part 2: SCRAM and hashing, superusers, round trip and RTT,
+  nonce, salt, certificate, availability zones, pod, thread and thread pool, failover, DNS,
+  firewall, jitter, percentiles (p50, p99), throughput, WAL, CPU cache, migrations, psql, rolling
+  deploy, autoscaling, worker processes, deadline, load shedding, deadlock, serverless functions,
+  proxy, single-threaded, client and server connections, statement_timeout, advisory lock,
+  schema/search_path, LISTEN, temporary tables, prepared statements, drivers, reconnection storm,
+  multiplexing, pinning, CloudWatch, Elixir, tenant, RESET/DISCARD ALL, NAT gateway, TCP keepalives,
+  lock_timeout.
+- Every derived number now shows its working: 9.52 ÷ 0.054 = 176, SCRAM 6.68 − 2.35 = 4.33 ms
+  (the TCP-trust row, 2.35 ms, was added to the table from our own output), TLS 9.52 − 6.68 = 2.84
+  ms, 500 × 1.29 MB = 646 MB, 100 − 3 = 97 slots, 14,496 ÷ 33,457 = 0.43, 6 × 1 ms and 6 × 50 ms
+  of handshake travel time, 4 ÷ 0.010 s = 400 for the sim and 8 ÷ 0.060 s = 133 vs 24 ÷ 0.060 s =
+  400 for its two moves, 64 ÷ 2,007 = 32 ms, 512 ÷ 10 = 51 per branch row, the budget figure's
+  60 + 10 + 3 = 73 and 133 − 100 = 33, 12 × 4 × 10 = 480, 512 ÷ 3,347 = 153 ms, 3,813 ÷ 6,598 =
+  0.58, 3 + 50 = 53 ms and 4 ÷ 0.053 = 75, 6,066 ÷ 427 = 14 and the 24-minute outage, the
+  psycopg jitter as 5% of 60 minutes = 3 minutes, SQLAlchemy 5 + 10 = 15, and the Check yourself
+  answers.
+- Every table now has a sentence saying what to notice; the transaction-mode output block has a
+  "read it like this" paragraph, and so does the pool code.
+- A wrapped line starting with "+ 1" (Prisma's formula) would have rendered as a list item; rewritten.
+
+Three sentences a student could give after Part 1 alone: Opening a database connection is slow,
+about 10 ms, while a query on an open one takes a fraction of a millisecond, so apps keep a small
+pool of open connections and lend each one to one request at a time. The pool should stay small,
+about twice the database's cores, because more connections only take turns on the cores and wait
+for each other's locks, so the database does less work. Requests that find every connection busy
+wait in a line inside the app with a time limit, and each request should hold its connection only
+for its database work, because hold time decides how many requests the pool can serve.
