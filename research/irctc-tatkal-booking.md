@@ -145,3 +145,52 @@ link and re-check wording and dates. Flags mark where sources disagree.
   full-route requests: packing (best fit) fits ~3.9 full-route passengers, random spreading ~1.4.
 - No public source on how CRIS/IRCTC store or lock berths; everything beyond the cited rules is
   our design.
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Rewrote the page as Part 1 "Understand it" (one running example: Ravi and Meera booking AGC→BPL
+on berth 23 at 10:00:00.3, new MentalModel diagram) and Part 2 "How it really works". Building
+blocks, each in four steps: a segment, bits and a bitmask, a transaction, a race and a lost update,
+a row lock, a hold.
+
+What the fresher read found and fixed:
+
+- Terms used before they were explained, now explained on first use: quota, PNR, lakh, IRCTC,
+  CRIS, UPI, Aadhaar, OTP, contention, shard and partition key (before the architecture figure),
+  edge, waiting room, stateless, cache, isolation level, read committed, repeatable read, version
+  column, SQLSTATE, thread, queue, system call, fsync, failover, idempotent, deadlock (was used in
+  a table before the caution box), byte/KB/GB, microsecond and nanosecond, hash function, mod,
+  change stream and Kafka, admission control, signed token, saga, callback, reconciliation, bay,
+  side lower berth, snapshot, batch job, SQLite.
+- Numbers that now show their working: 37,410 ÷ 60 = about 620 a second; 18 × 72 = 1,296 berths;
+  requests per second 620 × 10–20; 11 × 15 ms = 165 ms; 1 + 2 + 32 + 64 = 99; the three-step mask
+  table (8, 7, 28) before the formula; 780 journeys from 40 × 39 ÷ 2; 64 + 1 = 65 stops;
+  1,000,000 ÷ 2 = 500,000 decisions a second vs 1,000 ÷ 0.5 = 2,000 with one fsync per booking
+  (0.5 ms marked illustrative); 3,000 × 60 = 180,000 train-dates and 180,000 × 300 KB = 54 GB;
+  9,071 mod 4 and mod 5 with the division written out, and "4 of every 20 hash values stay" for
+  the 1-in-5 claim; 96 ÷ 20,000 = 0.48%, so 99.52% end at the summary; 60% of 100 = 60 waitlist
+  places; 40 − 29 = 11 turned away in the example output.
+- Wrong number fixed: "one train has at most a few thousand berth-segments" (1,300 berths × up to
+  59 segments is far more); now "about 1,300 berths to choose from".
+- The third request in the opening question (NDLS→NGP) is now answered, not left hanging.
+- The fsync paragraph no longer claims an unsourced fsync latency; the figure is labelled
+  illustrative.
+- Added a "read it like this" paragraph after the allocator code.
+
+Sources changed for the 2020 rule: removed Business Today 2015 (Tatkal timings now cited to the
+All India Radio June 2025 article), The Quint 2019 (claim dropped), Lok Sabha 2010 on pooled and
+remote-location quotas (claim reduced to our design; no 2020+ official source found), and the
+undated Lok Sabha AU1903 answer (replaced with IANS 2023 for automatic cancellation of waitlisted
+e-tickets at charting; read via search summary only, eparlib.nic.in was unreachable). Stripe's 2017
+blog post replaced with Stripe's current API docs on idempotent requests. LMAX (2011) kept as dated
+history, year in the sentence. RBI 2019 circular kept as a rule still in force (FLAG: re-check that
+it has not been superseded).
+
+Three sentences a student could give after Part 1 alone: A train booking system sells a berth stretch
+by stretch along the route, so it stores, for every berth, one sold/free mark per stretch, and a
+journey fits a berth when all of its stretches are free. When two people want the same stretches
+at the same moment, the server sends the database one instruction, "mark them sold only if they are
+still free", and the database runs those one at a time per berth, so the first person gets the berth
+and the second is told to try another. The berth is then held for a few minutes while the person
+pays, and the 10 AM rush is hard not because of the total number of bookings but because thousands
+of them want the same few hundred rows at once.

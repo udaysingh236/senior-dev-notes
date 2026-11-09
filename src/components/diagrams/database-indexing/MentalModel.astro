@@ -1,0 +1,91 @@
+---
+// Part 1 mental model: the same table read three ways. Without an index the database reads every
+// page. With an index it looks the customer up in a small sorted list and reads only the pages
+// that list points to. When the query wants a large share of the rows, those pages are nearly all
+// of the table, so the index saves almost nothing.
+const pages = Array.from({ length: 16 }, (_, i) => i);
+const PW = 21;
+const px = (i: number) => 4 + i * 24.5;
+const oneCustomer = [1, 5, 8, 11, 14]; // the 5 pages that hold customer 31337's rows
+const fivePercent = new Set([0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15]); // all but one
+---
+
+<svg viewBox="0 0 400 436" width="100%" role="img" aria-labelledby="di-mm-t di-mm-d">
+  <title id="di-mm-t">One table read three ways: without an index, through an index, and through an index for many rows</title>
+  <desc id="di-mm-d">
+    The orders table is drawn as a row of page boxes; the real table has 86,168 pages. First, with
+    no index, finding customer 31337's orders means reading every page: 86,168 pages read to find 5
+    rows. Second, with an index on customer_id, the database looks up 31337 in the index, a small
+    list kept sorted by customer_id where each entry holds the address of its row, and reads only
+    the pages those addresses point to: 3 index pages plus 5 table pages, 8 pages in total. Third,
+    when the query asks for the orders of 5% of all customers, the matching rows sit on 95 of every
+    100 pages, so going through the index still reads nearly the whole table and saves nothing.
+  </desc>
+  <defs>
+    <marker id="di-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- 1. no index -->
+  <text x="4" y="20" font-size="16" font-weight="700" style="fill: var(--viz-ink)">1. No index: read every page</text>
+  <text x="4" y="40" font-size="15" style="fill: var(--viz-muted)">wanted: the orders of customer 31337</text>
+  {
+    pages.map((i) => (
+      <rect
+        x={px(i)}
+        y="50"
+        width={PW}
+        height="28"
+        rx="3"
+        stroke-width="1.5"
+        style={oneCustomer.includes(i) ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'}
+      />
+    ))
+  }
+  <text x="4" y="100" font-size="15" style="fill: var(--viz-warn)">86,168 pages read to find 5 rows</text>
+
+  <!-- 2. with an index -->
+  <text x="4" y="142" font-size="16" font-weight="700" style="fill: var(--viz-ink)">2. Index on customer_id: look up, then fetch</text>
+  <rect x="4" y="152" width="392" height="48" rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="16" y="172" font-size="15" style="fill: var(--viz-ink)">index: customer ids, sorted, with addresses</text>
+  <text x="16" y="192" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">31337 → page, slot (× 5)</text>
+  {
+    oneCustomer.map((i) => (
+      <line x1={px(i) + PW / 2} y1="201" x2={px(i) + PW / 2} y2="232" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#di-mm-a)" />
+    ))
+  }
+  {
+    pages.map((i) => (
+      <rect
+        x={px(i)}
+        y="236"
+        width={PW}
+        height="28"
+        rx="3"
+        stroke-width={oneCustomer.includes(i) ? 2 : 1.2}
+        style={oneCustomer.includes(i) ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: none; stroke: var(--viz-stroke)'}
+      />
+    ))
+  }
+  <text x="4" y="286" font-size="15" style="fill: var(--viz-ok)">3 index pages + 5 table pages = 8 pages read</text>
+
+  <!-- 3. many rows -->
+  <text x="4" y="328" font-size="16" font-weight="700" style="fill: var(--viz-ink)">3. Orders of 5% of all customers</text>
+  {
+    pages.map((i) => (
+      <rect
+        x={px(i)}
+        y="338"
+        width={PW}
+        height="28"
+        rx="3"
+        stroke-width="1.5"
+        style={fivePercent.has(i) ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: none; stroke: var(--viz-stroke)'}
+      />
+    ))
+  }
+  <text x="4" y="388" font-size="15" style="fill: var(--viz-ink)">matches on 95 of every 100 pages:</text>
+  <text x="4" y="408" font-size="15" style="fill: var(--viz-ink)">going through the index still reads</text>
+  <text x="4" y="428" font-size="15" style="fill: var(--viz-ink)">nearly the whole table: no saving</text>
+</svg>

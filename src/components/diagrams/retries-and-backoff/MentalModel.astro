@@ -1,0 +1,64 @@
+---
+// Part 1 mental model: callers send requests into a waiting line in front of one server. A request
+// that gets no answer within 1 s is tried again, after a wait. Without a limit each request can
+// send 4 attempts; with a retry budget, retries add at most 10%. Numbers are the page's running
+// example: 70 new requests a second, a server that finishes at most 100 a second.
+const waiting = [0, 1, 2, 3];
+---
+
+<svg viewBox="0 0 400 360" width="100%" role="img" aria-labelledby="rb-mm-t rb-mm-d">
+  <title id="rb-mm-t">Callers, a waiting line, a server, and the retry loop back into the line</title>
+  <desc id="rb-mm-d">
+    Callers send 70 new requests a second into a waiting line in front of one server that can
+    finish at most 100 a second. When a caller gets no answer within 1 second, it gives up, waits
+    a short, growing, random time, and sends the request again into the same line. Below, two
+    outcomes. With no limit, each request can be sent up to 4 times, so 70 times 4 is 280 attempts
+    a second, far more than the 100 the server can finish. With a retry budget, retries add at most
+    10% of the 70, which is 7, so 77 attempts a second arrive, fewer than 100, and the line clears.
+  </desc>
+  <defs>
+    <marker id="rb-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ink)" />
+    </marker>
+  </defs>
+
+  {/* Callers. */}
+  <rect x="4" y="50" width="96" height="60" rx="10" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="52" y="75" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">callers</text>
+  <text x="52" y="97" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">70 new / s</text>
+  <line x1="102" y1="80" x2="128" y2="80" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#rb-mm-a)" />
+
+  {/* The waiting line. */}
+  <text x="190" y="44" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">waiting line</text>
+  <rect x="132" y="58" width="116" height="44" rx="4" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  {waiting.map((i) => <rect x={140 + i * 26} y="66" width="20" height="28" rx="3" style="fill: var(--viz-warn)" />)}
+  <line x1="250" y1="80" x2="266" y2="80" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#rb-mm-a)" />
+
+  {/* The server. */}
+  <rect x="270" y="54" width="104" height="52" rx="6" stroke-width="2.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="322" y="76" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">server</text>
+  <text x="322" y="97" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">max 100 / s</text>
+  <line x1="322" y1="108" x2="322" y2="134" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#rb-mm-a)" />
+
+  {/* No answer in time. */}
+  <rect x="206" y="138" width="190" height="56" rx="8" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="218" y="161" font-size="15" style="fill: var(--viz-ink)">no answer in 1 s:</text>
+  <text x="218" y="182" font-size="15" style="fill: var(--viz-ink)">the caller gives up</text>
+  <line x1="204" y1="166" x2="182" y2="166" stroke-width="2" style="stroke: var(--viz-ink)" marker-end="url(#rb-mm-a)" />
+
+  {/* Wait, then try again. */}
+  <rect x="4" y="138" width="174" height="56" rx="8" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="16" y="161" font-size="15" style="fill: var(--viz-ink)">waits a growing,</text>
+  <text x="16" y="182" font-size="15" style="fill: var(--viz-ink)">random time</text>
+  <path d="M150 136 L150 106" stroke-width="2.5" style="stroke: var(--viz-flow)" marker-end="url(#rb-mm-a)" />
+  <text x="142" y="127" font-size="15" font-weight="700" text-anchor="end" style="fill: var(--viz-flow)">retry</text>
+
+  {/* Two outcomes. */}
+  <rect x="4" y="220" width="392" height="58" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-bad)" />
+  <text x="16" y="243" font-size="16" font-weight="700" style="fill: var(--viz-bad)">no limit: up to 4 tries per request</text>
+  <text x="16" y="266" font-size="15" style="fill: var(--viz-ink)">70 × 4 = 280 attempts / s: the line grows</text>
+
+  <rect x="4" y="290" width="392" height="58" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-ok)" />
+  <text x="16" y="313" font-size="16" font-weight="700" style="fill: var(--viz-ok)">retry budget: retries add at most 10%</text>
+  <text x="16" y="336" font-size="15" style="fill: var(--viz-ink)">70 + 7 = 77 attempts / s: the line clears</text>
+</svg>

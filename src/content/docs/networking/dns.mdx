@@ -693,7 +693,12 @@ Three consequences:
   independent providers, both serving identical records, turns a provider outage into extra
   latency. The cost is keeping two providers in sync, which gets harder with DNSSEC, covered below:
   both must sign with keys the parent vouches for
-  ([RFC 8901](https://www.rfc-editor.org/rfc/rfc8901)).
+  ([RFC 8901](https://www.rfc-editor.org/rfc/rfc8901)). The classic example is from 2016, kept here
+  as history: on 21 October that year, a flood of traffic from the Mirai **botnet** (hundreds of
+  thousands of hijacked home devices such as cameras and routers) took down Dyn, a large DNS
+  provider, in waves over several hours. Sites that used only Dyn, including Twitter, GitHub and
+  Reddit, could not be reached from much of the world, while sites that also listed a second
+  provider stayed up ([APNIC, 2016](https://blog.apnic.net/2016/10/26/quick-look-attack-dyn/)).
 
 ### DNS as a load balancer, and why it is lumpy
 
@@ -1353,6 +1358,7 @@ documents, read in October and November 2026.
 - [ISC: KeyTrap, CVE-2023-50387 (2024)](https://kb.isc.org/docs/cve-2023-50387) and [the KeyTrap paper (2024)](https://arxiv.org/pdf/2406.03133) — validation as an attack surface.
 - [AWS: DynamoDB disruption in us-east-1 (October 2025)](https://aws.amazon.com/message/101925/) — an empty record published by DNS automation.
 - [DENIC: the .de outage of 5 May 2026](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/) and [Cloudflare's view of it (2026)](https://blog.cloudflare.com/de-tld-outage-dnssec/) — a DNSSEC signing failure at a top-level domain.
+- [APNIC: a quick look at the attack on Dyn (2016, kept as history)](https://blog.apnic.net/2016/10/26/quick-look-attack-dyn/) — the outage that made two DNS providers standard advice.
 - [Cloudflare: the October 2021 Facebook outage (2021)](https://blog.cloudflare.com/october-2021-facebook-outage/) — how a withdrawn route became a DNS failure, and the resolver load that followed.
 
 **Explainers**

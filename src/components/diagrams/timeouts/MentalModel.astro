@@ -1,0 +1,93 @@
+---
+// Part 1 mental model: a service with 20 workers calls a dependency for every request. On a bad
+// day 5% of those calls never get an answer. With no limit on waiting, every worker ends up
+// stuck; with a 300 ms timeout, stuck workers come back and the pool has room.
+// Numbers from the page's running example: 200 requests a second, 48 ms per healthy call on
+// average, so about 9 workers busy on healthy calls and 10 × 0.3 s = 3 held by hung ones.
+const COLS = 10;
+const CELL_W = 30;
+const CELL_H = 24;
+const GAP = 6;
+const X0 = 22;
+type Kind = 'ok' | 'hung' | 'free';
+const cells = (ok: number, hung: number): Kind[] =>
+  Array.from({ length: 20 }, (_, i) => (i < ok ? 'ok' : i < ok + hung ? 'hung' : 'free'));
+const panels = [
+  {
+    y: 168,
+    head: 'no limit on waiting',
+    cells: cells(0, 20),
+    result: 'all 20 stuck: new requests rejected',
+    tone: '--viz-bad',
+  },
+  {
+    y: 300,
+    head: 'give up after 300 ms',
+    cells: cells(9, 3),
+    result: '9 answering + 3 stuck = 12 busy: 8 free',
+    tone: '--viz-ok',
+  },
+];
+const style: Record<Kind, string> = {
+  ok: 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)',
+  hung: 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)',
+  free: 'fill: none; stroke: var(--viz-stroke)',
+};
+---
+
+<svg viewBox="0 0 400 470" width="100%" role="img" aria-labelledby="to-mm-t to-mm-d">
+  <title id="to-mm-t">A limit on waiting keeps workers free when a dependency stops answering</title>
+  <desc id="to-mm-d">
+    The Orders service has 20 workers and calls the Payments service for every request. On a bad
+    day, 5 of every 100 calls to Payments never get an answer. Top grid, no limit on waiting: all
+    20 workers end up stuck waiting on calls that will never answer, so new requests are rejected.
+    Bottom grid, give up after 300 ms: about 9 workers wait on calls that will answer, 3 wait on
+    calls that will not but give up after 300 ms, and 8 are free.
+  </desc>
+  <defs>
+    <marker id="to-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="40" width="150" height="64" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="79" y="66" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Orders</text>
+  <text x="79" y="88" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">20 workers</text>
+
+  <line x1="156" y1="72" x2="242" y2="72" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#to-mm-a)" />
+  <text x="199" y="62" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">calls</text>
+
+  <rect x="246" y="40" width="150" height="64" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="321" y="66" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Payments</text>
+  <text x="321" y="88" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">48 ms on average</text>
+
+  <text x="200" y="130" font-size="15" text-anchor="middle" style="fill: var(--viz-warn)">bad day: 5 of every 100 calls never answer</text>
+
+  {
+    panels.map((p) => (
+      <g>
+        <text x="4" y={p.y} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{p.head}</text>
+        {p.cells.map((k, i) => (
+          <rect
+            x={X0 + (i % COLS) * (CELL_W + GAP)}
+            y={p.y + 12 + Math.floor(i / COLS) * (CELL_H + GAP)}
+            width={CELL_W}
+            height={CELL_H}
+            rx="3"
+            stroke-width="1.5"
+            stroke-dasharray={k === 'free' ? '4 3' : k === 'hung' ? '5 2' : undefined}
+            style={style[k]}
+          />
+        ))}
+        <text x="4" y={p.y + 92} font-size="15" font-weight="700" style={`fill: var(${p.tone})`}>{p.result}</text>
+      </g>
+    ))
+  }
+
+  <rect x="4" y="414" width="18" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="30" y="426" font-size="15" style="fill: var(--viz-muted)">waiting, will be answered</text>
+  <rect x="4" y="440" width="18" height="14" rx="2" stroke-width="1.5" stroke-dasharray="5 2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="30" y="452" font-size="15" style="fill: var(--viz-muted)">waiting, never answered</text>
+  <rect x="236" y="440" width="18" height="14" rx="2" stroke-width="1.5" stroke-dasharray="4 3" style="fill: none; stroke: var(--viz-stroke)" />
+  <text x="262" y="452" font-size="15" style="fill: var(--viz-muted)">free</text>
+</svg>

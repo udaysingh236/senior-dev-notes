@@ -1,12 +1,12 @@
 ---
 title: Idempotency Keys
-description: How a server makes a repeated write happen once — claiming the key with a unique insert, 409 for a duplicate in flight, leases and fencing for a crashed attempt, recovery points and a downstream key for remote side effects, what to replay, how long to keep keys, and the same idea for message consumers.
-tagline: The key row is a lock with a lease, and a log of how far the work got.
+description: How a server makes sure a payment or any other write happens only once when the same request arrives twice, explained from zero with one payment. Then, in depth, claiming the key with a unique insert, answering 409 while the first try still runs, leases and fencing after a crash, a key of your own for the bank, what to send back to a repeat, how long to keep keys, and the same idea for message consumers.
+tagline: How a server makes sure a payment sent twice is charged only once.
 difficulty: intermediate
 track: messaging
 prerequisites: [rest-api-design, retries-and-backoff, acid-and-isolation-levels]
 next: [delivery-semantics, transactional-outbox, distributed-locks, saga-pattern]
-lastReviewed: 2026-11-06
+lastReviewed: 2026-11-09
 sidebar:
   order: 6
 ---
@@ -15,6 +15,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/idempotency-keys/MentalModel.astro';
 import Overview from '../../../components/diagrams/idempotency-keys/Overview.astro';
 import Race from '../../../components/diagrams/idempotency-keys/Race.astro';
 import Lease from '../../../components/diagrams/idempotency-keys/Lease.astro';
@@ -24,46 +25,262 @@ import KeyRaceSim from '../../../components/sims/idempotency-keys/KeyRaceSim.ast
 
 ## The question
 
-Two copies of `POST /payments` arrive 100 ms apart with the same `Idempotency-Key`. Your handler
-looks the key up, finds nothing, charges the card, and stores the key. Both copies find nothing,
-because neither has stored it yet. Now make the first copy's process die after the bank said
-yes but before your `COMMIT`. What does the third attempt find in your table, and what stops it
-from charging a third time?
+You tap "Pay ₹500" in an app. The app sends the payment to the server, the server charges your
+card, and then your mobile network drops before the answer reaches your phone. The app cannot tell
+whether the payment went through, so after a moment it sends the same payment again. How does the
+server know that the second request is the same payment, and not a second ₹500 you meant to pay?
 
-## Why this problem exists
+The short answer: when you tap Pay, the app makes up a unique label for this one payment, and sends
+that same label with every attempt. The server keeps a table of the labels it has seen and the
+answer it gave for each. A new label means "do the work and save the answer". A label it already
+has means "this is a repeat: send back the saved answer and do not charge again". That label is
+called an **idempotency key**. The rest of Part 1 walks through it slowly; Part 2 shows what it
+takes to make it hold when repeats arrive at the same moment and servers crash halfway.
 
-An **idempotency key** is a unique value the client generates once per operation it intends,
-and sends on every attempt of that operation, so the server can recognise a repeat. The
+## The idea in plain words
+
+Follow one payment. Meera pays ₹500 to a shop through its app.
+
+1. **Meera taps Pay.** At that moment the app makes up a key, a long random text such as
+   `7f3a9c2e-41b8-4d6a-9e57-0c1d2b3a4f60`. We will shorten it to `7f3a`. The app saves the key on
+   the phone, next to the order, before sending anything.
+2. **Try 1.** The app sends `POST /payments` with the amount, ₹500, and a header
+   `Idempotency-Key: 7f3a`. It will wait up to 2 seconds for an answer.
+3. **The server looks the key up.** It has a table of keys. There is no row for `7f3a`, so this is
+   a new payment. The server writes a row, "`7f3a`: in progress", and only then asks the bank to
+   charge ₹500.
+4. **The bank says yes**, with a charge ID, `ch_1`. The server updates the row to "`7f3a`: finished,
+   answer `201 Created`, charge `ch_1`" and sends that answer back. The whole thing took 1.2 seconds.
+5. **The answer is lost.** Meera's phone switched from Wi-Fi to mobile data at that moment, and the
+   answer never arrived. The app waits its full 2 seconds, hears nothing, and gives up on try 1.
+6. **Try 2.** The app waits another 0.5 seconds and sends the same payment again, with the same key
+   `7f3a`. It arrives 2 + 0.5 = 2.5 seconds after try 1 was sent.
+7. **The server finds the row.** `7f3a` is there and says "finished". So the server does not call
+   the bank. It sends back the saved answer: `201`, charge `ch_1`, ₹500.
+8. **Meera sees "Payment successful"**, and her card was charged once.
+
+<Figure caption="The app labels one payment with a key and sends the same key on every try. The server looks the key up in its key table and does one of three things, so the card is charged once however many tries arrive.">
+  <MentalModel />
+</Figure>
+
+The figure shows the three things a server can find when it looks a key up. Steps 3 and 7 above
+were the first and the last: a new key, and a finished one. The middle case happens when the
+bank is slow.
+
+Change one number. Today the bank takes 3 seconds instead of 1.2. Try 2 still arrives at
+2.5 seconds, but now try 1 is still waiting for the bank. The row says "`7f3a`: in progress". The
+server must not charge again, and it has no answer to send yet, so it says "still working on it,
+try again later" (`409 Conflict`). The app waits a little longer this time,
+1 second, and tries again, at 2.5 + 1 = 3.5 seconds. Try 1 finished at 3 seconds, so this third try finds the row finished and gets the
+saved answer. Still one charge.
+
+Two details in that story carry the whole idea:
+
+- **The row is written before the bank is called.** If the server charged first and wrote the row
+  afterwards, try 2 at 2.5 seconds would find no row, think the payment is new, and charge again.
+- **Only one try can create the row.** Two tries can reach two different server machines at the
+  same moment. The database, not the server code, must make sure that only one of them creates
+  the row for `7f3a`; the other must see that it lost. Part 2 shows how.
+
+One case is still open: what if the server crashes after the bank said yes but before it marked
+the row finished? The row would say "in progress" for ever, and every retry would get `409`. The
+fix has two parts, both in Part 2: the "in progress" mark expires after a while, so a later try
+can take over, and the server sends a key of its own to the bank, so that asking the bank again
+returns the first charge instead of making a new one.
+
+An everyday picture: a bank will not pay the same cheque twice. Each cheque carries a number, and
+the bank's books record which numbers it has already paid. Present the same cheque again and the
+clerk finds the number in the books and refuses. The picture stops working in one place: one clerk
+handles one cheque at a time, while a server handles two copies of the same request on two
+machines in the same millisecond. "Look in the book, then pay" is no longer safe when two clerks
+can look at the same moment, which is why the database has to decide.
+
+## The building blocks
+
+Eight ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### Idempotent
+
+**What it is.** An operation is **idempotent** if doing it twice has the same effect as doing it
+once.
+
+**Why it matters.** Networks lose messages, so a program that talks over a network will sometimes
+send the same request twice. If the operation is idempotent, the repeat does no harm.
+
+**Example.** "Set the order status to shipped" is idempotent: after one run or five, the status is
+shipped. "Charge ₹500" is not: five runs charge ₹2,500.
+
+**The precise version.** HTTP defines `GET`, `PUT` and `DELETE` as idempotent and `POST` as not
+([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110), the current HTTP standard). An idempotency key
+is a way to make a `POST`, which is not idempotent by nature, behave as if it were: the server
+turns the second and later copies into a lookup.
+
+### A retry, and why repeats are normal
+
+**What it is.** A **retry** is sending a request again because the first attempt seems to have
+failed.
+
+**Why it exists.** When no answer arrives, the sender cannot tell which of three things happened:
+the request was lost on the way, the server is still working on it, or the server finished and the
+answer was lost on the way back. Retrying is the only way to get an answer, and in two of those
+three cases the server sees the same request twice.
+
+**Example.** Meera's app waited 2 seconds (its **timeout**, the longest it waits for an answer),
+then 0.5 seconds more, then retried. The server had already finished. Without the key, that retry
+would have been a second ₹500 payment.
+
+**The precise version.** Repeats come from many places, and they are normal traffic, not a rare
+edge case:
+
+- **Client code and SDKs** (the libraries a company ships for calling its API) retry after a timeout or a dropped connection, often several times
+  with growing waits (the [retries page](/resilience/retries-and-backoff/) covers how many).
+- **People** tap twice, or refresh a slow checkout page.
+- **Proxies**, the servers that sit between clients and your service, may retry a request they
+  think failed.
+- **Message queues** deliver "at least once". A message queue holds messages from one program
+  until another program, the **consumer**, takes them. The consumer tells the queue "done" (it
+  **acknowledges** the message); if it crashes before that, the queue delivers the message again.
+
+### An idempotency key
+
+**What it is.** An **idempotency key** is a unique value the client makes up once for each
+operation it intends, and sends with every attempt of that operation.
+
+**Why it exists.** Two identical requests can mean "the same payment, sent twice" or "two payments
+of the same amount". Only the client knows which. The key carries that knowledge: same key, same
+payment.
+
+**Example.** Meera's ₹500 payment has key `7f3a`. If she pays the same shop ₹500 again tomorrow,
+on purpose, the app makes a new key, say `b91e`, and the server charges again, correctly.
+
+**The precise version.** The usual key is a **UUID version 4** (universally unique identifier): a 36-character ID made almost
+entirely of random characters, with so many possible values that two phones picking the same one
+by chance is not a real concern. The client sends it in an HTTP header, `Idempotency-Key`. Two
+rules matter from the start: the key is made once per intent and saved before the first send
+(a key made fresh for each attempt protects nothing), and the server scopes it per customer
+account, so two customers who pick the same key do not share a row. The
 [REST API design page](/networking/rest-api-design/#timeouts-are-ambiguous-retrying-a-post-safely)
-covers why a timed-out `POST` needs one and the basic contract. This page is about the part that
-contract hides: the server-side store that makes "only once" true when attempts overlap, crash,
-and arrive days late.
+covers the client side of this contract; this page is about the server side.
 
-Repeats are normal traffic, not an edge case. They come from:
+### A side effect, local or remote
 
-- **Client retries** after a timeout or a reset connection, including the ones SDKs send on their
-  own (the [retries page](/resilience/retries-and-backoff/) covers how many).
-- **People**: a double tap, a refresh on a slow checkout.
-- **Proxies and meshes** that retry a request they think failed.
-- **Queues**, which deliver at least once: a consumer that dies before acknowledging gets the
-  message again.
+**What it is.** A **side effect** is anything a request changes in the world: a row written, a
+card charged, an email sent.
 
-A few words for the rest of the page. A **side effect** is anything the operation changes outside
-the request: a row written, a card charged, an email sent. A **local** side effect lives in your
-own database and can join your transaction; a **remote** one, such as a bank call, cannot. A
-**replay** is the server answering a repeat with the outcome of the first attempt instead of
-doing the work again. A **fingerprint** is a hash of the request body, stored with the key, so a
-key reused for a different request can be caught.
+**Why it matters.** The whole point of the key is to stop a side effect from happening twice. And
+the side effects come in two kinds, which need different protection.
+
+**Example.** Meera's payment has two side effects. Writing the payment row in your own database is
+**local**: it lives in your database. Charging her card is **remote**: it happens at the bank, a
+different company's system.
+
+**The precise version.** A local side effect can be grouped with the key row so that both happen
+or neither does (the next block). A remote one cannot: you cannot undo a card charge by rolling
+back your own database. Most of the hard work on this page is about remote side effects.
+
+### A transaction
+
+**What it is.** A **transaction** is a group of database writes that either all happen or none of
+them happen.
+
+**Why it exists.** If a server crashes after writing half of a change, the data is left
+half-changed. A transaction prevents that: until it is committed, none of its writes count.
+
+**Example.** The server inserts the key row `7f3a` and the payment row `pay_7` in one transaction.
+The process crashes before `COMMIT`. The database throws both writes away, so the next try finds
+neither row and starts cleanly.
+
+**The precise version.** In SQL a transaction starts with `BEGIN` and ends with `COMMIT` (keep the
+writes) or `ROLLBACK` (throw them away); a crash counts as a rollback. "All or nothing" is called
+**atomic**. A transaction can only cover writes to the one database that runs it, which is exactly
+why a bank call cannot join it.
+
+### A unique index
+
+**What it is.** A **unique index** is a rule in the database that a column, or a set of columns,
+may never hold the same value in two rows.
+
+**Why it exists.** It lets the database itself refuse duplicates, even when two writes arrive at
+the same instant from two machines. Code that checks first and writes afterwards cannot promise
+that (the next block shows why).
+
+**Example.** The key table has a unique index on `(account_id, key)`. The server inserts
+`(acct_42, 7f3a)`. A second insert of `(acct_42, 7f3a)` fails, while `(acct_99, 7f3a)` from another
+customer is fine.
+
+**The precise version.** A **primary key** is always a unique index, so declaring
+`PRIMARY KEY (account_id, key)` gives you one. An index is a sorted structure the database keeps
+next to the table so it can find rows by a column quickly (the
+[database indexing page](/databases/database-indexing/) explains them); a unique index also checks,
+on every insert, that the value is not there yet.
+
+### Two requests at the same time: a race
+
+**What it is.** A **race** is a bug where the result depends on which of two things running at
+the same time gets to a step first.
+
+**Why it matters here.** The obvious way to use a key table is "look the key up; if it is not
+there, do the work and insert the key". Two tries of the same payment, running at the same time,
+can both look before either inserts.
+
+**Example.** Try 1 arrives at 0 ms and looks up `7f3a`: no row. Try 2 arrives at 100 ms and looks
+up `7f3a`: still no row, because try 1 is busy calling the bank and has not inserted anything yet.
+Both charge ₹500.
+
+**The precise version.** This pattern has a name: a **check-then-act** race, or a
+time-of-check to time-of-use race. The answer to "does the key exist?" was true only at the moment
+it was read. The fix is to make checking and claiming one indivisible step, and the unique index
+gives us that: insert first, and let the insert's success or failure be the check.
+
+### A lock and a lease
+
+**What it is.** A **lock** is a mark that says "someone is working on this; everyone else keep
+out". A **lease** is a lock that expires at a stored time.
+
+**Why it exists.** The "in progress" row is a lock on key `7f3a`: it keeps other tries away while
+try 1 works. But if try 1's process crashes, nobody will ever remove the mark. An expiry time means
+a dead owner cannot hold the key for ever.
+
+**Example.** Try 1 claims `7f3a` at 10:00:00 with a lease of 30 seconds, so the row says
+"locked until 10:00:30". It crashes at 10:00:01. Retries before 10:00:30 get `409`. A retry at
+10:00:31 sees the lease has run out, writes itself in as the new owner, and finishes the payment.
+
+**The precise version.** The key row stores two columns for this: `owner`, an ID of the attempt
+that holds the lock, and `locked_until`, the time the lease ends. Part 2 shows how to pick the
+lease length, and what stops an owner that was only slow, not dead, from finishing the payment a
+second time.
+
+:::tip[If you stop here]
+- The client makes up one **idempotency key** per payment it intends, saves it, and sends the same
+  key with every try.
+- The server keeps a row per key: no row means new, so do the work; "in progress" means answer
+  `409`, try again later; "finished" means send back the saved answer without doing the work again.
+- The row is claimed **before** the work, with a database insert that only one try can win, so
+  two tries arriving together cannot both charge.
+- A crashed try must not block the key for ever: the claim expires (a **lease**), and the call to
+  the bank carries a key of its own, so asking the bank again returns the first charge.
+:::
+
+## Going deeper
+
+Here is the question Part 1 skipped. Two copies of `POST /payments` arrive 100 ms apart with the
+same `Idempotency-Key`. Your handler looks the key up, finds nothing, charges the card, and stores
+the key; both copies find nothing, because neither has stored it yet. Now let the first copy's
+process die after the bank said yes but before your `COMMIT`. What does the third attempt find in
+your table, and what stops it from charging a third time?
 
 The hard cases share one property: the repeat arrives while the server's knowledge of the first
-attempt is incomplete. Either the first attempt is still running (a retry fired because the
-client's timeout is shorter than the server's slowest answer), or it died halfway and left
-half a record behind. A design that is correct when attempts arrive one at a time, each after the
-previous one finished, can still charge twice in production.
+attempt is incomplete. Either the first attempt is still running, or it died halfway and left half
+a record behind. A design that is correct when attempts arrive one at a time, each after the
+previous one finished, can still charge twice in production. The rest of the page builds the key
+row that survives both: how to claim it, what a duplicate gets meanwhile, how a crashed attempt is
+taken over, how remote calls are made safe to repeat, what to store, and how long to keep it.
 
 ## The obvious fix, and why it breaks
 
-The handler most teams write first:
+The handler most teams write first. `db` is the database, `bank` is a client for the bank's API,
+and `crash_after_charge` lets the example simulate the process dying at the worst moment:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -106,68 +323,96 @@ async function payNaive(db, bank, account, key, amount, { crashAfterCharge = fal
   </TabItem>
 </Tabs>
 
+Read it like this: look the key up; if a row exists, send back what it stored. Otherwise charge
+the bank, and only then insert the key with the answer. The insert has a `try` around it because
+the table's primary key will reject a second row for the same key.
+
 It passes every test that sends one request at a time. It has three faults:
 
 1. **Check-then-act.** The `SELECT` and the `INSERT` are separate steps with a bank call between
-   them. A second attempt that runs its `SELECT` in that gap sees nothing and charges. This is a
-   **time-of-check to time-of-use race**: the answer to "does the key exist?" was true only at the
-   moment it was read. The primary key on the table does not help; it fires after the second
-   charge, and the user gets a `500` for a payment that went through.
+   them: the race from Part 1. The primary key does not help; it fires after the second charge,
+   and the user gets a `500` for a payment that went through.
 2. **The crash window.** If the process dies between the bank call and the `INSERT`, the money
    moved and no record says so. The next attempt charges again.
 3. **No fingerprint.** A client bug that reuses a key for a different amount gets the first
-   payment's response replayed, and believes the second payment succeeded.
+   payment's answer sent back, and believes the second payment succeeded. A **fingerprint** stops
+   this, and it needs one new idea, a hash.
 
-**"Then store the key in Redis with `SET NX` first."** That closes the race, but now the key lives
-in one store and the payment in another, and no transaction spans both. Crash after the Redis
-write and before the database commit, and the key says "done" for a payment that does not exist.
-Expire the Redis key to recover, and a slow attempt can lose it while still running.
+A **hash** is a short, fixed-size value computed from any input, such that different inputs almost
+always give different values. It exists so you can compare two large things by comparing two
+small ones. For example, the hash called SHA-256 turns the body `{"amount": 1199}` into a string
+of 64 letters and numbers, and `{"amount": 2500}` into 64 completely different ones. A fingerprint is the hash of
+the request body, stored with the key. When a repeat arrives, the server hashes its body and
+compares: same fingerprint, a genuine repeat; different fingerprint, the key was reused for a
+different request, a client bug.
 
-**"Then hash the request body instead of asking for a key."** AWS considered this and rejected it
-for its own APIs: two identical `RunInstances` calls a second apart may mean "two identical
-instances", and a hash cannot tell a retry from a second intent
+**"Then store the key in Redis with `SET NX` first."** Redis is an in-memory key-value store that
+many teams already run, and `SET NX` means "set this key only if it does not exist yet", so only
+one of two racing tries succeeds. That closes the race, but now the key lives in one store and the
+payment in another, and no transaction spans both. Crash after the Redis write and before the
+database commit, and the key says "done" for a payment that does not exist. Give the Redis key an
+expiry so it can recover, and a slow attempt can lose it while still running.
+
+**"Then hash the request body instead of asking for a key."** AWS (Amazon Web Services, Amazon's cloud) considered this and rejected it
+for its own APIs. Two identical calls to `RunInstances`, the call that starts virtual machines on
+Amazon EC2, a second apart may mean "start two identical machines", and a hash cannot tell a retry
+from a second intent
 ([AWS Builders' Library, 2021](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-apis/)).
 A key carries intent; a hash guesses it.
 
-Three neighbours get mixed up with idempotency keys. An operation that is **idempotent by
-design**, such as `PUT` with a full resource or `UPDATE orders SET status = 'shipped'`, needs no
-key at all; prefer it when you can. **Optimistic concurrency** (`ETag` and `If-Match`) stops
-*different* writers from overwriting each other; a key stops the *same* writer from repeating.
-And **exactly-once delivery** does not exist over a network: you get at-least-once delivery plus
-a receiver that recognises repeats, which is what this page builds.
+Three neighbours get mixed up with idempotency keys:
 
-## The core idea
+- **Idempotent by design.** An operation like `PUT` with the full resource, or
+  `UPDATE orders SET status = 'shipped'`, is already idempotent (Part 1) and needs no key. Prefer
+  it when you can.
+- **Optimistic concurrency.** The server gives each version of a resource a version tag (an
+  `ETag`); a client sends it back in an `If-Match` header, and the write fails if someone else
+  changed the resource in between. That stops *different* writers from overwriting each other; a
+  key stops the *same* writer from repeating.
+- **Exactly-once delivery.** It does not exist over a network. What you can build is
+  at-least-once delivery (Part 1's retries) plus a receiver that recognises repeats, which is what
+  this page does.
 
-Treat the key row as two things at once. It is a **lock**: the first attempt claims it with an
-atomic insert before doing anything, and every other attempt with the same key sees it is taken.
-And it is a **log**: it records how far the work got, so an attempt that finds it unfinished
-knows where to resume, and an attempt that finds it finished replays the stored response.
+## How it works, piece by piece
 
-Two more rules make it hold under crashes. The lock is a **lease**, a lock that expires at a
-stored time, so a dead owner cannot hold the key for ever. And every step that cannot join the
-local transaction, every remote call, must itself be safe to repeat, usually by passing a key of
-your own to the service you call.
+Part 1 described the key row as a mark that says "in progress" or "finished". The precise version
+treats the row as two things at once:
+
+- **A lock.** The first attempt claims it with an atomic insert before doing anything, and every
+  other attempt with the same key sees that it is taken.
+- **A log.** It records how far the work got. An attempt that finds it unfinished knows where to
+  resume, and an attempt that finds it finished sends back the stored response.
+
+Two more rules make it hold under crashes. The lock is a lease, so a dead owner cannot hold the key
+for ever. And every step that cannot join the local transaction, every remote call, must itself be
+safe to repeat, usually by passing a key of your own to the service you call.
+
+The figure below is the life of one key row: the four states down the left, and on the right what
+a request with the same key gets in each state.
 
 <Figure caption="One row per key carries the whole protocol. A unique insert decides who works on it; the lease and recovery point decide what a later attempt may do while it is unfinished; the stored response is what every repeat gets once it is finished; retention decides when the server forgets.">
   <Overview />
 </Figure>
 
-The rest of the page takes the states in order: claiming, waiting, taking over, doing the work,
-storing the outcome, and forgetting.
-
-## How it works, piece by piece
+Two labels in it are new. The **recovery point** is the name of the last step that finished, and
+**retention** is how long the server keeps the row before a **purge job**, a background job, deletes it; both get their own sections below. The rest of
+the page takes the states in order: claiming, waiting, taking over, doing the work, storing the
+outcome, and forgetting.
 
 ### Claiming the key: let the index decide
 
 The claim must be one atomic step: "insert this key if no row has it, and tell me whether I won".
-A database **unique index** does exactly that. When two transactions insert the same key,
-PostgreSQL makes the second one wait for the first to commit or roll back, then checks again: if
-the first committed, the second gets a uniqueness conflict; if it rolled back, the second insert
-succeeds ([PostgreSQL 18 docs](https://www.postgresql.org/docs/current/index-unique-checks.html)).
-There is no window in which both see "absent".
+A unique index does exactly that, because of how a database handles two inserts of the same value.
 
-`INSERT … ON CONFLICT DO NOTHING` turns the conflict into a row count instead of an error, so one
-statement both claims and tells you if you won:
+Here is what PostgreSQL, a widely used open-source SQL database, does
+([PostgreSQL 18 docs](https://www.postgresql.org/docs/current/index-unique-checks.html)). When two
+transactions insert the same key, the second one waits until the first commits or rolls back,
+then checks again. If the first committed, the second gets a uniqueness conflict. If the first
+rolled back, the second insert succeeds. There is no moment in which both see "absent".
+
+`INSERT … ON CONFLICT DO NOTHING` turns that conflict into a count instead of an error. The
+database reports how many rows the statement inserted: 1 means you won, 0 means the key was
+already taken. One statement both claims and tells you the result:
 
 ```sql
 INSERT INTO idempotency_keys (account_id, key, fingerprint, recovery_point, owner, locked_until, ...)
@@ -176,44 +421,79 @@ ON CONFLICT DO NOTHING;           -- 1 row: you own the key. 0 rows: someone els
 SELECT * FROM idempotency_keys WHERE account_id = $1 AND key = $2;
 ```
 
+Read it like this: try to insert the key row, marked with this attempt as `owner` and a lease that
+ends 30 seconds from now. Then read the row back, whoever wrote it, to see its state.
+
 A tiny example. Attempt A inserts key `k1` at 0 ms and commits at 2 ms. Attempt B inserts `k1` at
 1 ms: it waits on A's uncommitted row, sees A commit at 2 ms, and gets 0 rows. B then reads the
-row, sees it is in progress, and answers `409`. The decision happened inside the index, at
-insert time, not in your code.
+row, sees it is in progress, and answers `409`. The decision happened inside the index, at insert
+time, not in your code.
+
+The figure puts the two designs side by side on a timeline from 0 to 500 ms: try 1 arrives at
+0 ms, try 2 with the same key at 100 ms, and the bank call takes 300 ms.
 
 <Figure caption="Check-then-act lets both attempts read 'absent' before either writes, so both charge. Insert-first moves the decision into the unique index before any money moves: the second insert conflicts and gets a 409.">
   <Race />
 </Figure>
 
+In the top timeline, try 1 inserts its key only at 310 ms, after the bank answered, so try 2's
+lookup at 100 ms found nothing. In the bottom one, try 1's row exists from 0 ms, so try 2 loses at
+100 ms, before any money moves.
+
 Three details make the claim correct rather than nearly correct:
 
-- **Keep the claim transaction short.** Commit it before the slow work. A second insert waits on
-  the first one's uncommitted row; if that transaction stays open across a 3 s bank call, every
-  duplicate holds a database connection for 3 s.
-- **Scope the key.** The primary key is `(account_id, key)`, not `key`. Keys are chosen by
-  clients; two tenants can pick the same one, and the second must not receive the first one's
-  response.
+- **Keep the claim transaction short.** Commit it before the slow work. A server keeps a small,
+  fixed number of open database connections, its **connection pool** (say 20; the
+  [connection pooling page](/databases/connection-pooling/) explains why it is fixed). A second
+  insert waits on the first one's uncommitted row while holding a connection. If the first
+  transaction stays open across a 3 s bank call, every duplicate holds a connection for 3 s, and
+  ten duplicates of one slow payment hold half of those 20.
+- **Scope the key.** The primary key is `(account_id, key)`, not `key`. Keys are chosen by clients;
+  two customers can pick the same one, and the second must not receive the first one's response.
 - **Check the fingerprint in the same transaction.** If the stored fingerprint differs, answer
-  `422` and change nothing. In PostgreSQL's default Read Committed level, the `SELECT` after a
-  conflict takes a fresh snapshot and sees the winner's committed row. Under Repeatable Read it
-  reads the snapshot from the start of the transaction and may not see it, so treat "0 rows
-  inserted and no row visible" as a conflict to retry.
+  `422` and change nothing.
+
+One database setting can bite here. A transaction's reads come from a **snapshot**, a frozen
+picture of the committed data at one moment, so that a query sees consistent data while others
+write. The **isolation level** decides when that picture is taken (the ACID and isolation levels page, coming soon, covers them).
+In PostgreSQL's default level, Read Committed, every statement takes a new snapshot, so the
+`SELECT` after a conflict sees the winner's committed row. Under the stricter Repeatable Read, the
+whole transaction reads the snapshot from its first statement and may not see the winner's row.
+There, treat "0 rows inserted and no row visible" as a conflict and retry.
 
 ### A duplicate while the first is still running
 
-With the claim in place, a duplicate that arrives mid-flight finds a row in progress. It has two
-choices: wait for the first attempt, or answer at once. The current IETF draft says answer at
-once with `409 Conflict`, and the client retries later with the same key
-([draft-ietf-httpapi-idempotency-key-header-08](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/),
-October 2026). Stripe, Adyen and Powertools for AWS Lambda all do the same, with their own error
-names. Waiting looks friendlier but holds a connection and a worker per duplicate, and duplicates
-come in bursts exactly when the server is slow.
+With the claim in place, a duplicate that arrives mid-way finds a row in progress. It has two
+choices: wait for the first attempt to finish, or answer at once.
 
-How often does this happen? More often than tests suggest. If the server takes 0.8 s at the
-median with a long tail, and the client times out after 2 s and retries 0.5 s later, about 3% of
-payments have a retry that arrives while the first attempt is still running. Lower the timeout
-to 0.75 s and it is more than one in five. Any client whose timeout is below your p99 sends you
-concurrent duplicates every day.
+The draft standard for this header says answer at once with `409 Conflict`, and the client retries
+later with the same key. That draft comes from the IETF, the body that writes internet standards
+such as HTTP; it is not final yet, at version 08 as of November 2026
+([draft-ietf-httpapi-idempotency-key-header-08](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)).
+The payment companies Stripe and Adyen, and Powertools for AWS Lambda (a library for code running
+on Amazon's on-demand function service), all do the same, with their own error names.
+
+Waiting looks friendlier, but each waiting duplicate holds a connection and a worker. And
+duplicates come in bursts exactly when the server is slow, because slowness is what makes clients
+time out and retry.
+
+How often does a duplicate arrive mid-way? More often than tests suggest. Two words first. The
+**median** server time is the time half of the requests beat. The **p99** (99th percentile) is the
+time 99 of every 100 requests beat; the slowest 1 in 100 take longer.
+
+Now an illustrative payment service. Half its payments finish within 0.8 s (the median), and slow
+ones stretch out: about 3 in every 100 take longer than 2.5 s, and about 23 in every 100 take
+longer than 1.25 s. (These come from a standard model of server times with a long slow tail, a
+lognormal distribution; the simulation further down uses the same one.)
+
+- A client with a 2 s timeout that waits 0.5 s before retrying sends its retry 2 + 0.5 = 2.5 s
+  after the first try. The first try is still running whenever it takes longer than 2.5 s: about
+  3 payments in 100.
+- Lower the timeout to 0.75 s, and the retry arrives 0.75 + 0.5 = 1.25 s after the first try. The
+  first try is still running in about 23 payments in 100: more than one in five.
+
+So any client whose timeout is shorter than your p99 sends you duplicates of running requests every
+day, and a claim that is not atomic charges each of them twice.
 
 A `409` is a safe answer only if the client treats it as "retry the same key later", never as
 "failed". Stripe's docs make the point bluntly: generating a new key at that moment can start a
@@ -221,63 +501,75 @@ second operation (as of November 2026).
 
 ### When the owner dies: leases and fencing
 
-Now the first attempt crashes after claiming the key. Its row says "in progress" and nothing will
+Now the first attempt crashes after claiming the key. Its row says "in progress", and nothing will
 ever change that. Every retry gets `409` until the client gives up, and the payment, which may or
 may not have reached the bank, is stuck.
 
-A **lease** fixes this: the claim stores `locked_until`, a time after which the owner is presumed
-dead. A later attempt that finds the row in progress past its lease takes it over by writing its
-own `owner` and a new `locked_until`. Powertools for AWS Lambda sets this time from the function's
-remaining execution time, so a Lambda that timed out mid-call frees its record exactly when it
-can no longer be running.
+The lease from Part 1 fixes this. The claim stores `locked_until`, a time after which the owner is
+presumed dead. A later attempt that finds the row in progress past its lease takes it over: it
+writes its own `owner` and a new `locked_until`, in one `UPDATE`. Powertools for AWS Lambda sets
+this time from the function's remaining running time (each Lambda run has a time limit), so a run
+that timed out mid-call frees its record exactly when it can no longer be running.
 
-The lease has to sit between two numbers:
+The lease length has to sit between two numbers:
 
 - **Longer than the slowest live attempt.** Otherwise a retry takes over from an owner that is
   still working, and both run.
-- **Shorter than the client's retry window.** With retries at 0.5, 1, 2 and 4 s after each
-  failure, a client keeps trying for about 7.5 s after a crash. A 10 s lease outlasts every retry,
-  and the payment is stuck again.
+- **Shorter than the client's retry window.** Take a client that retries after waits of 0.5, 1, 2
+  and 4 s, and gets an immediate `409` each time. It keeps trying for 0.5 + 1 + 2 + 4 = 7.5 s after
+  the crash, then gives up. A 10 s lease outlasts every retry, and the payment is stuck again.
 
-A lease can still be wrong: a process paused for garbage collection longer than its lease wakes up
-believing it owns the row. That is why the final update is **fenced**: it commits only
-`WHERE owner = <me>`. An owner that lost its lease updates 0 rows and knows to stop. The fence
-stops the double *write*; it cannot stop a double *call* that already happened, which is the next
-section's job.
+A lease can still be wrong about who is alive. Some languages pause the whole program now and then
+to free unused memory; this is **garbage collection**, and a long pause can last seconds. A process
+paused for longer than its lease wakes up believing it still owns the row, while a retry has taken
+over.
+
+That is why the final update is **fenced**: it commits only `WHERE owner = <me>`. A fence is a
+condition on the write that only the current owner can satisfy. An owner that lost its lease
+updates 0 rows and knows to stop. The fence stops the double *write*; it cannot stop a double
+*call* to the bank that already happened, which is the next section's job.
+
+The figure shows both cases on timelines. The top one uses a 5 s lease to fit the picture: try 1
+crashes at 1.2 s, and its retries arrive 0.5, 1, 2 and 4 s apart, at 1.7, 2.7, 4.7 and 8.7 s.
 
 <Figure caption="Top: retries get 409 while a dead attempt's lease runs, then one takes the row over and finishes it. Bottom: a lease shorter than the work lets a retry take over a live attempt; the fence makes the original's final UPDATE match no rows, so only one outcome is written.">
   <Lease />
 </Figure>
 
-The distributed locks page (coming soon) covers leases and fencing tokens in general; an
-idempotency key is a distributed lock whose name the client chose.
+In the top timeline, the three retries before 5 s get `409`, and the one at 8.7 s takes over. In
+the bottom one, the lease is 1 s but try 1 runs until 2.4 s; try 2 takes over at 1.5 s, and try 1's
+late update matches no rows.
+
+The distributed locks page (coming soon) covers leases and fencing in general; an idempotency key
+is a distributed lock whose name the client chose.
 
 ### Doing the work: one transaction, or recovery points
 
 If every side effect is local, the rule is short: the key row and every write it protects commit
-in **one transaction**. AWS states it as a requirement: recording the token and all the mutating
-operations must be atomic, or you can record the token without the resources, or the resources
-without the token. A crash anywhere rolls everything back, and the next attempt starts clean.
-The [IRCTC case study](/case-studies/irctc-tatkal-booking/) does this with a unique request ID on
-the bookings table.
+in **one transaction**. AWS states it as a requirement: recording the key and all the changes must
+be atomic, or you can end up with the key and no changes, or the changes and no key. A crash
+anywhere rolls everything back, and the next attempt starts clean. The
+[IRCTC case study](/case-studies/irctc-tatkal-booking/) does this with a unique request ID on the
+bookings table.
 
-A remote side effect cannot join your transaction. You cannot roll back a card network. So the
-operation is split into **phases**, each a unit you can commit or repeat safely, and the key row
-stores the last phase that finished, its **recovery point**:
+A remote side effect cannot join your transaction, so the operation is split into **phases**. A
+phase is a piece of the work that is either one local transaction or one call that is safe to
+repeat. After each phase, the key row records the name of the last phase that finished: its
+**recovery point**. For Meera's payment:
 
-1. **Local**: claim the key and insert the `pending` payment row, in one transaction. Recovery
-   point `created`.
-2. **Remote**: call the bank, outside any transaction, with your payment ID as the bank's own
-   idempotency key.
+1. **Local**: claim the key and insert the `pending` payment row `pay_7`, in one transaction.
+   Recovery point `created`.
+2. **Remote**: call the bank, outside any transaction, with `pay_7` as the bank's own idempotency
+   key.
 3. **Local**: store the bank's answer on the payment, store the response on the key row, mark it
-   `finished`, release the lease, in one fenced transaction.
+   `finished` and release the lease, in one fenced transaction.
 
-Phase 2 is the one that can run twice: once by an owner that crashed after it, once by the
-attempt that takes over. It is safe only because the bank recognises its own key and returns the
-first charge. That is the rule for every remote step: <mark>each call you make must be
-idempotent on the far side</mark>, because you cannot know whether your previous attempt's call
-landed. Shopify describes its payment service the same way: the key looks up which steps an
-attempt completed, and recovery makes sure only one request reaches its financial partners
+Phase 2 is the one that can run twice: once by an owner that crashed after it, once by the attempt
+that takes over. It is safe only because the bank recognises its own key and returns the first
+charge. That is the rule for every remote step: <mark>each call you make must be idempotent on the
+far side</mark>, because you cannot know whether your previous attempt's call landed. Shopify
+describes its payment service the same way: the key looks up which steps an attempt completed, and
+recovery makes sure only one request reaches its financial partners
 ([Shopify, 2022](https://shopify.engineering/building-resilient-payment-systems)).
 
 Step through a crash after the bank call:
@@ -306,49 +598,62 @@ Step through a crash after the bank call:
   summary="Three phases, two local transactions and one remote call that is idempotent on the bank's side. A crash at any point leaves a row that says how far the work got, and whoever holds the lease next can finish it without a second charge."
 />
 
-What if the remote service has no idempotency key? Then phase 2 needs a lookup before the call:
-search the bank for a charge carrying your reference, and call only if none exists. If the
-service supports neither, the honest answer is that a crash during phase 2 leaves the outcome
-unknown; mark it so and reconcile it out of band, the way Stripe tells its own users to treat
-a `500`: retrieve the object, read the webhooks, then decide.
+What if the remote service accepts no idempotency key? Then phase 2 needs a lookup before the
+call: ask the bank for a charge carrying your reference, and call only if none exists. If the
+service supports neither, a crash during phase 2 leaves the outcome unknown. Mark it so, and
+**reconcile** it: compare your records with the service's records later, in a separate job or by
+hand. That is what Stripe tells its own users to do with a `500`: fetch the object, read the
+**webhooks** (the messages Stripe sends to your server when something changes), then decide.
 
 Do not make finishing depend on the client coming back. A user who closes the app after a crash
-never retries. A **sweeper** job that picks up rows in progress past their lease and runs them
-through the same handler finishes those payments too, and gives every stuck row a deadline.
+never retries. A **sweeper**, a background job that runs every few seconds, picks up rows in
+progress past their lease and runs them through the same handler. It finishes those payments too,
+and gives every stuck row a deadline.
 
-The simulation below runs four key stores against the same stream of payments, server times and
-crashes. Change the client timeout and the lease, and watch which designs charge twice and which
-leave payments stuck.
+The simulation below runs four key stores against the same stream of payments, the same server
+times and the same crashes, one lane each:
+
+- **Check the key, then charge**: the naive handler above.
+- **Lock the key, no lease**: insert first, `409` while unfinished, but a crashed owner holds the
+  key for ever.
+- **Lease, rerun everything on takeover**: a retry takes over an expired lease and runs the whole
+  payment again, bank call included, without a key for the bank.
+- **Lease + downstream key to the bank**: the full design from this section.
+
+Change the client timeout and the lease, and watch which designs charge twice and which leave
+payments stuck.
 
 <KeyRaceSim />
 
 ### What a repeat gets back
 
-Once the row is finished, a repeat gets the first outcome. There are three schools of what
-"the first outcome" means, and real APIs use all three:
+Once the row is finished, a repeat gets the first outcome. There are three views of what "the
+first outcome" means, and real APIs use all three. The table says, for each, what a repeat
+receives and who works that way:
 
 | Approach | A repeat gets | Who does it |
 |---|---|---|
 | Exact replay | the stored status code and body, byte for byte, errors included | Stripe API v1 (including `500`s once execution began), most homegrown designs |
-| Semantic equivalence | a response with the same meaning, built from the resource's current state | AWS EC2 (`pending`, later `running`, later `terminated`); Google AIP-155 allows it |
-| Re-execution of failures | success is not repeated, but failed or partly failed work is retried to completion | Stripe API v2 |
+| Same meaning, current state | a response that means the same, built from the resource as it is now | AWS EC2 (`pending`, later `running`, later `terminated`); Google AIP-155 allows it |
+| Re-run failures | success is not repeated, but failed or partly failed work is retried to completion | Stripe API v2 |
 
-Exact replay is the simplest and the most predictable. Semantic equivalence avoids storing large
-bodies and stays correct after the resource changes: AWS returns the instance as it is now, even
-if it has since been terminated. Re-execution suits multi-step operations, and is the most work
-to build.
+Exact replay is the simplest and the most predictable. "Same meaning, current state" (AWS calls it
+**semantic equivalence**) avoids storing large bodies and stays correct after the resource changes:
+AWS returns a virtual machine as it is now, even if it has since been shut down. Google's API
+design guide, AIP-155, allows the same. Re-running failures suits operations with many steps, and
+is the most work to build.
 
 Whichever you pick, store an outcome only when it is **final**. Two cases decide it:
 
-- **Failures before the work began**, such as validation errors, an invalid credential, a rate
-  limit, a `409` for a concurrent duplicate: store nothing, so the corrected or later retry can run.
-  Stripe does not save results when "no API endpoint initiates the execution".
-- **Transient failures during the work**, where nothing irreversible happened or the remote step
-  is idempotent: release the lease (set `locked_until` to now) instead of storing the error, so
-  the next attempt resumes. Powertools deletes the record when the function raises.
+- **Failures before the work began**, such as a validation error, an invalid credential, a rate
+  limit, or a `409` for a duplicate in progress: store nothing, so the corrected or later retry can
+  run. Stripe does not save results when "no API endpoint initiates the execution".
+- **Temporary failures during the work**, where nothing irreversible happened or the remote step
+  is idempotent: release the lease (set `locked_until` to now) instead of storing the error, so the
+  next attempt resumes. Powertools deletes the record when the function raises an error.
 
-A deterministic business outcome, such as a declined card, a `402`, is final: store it and replay
-it, or the client will retry a decline into an approval it did not intend.
+A business outcome that will not change on retry, such as a declined card (`402`), is final: store
+it and replay it, or the client will retry a decline into an approval it did not intend.
 
 :::caution[Replaying a 500 for ever]
 Storing your own `500` makes the error permanent for that key: every retry for the next day gets
@@ -358,63 +663,94 @@ services should release the key instead and let the retry resume from the recove
 
 ### Keys: who makes them, and how long they live
 
-**Generate the key once per intent, and store it before the first send.** For a checkout, that
-is when the user confirms the payment, stored with the cart, so a double tap, a refresh or an
-app restart reuses it. Stripe adds that a key generated inside the SDK's retry loop does not
-survive a process restart: if your application can retry across restarts, generate and persist
-the key yourself. A key regenerated per attempt protects nothing.
+**Generate the key once per intent, and store it before the first send.** For a checkout, that is
+when the user confirms the payment, stored with the cart, so a double tap, a refresh or an app
+restart reuses it. Stripe adds that a key generated inside its SDK's retry loop does not survive a
+process restart: if your application can retry across restarts, generate and save the key
+yourself.
 
-A random UUIDv4 is the usual choice; the draft and Stripe recommend a UUID or a similar random
-value, and Stripe suggests deriving the key from a business object, such as a cart ID, as the
-other option. Shopify uses ULIDs, a 48-bit timestamp followed by 80 random bits, because
-time-ordered keys insert near each other in a B-tree index; one of its high-throughput systems
-saw `INSERT` time fall 50% after switching from UUIDv4 (2022). The
-[database indexing page](/databases/database-indexing/#heap-tables-and-clustered-indexes)
-explains why random keys scatter inserts.
+A random UUIDv4 is the usual choice. The draft and Stripe recommend a UUID or a similar random
+value, and Stripe suggests deriving the key from a business object, such as a cart ID, as the other
+option.
+
+Shopify uses **ULIDs** instead. A ULID is an ID whose first part is the time it was made and whose
+rest is random, so IDs made later sort after IDs made earlier. That matters for the index. Most
+database indexes are **B-trees**, sorted structures stored on disk in fixed-size blocks called pages. Random UUIDs land on
+pages all over the index, so each insert may have to load a different page; time-ordered IDs all
+land near the end, on a page that is already in memory. One of Shopify's high-throughput systems
+saw its `INSERT` time fall by half after switching from UUIDv4 (2022). The
+[database indexing page](/databases/database-indexing/#heap-tables-and-clustered-indexes) explains
+why random keys scatter inserts.
 
 **Keep the key at least as long as anything might resend the request.** That is the longest of:
-the client's retry window, a mobile app's offline queue, a message queue's redelivery, and a
-dead-letter queue someone replays after the incident review. A repeat that arrives after the key
-is purged is a new request.
+the client's retry window, a mobile app's offline queue (requests saved on the phone until it is
+back online), a message queue's redelivery, and a **dead-letter queue** replayed after an incident.
+A dead-letter queue is where a message queue parks messages that failed too many times, so a
+person can look at them and send them through again later, sometimes days later. A repeat that
+arrives after the key is deleted is treated as a new request.
+
+The figure compares how long real systems remember a key. Its axis is a log scale: each step along
+it is ten times longer than the one before, so 10 seconds and 30 days fit on one line.
 
 <Figure caption="Retention runs from five minutes to thirty days across real systems. A message replayed from a dead letter queue two days later is a duplicate only to the systems whose window still covers it; to the others it is a new payment.">
   <Retention />
 </Figure>
 
-Retention costs storage. At an illustrative 1,000 payments a second, a 24 h window holds
-86.4 million rows; with a stored response of about 1 KB each, that is 86 GB of key rows. Partition
-the table by day and drop old partitions rather than running `DELETE` over a hot table.
+Of the five bars, only Adyen (7 to 14 days) and Stripe API v2 (30 days) reach past the 2-day replay
+line.
+
+Retention costs storage. Take an illustrative 1,000 payments a second and a 24-hour window:
+
+- A day has 24 × 60 × 60 = 86,400 seconds.
+- 1,000 payments a second × 86,400 seconds = 86.4 million key rows held at any time.
+- With a stored response of about 1 KB each (a kilobyte, roughly a thousand characters of JSON),
+  that is 86.4 million KB. A gigabyte is a million KB, so it is about 86 GB of key rows.
+
+Store the table in **partitions**, one piece per day, and drop a whole day's piece when it expires.
+Dropping a partition is one quick command, while a `DELETE` of 86 million rows from a busy table
+competes with live traffic for hours.
 
 AWS adds a limit in the other direction: keeping keys for ever is impractical, and a key reused
-years later would collide with the original. For EC2 instances it keeps the token for the life
-of the instance plus an interval after which a late retry would have arrived or stopped
-mattering.
+years later would collide with the original. For EC2 virtual machines it keeps the key for the life
+of the machine plus an interval after which a late retry would have arrived or stopped mattering.
 
 ### The same idea for message consumers
 
-A queue consumer has the same problem with the roles swapped. The queue delivers at least once,
-so the consumer is the server that must recognise repeats, and the **message ID** is the key. The
-pattern, often called an **inbox table**, is the claim from earlier with the effect inside the
-same transaction:
+A queue consumer has the same problem with the roles swapped. The queue delivers at least once
+(Part 1), so the consumer is the one that must recognise repeats, and the **message ID**, a unique
+ID the queue or the sender gives each message, is the key. The pattern, often called an **inbox
+table**, is the claim from earlier with the effect inside the same transaction. The figure follows
+four deliveries, one of them a repeat of message `m-81`:
 
 <Figure caption="The message ID is the idempotency key. Inserting it into a processed-messages table in the same transaction as the effect decides whether to apply the effect; acknowledging only after the commit means a crash can cause a redelivery, which the table absorbs, but never a lost message.">
   <Inbox />
 </Figure>
 
 The order matters. Acknowledge before committing, and a crash in between loses the message.
-Commit before acknowledging, and a crash in between redelivers it, which the table absorbs. If
-the effect is remote, the phases and the downstream key from above apply unchanged.
+Commit before acknowledging, and a crash in between redelivers it, which the table absorbs. If the
+effect is remote, the phases and the downstream key from above apply unchanged.
 
-Queues offer deduplication of their own, and it is narrower than it sounds. **Amazon SQS FIFO**
-drops a message whose deduplication ID it accepted in the last 5 minutes. **Kafka's idempotent
-producer**, on by default since Kafka 3.0 (2021), has the broker assign each producer an ID and
-drop resends by sequence number. Both stop the *producer's* retries from writing the message
-twice. Neither stops your consumer from processing one message twice; that is the inbox's job.
-The delivery semantics page (coming soon) covers the guarantees in full.
+Queues offer deduplication of their own, and it is narrower than it sounds:
+
+- **Amazon SQS** is AWS's message queue service. Its FIFO queues (first in, first out) drop a
+  message whose deduplication ID they accepted in the last 5 minutes.
+- **Apache Kafka** is a widely used message log. A **producer** is the program that writes
+  messages and a **broker** is the server that stores them. Kafka's idempotent producer, on by
+  default since Kafka 3.0 (2021), works like this: the broker gives each producer an ID, the
+  producer numbers its messages 0, 1, 2 and so on, and the broker drops any resend whose number it
+  has already stored.
+
+Both stop the *producer's* retries from writing the message twice. Neither stops your consumer
+from processing one message twice; that is the inbox's job. The delivery semantics page (coming
+soon) covers the guarantees in full.
 
 ## Choosing between them
 
-| Design | Concurrent duplicate | Crash before the remote call | Crash after it | Cost |
+The table lines up the designs from this page against the three moments that cause double charges.
+Read down the "crash after it" column: only the last design both finishes the payment and charges
+once.
+
+| Design | Duplicate in progress | Crash before the remote call | Crash after it | Cost |
 |---|---|---|---|---|
 | Check-then-act | charges twice | retry runs again (fine) | charges twice | nothing extra |
 | Unique key row, one transaction (local effects only) | `409` or waits | rolls back; retry runs | not applicable | one row per request |
@@ -423,14 +759,14 @@ The delivery semantics page (coming soon) covers the guarantees in full.
 | Lock + lease + recovery points + downstream key | `409` | resumes | resumes, bank returns the first charge | phases in code, a sweeper |
 
 If every side effect is in your database, the second row is all you need: insert the key in the
-same transaction as the work and let the index arbitrate. The moment one step leaves your
-database, go straight to the last row. The middle rows are what teams build on the way there,
-usually after an incident.
+same transaction as the work and let the index decide. The moment one step leaves your database,
+go straight to the last row. The middle rows are what teams build on the way there, usually after
+an incident.
 
 ## Build it yourself
 
-The full example claims, charges and finishes against SQLite and a fake bank, and runs three
-scenarios against both handlers. The claim is phase 1:
+The full example claims, charges and finishes against SQLite (a small database stored in one file)
+and a fake bank, and runs three scenarios against both handlers. The claim is phase 1:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -496,6 +832,14 @@ function claim(db, account, key, body, me) {
   </TabItem>
 </Tabs>
 
+Read it like this. Inside one transaction, try to insert the key row; `rowcount` (`changes` in
+JavaScript) is 1 if this attempt created it and 0 if it already existed. Then read the row back
+and walk down five cases in order: a different fingerprint gets `422`; a finished row gets its
+stored answer; a row this attempt created also gets its `pending` payment row; a row someone else
+holds under a live lease gets `409`; and a row whose lease has run out is taken over by writing
+this attempt as `owner`. `me` is a random ID made fresh for each attempt, and `LEASE_S` is the
+lease length (1 second in the demo, because its fake bank answers in 0.3 seconds).
+
 Phases 2 and 3 are the remote call with a downstream key and the fenced finish:
 
 <Tabs syncKey="lang">
@@ -553,8 +897,10 @@ async function payKeyed(db, bank, account, key, amount, { crashAfterCharge = fal
   </TabItem>
 </Tabs>
 
-Both languages print the same table. Each cell is how many times money moved, then
-`attempt:status` in the order the attempts finished:
+Both languages print the same table. The three scenarios are: a duplicate that arrives while the
+first attempt is still charging, a process that dies after the bank said yes, and a key reused for
+a different amount. Each cell is how many times money moved, then `attempt:status` in the order
+the attempts finished (`1:201` means attempt 1 got a `201`):
 
 ```text
 scenario                        naive                           keyed
@@ -564,14 +910,18 @@ same key, different amount      1 charge   1:201 2:201          1 charge   1:201
 ```
 
 The naive row for the reused key is the quiet one: one charge, two `201`s, and the client believes
-it paid ₹25 when it paid ₹11.99. SQLite has one writer at a time, so `BEGIN IMMEDIATE` serialises
-the claims more strictly than PostgreSQL would; the logic is the same on both. The example
-has no sweeper; a production version adds one. Full code and run instructions:
+it paid ₹25 when it paid ₹11.99 (the code keeps amounts in paise, so 1199 is ₹11.99 and 2500 is
+₹25). SQLite lets only one transaction write at a time, and the example's `BEGIN IMMEDIATE` takes
+that right at the start, so the claims run one after another even more strictly than PostgreSQL
+would; the logic is the same on both. The example has no sweeper; a production version adds one.
+Full code and run instructions:
 [`examples/idempotency-keys/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/idempotency-keys).
 
 ## How real systems do it
 
-As of November 2026:
+As of November 2026, four real APIs compare like this. Look at two rows: how long each keeps a key
+(from 24 hours to the life of the resource) and what a repeat gets back (the three approaches from
+"What a repeat gets back" all appear).
 
 | | Stripe v1 | Stripe v2 | Adyen | AWS EC2 |
 |---|---|---|---|---|
@@ -579,34 +929,39 @@ As of November 2026:
 | Length | up to 255 characters | UUID recommended | up to 64 | up to 64 ASCII |
 | Scope | account | account or sandbox, and API | company account, per region | caller, per Region (or zone) |
 | Kept for | at least 24 h | 30 days | 7 to 14 days | life of the resource plus an interval |
-| Duplicate in flight | `409` | not documented | `409` or `422`, code 704 | not documented |
+| Duplicate in progress | `409` | not documented | `409` or `422`, code 704 | not documented |
 | Different parameters | error | not documented | not documented | `IdempotentParameterMismatch` |
 | A repeat gets | the stored response, errors included | an updated response; failed work retried | the first response | an equivalent response, current state |
+
+A "sandbox" is Stripe's test mode. An AWS "Region" is one geographic group of data centres, such
+as Mumbai; a "zone" is one data centre group inside it.
 
 **Stripe** shows both ends of the replay choice in one company. API v1 stores the first response
 after execution begins and replays it, `500`s included, then tells you to stop retrying after 24 h
 and reconcile instead. API v2 widens the window to 30 days, generates a key if you send none, and
-retries failed parts of a request instead of replaying the failure. A replayed v1 response carries
-`Idempotent-Replayed: true`, which is worth logging.
+re-runs failed parts of a request instead of replaying the failure. A replayed v1 response carries
+the header `Idempotent-Replayed: true`, which is worth logging.
 
-**AWS** builds keys into the SDKs: the CLI and SDK generate a `ClientToken` for operations that
-support one and reuse it on every retry, so automatic retries are safe without the caller doing
-anything. Powertools for AWS Lambda offers the same store as a library: a conditional DynamoDB
-write claims the record, it is `INPROGRESS` until the function returns, it expires after
-1 hour by default, and a duplicate in flight raises `IdempotencyAlreadyInProgressError`. Its
-default key is a hash of the event payload, which suits events that carry their own unique ID and
-fails the AWS test above for anything that does not; point it at a real ID with
-`event_key_jmespath`.
+**AWS** builds keys into its SDKs: the command-line tool and the SDKs generate a `ClientToken` for
+operations that support one and reuse it on every retry, so automatic retries are safe without the
+caller doing anything. Powertools for AWS Lambda offers the same key store as a library. It claims
+the record with a conditional write to DynamoDB (Amazon's key-value database), a write that
+succeeds only if no record with that key exists yet: the same claim as our unique insert. The
+record is `INPROGRESS` until the function returns, expires after 1 hour by default, and a duplicate
+in progress raises `IdempotencyAlreadyInProgressError`. Its default key is a hash of the whole
+event, which suits events that carry their own unique ID and fails the AWS test above for anything
+that does not. Point it at a real ID with the `event_key_jmespath` setting, which names the field
+of the event to use as the key.
 
-**Adyen** also keys per company account, and keys are not checked across regions when you call
-several regional endpoints, which makes a failover to another region a moment when duplicates
-are possible. When its key store is unavailable it returns `503` with code 703 and suggests you
-either wait or send the request without a key: a reminder that the key store is in your request
-path and needs the same availability as the database it protects.
+**Adyen**, a payment company, also keys per company account, and does not check keys across
+regions when you call several of its regional endpoints. That makes a failover to another region a
+moment when duplicates are possible. When its key store is unavailable it returns `503` with code
+703 and suggests you either wait or send the request without a key: a reminder that the key store
+sits in the path of every request and needs the same availability as the database it protects.
 
-The **IETF draft** standardises the header as a Structured Field string (the key in double
-quotes), with `400` for a missing key, `422` for a reused one and `409` for one in progress. As of
-November 2026 it is at version 08 and still a draft, and lists more than a dozen
+The **IETF draft** writes the key as a quoted string (`Idempotency-Key: "8e03978e-…"`), with `400`
+for a missing key, `422` for a key reused with a different body, and `409` for one in progress. As
+of November 2026 it is at version 08 and still a draft, and lists more than a dozen
 implementations, among them Stripe, Adyen, Dwolla and Worldpay, plus PayPal, Square and Razorpay
 with their own header or field names.
 
@@ -619,11 +974,11 @@ provider sends none, so the one step that moves money is the one step a retry ca
 ## Gotchas and war stories
 
 :::danger[Keys not scoped to the caller]
-If the key table's primary key is the key alone, two tenants that choose the same key share a
-row: the second gets the first one's response, which can contain another customer's data.
-Adyen warns of a version of this inside one account: a different API credential with access to a
-used key can read its stored response. Key on `(account, key)`, and check that the caller may
-read the stored response before replaying it.
+If the key table's primary key is the key alone, two customers that choose the same key share a
+row: the second gets the first one's response, which can contain another customer's data. Adyen
+warns of a version of this inside one account: a different API credential with access to a used
+key can read its stored response. Key on `(account, key)`, and check that the caller may read the
+stored response before replaying it.
 :::
 
 :::caution[A key that does not outlive the retry]
@@ -634,40 +989,44 @@ the same intent can arrive again, and size the key's life to it.
 
 :::caution[Changing the phases in a deploy]
 Rows in progress were written by the old code, with the old recovery point names. If a deploy
-renames, adds or removes a phase, the new code must still resume every recovery point the old
-code could have left behind, or those payments stay stuck. Test resuming from each one.
+renames, adds or removes a phase, the new code must still resume every recovery point the old code
+could have left behind, or those payments stay stuck. Test resuming from each one.
 :::
 
 :::caution[The key store as a single point of failure]
-Every write now reads and writes the key table first. If it lives in a separate store, its
-outage stops all writes, or forces a choice like Adyen's: wait, or proceed without protection.
-Keep the key rows in the same database as the data they protect, which is also the only place
-they can share a transaction.
+Every write now reads and writes the key table first. If it lives in a separate store, that store
+becomes a **single point of failure**, one part whose outage stops everything: all writes stop, or
+you face a choice like Adyen's, wait or proceed without protection. Keep the key rows in the same
+database as the data they protect, which is also the only place they can share a transaction.
 :::
 
 :::caution[Retries inside the handler]
 A handler that retries the bank call three times on its own, while the client also retries, is
-fine only if every bank call carries the same downstream key. Otherwise the inner loop is the
-naive design again, one level down.
+fine only if every bank call carries the same downstream key. Otherwise the inner loop is the naive
+design again, one level down.
 :::
 
 ## Trade-offs and when not to use it
 
-An idempotency key costs one insert and one update per request, a few milliseconds of latency,
-a table that grows with traffic times retention, and code structured into phases that someone
-has to keep resumable. The client side costs more than it looks: keys must be created at the
-right moment and persisted, and `409` must be handled as "wait", not "failed".
+An idempotency key costs one insert and one update per request, a few milliseconds of latency, a
+table that grows with traffic times retention, and code split into phases that someone has to keep
+resumable. The client side costs more than it looks: keys must be created at the right moment and
+saved, and `409` must be handled as "wait", not "failed".
 
-What it does not solve: two *different* intents that conflict (two users buying the last seat is
-a locking problem, which the
-optimistic vs pessimistic locking page, coming soon, covers), a remote service that offers no
-way to make a call idempotent, and side effects you forgot were side effects, such as an email
-sent in phase 1.
+What it does not solve:
+
+- **Two different intents that conflict.** Two users buying the last seat is a locking problem,
+  which the optimistic vs pessimistic locking page (coming soon) covers.
+- **A remote service that offers no way to make a call idempotent.** You are left with a lookup
+  before the call, or reconciling afterwards.
+- **Side effects you forgot were side effects**, such as an email sent in phase 1.
 
 Skip it when:
 
-- **The operation is idempotent by design.** A `PUT` of the full resource, an upsert on a natural
-  key, `SET status = 'shipped'`. Make writes like this whenever the domain allows.
+- **The operation is idempotent by design.** A `PUT` of the full resource, an upsert (insert, or
+  update if the row exists) on a natural key (a value already unique in the real world, such as
+  an invoice number), `SET status = 'shipped'`. Make writes like this
+  whenever the domain allows.
 - **A natural unique constraint already exists.** One booking per request ID, one payout per
   invoice: a unique index on that column is the idempotency key.
 - **Duplicates are harmless or counted later.** Analytics events, a cache warm-up, a metric.
@@ -677,10 +1036,10 @@ Skip it when:
 
 Idempotency keys come up in every payment, booking and wallet design, usually as "what happens if
 the client retries?". A strong answer names the store and its states, not only the header: the
-client's key per intent, scoped per account; a claim with a unique insert; `409` while in
-progress; a lease and a fenced finish for crashes; phases with a downstream key for remote calls;
-replay of final outcomes only; retention sized to the longest retry path; and the same table on
-the consumer side.
+client's key per intent, scoped per account; a claim with a unique insert; `409` while in progress;
+a lease and a fenced finish for crashes; phases with a downstream key for remote calls; replay of
+final outcomes only; retention sized to the longest retry path; and the same table on the consumer
+side.
 
 Typical questions:
 
@@ -690,30 +1049,31 @@ Typical questions:
 - *"The server charged the card and crashed before saving. What does the retry do?"* It finds the
   row in progress, waits out the lease, takes over, and repeats the bank call with the same
   downstream key, so the bank returns the first charge.
-- *"Why not deduplicate on a hash of the body?"* Because identical bodies can be two intents.
-  The client knows whether it is retrying; the server can only guess.
-- *"How long do you keep keys?"* Longer than the longest path by which a repeat can arrive:
-  client retries, offline queues, queue redelivery, dead-letter replays. Then partition by day
-  and drop old partitions.
+- *"Why not deduplicate on a hash of the body?"* Because identical bodies can be two intents. The
+  client knows whether it is retrying; the server can only guess.
+- *"How long do you keep keys?"* Longer than the longest path by which a repeat can arrive: client
+  retries, offline queues, queue redelivery, dead-letter replays. Then partition by day and drop
+  old partitions.
 
 ## Check yourself
 
 <details>
 <summary>1. With check-then-act, a client times out after 2 s and retries 0.5 s later. One payment takes 2.8 s on the server. What happens?</summary>
 
-The retry arrives at 2.5 s, while the first attempt is still running and has not written the
-key. Its check finds nothing, so it charges too: two charges. With insert-first, the retry's
-insert conflicts with the in-progress row and gets `409`.
+The retry arrives 2 + 0.5 = 2.5 s after the first try, while the first attempt is still running
+(it needs until 2.8 s) and has not written the key. Its check finds nothing, so it charges too:
+two charges. With insert-first, the retry's insert conflicts with the in-progress row and gets
+`409`.
 
 </details>
 
 <details>
-<summary>2. An attempt dies holding the key. The lease is 30 s; the client retries after 0.5, 1, 2 and 4 s. What does the user see, and what fixes it?</summary>
+<summary>2. An attempt dies holding the key. The lease is 30 s; the client retries after waits of 0.5, 1, 2 and 4 s. What does the user see, and what fixes it?</summary>
 
-Four `409`s over about 7.5 s, then an error, while the payment may or may not have been charged.
-Either make the lease shorter than the retry window (but longer than the slowest live attempt),
-retry for longer, or add a sweeper that finishes rows past their lease without waiting for a
-client.
+Four `409`s over 0.5 + 1 + 2 + 4 = 7.5 s, then an error, while the payment may or may not have
+been charged. The lease ends at 30 s, long after the client gave up. Either make the lease shorter
+than the retry window (but longer than the slowest live attempt), retry for longer, or add a
+sweeper that finishes rows past their lease without waiting for a client.
 
 </details>
 
@@ -737,17 +1097,18 @@ would tell the client that its ₹25 payment succeeded when it did not happen.
 <details>
 <summary>5. A consumer applies a message's effect, acknowledges it, then inserts the message ID into its processed table. What can go wrong?</summary>
 
-A crash after the effect and before the insert leaves no record, and if the acknowledgement had
-not reached the queue the redelivered message is applied again. Insert the ID and apply the
-effect in one transaction, commit, then acknowledge.
+A crash after the effect and before the insert leaves no record, and if the acknowledgement had not
+reached the queue the redelivered message is applied again. Insert the ID and apply the effect in
+one transaction, commit, then acknowledge.
 
 </details>
 
 ## Recap
 
-- A key row is a lock (unique insert decides the owner) and a log (recovery point and stored
+- A key row is a lock (a unique insert decides the owner) and a log (recovery point and stored
   response).
-- Claim before working; check-then-act loses to any duplicate that arrives mid-flight.
+- Claim before working; check-then-act loses to any duplicate that arrives while the first try
+  runs.
 - `409` for a duplicate in progress; the client retries the same key, never a new one.
 - A lease frees a dead owner's key; a fenced final update stops a stale owner's write.
 - Local effects: one transaction. Remote effects: phases, and every remote call idempotent on the

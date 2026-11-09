@@ -288,6 +288,12 @@ About one aside per 500 words. More than that and they stop being noticed.
   one exception is a standard that is still the current normative version (for example RFC 768,
   UDP, 1980): cite it, but only for what the standard says, never for numbers or behaviour in the
   wild. Write the year next to every source in Further reading so the rule can be checked.
+- **Famous history may stay, labelled as history** (owner's decision, November 2026). A defining
+  incident, paper or post from before 2020 that the field still refers to by name (the 2016 Dyn
+  outage, DigiNotar, BREACH, Jacobson's 1988 congestion paper, the 2018 GitHub memcached attack)
+  may be cited as history: give its year in the sentence ("In 2016…"), mark it "(YEAR, kept as
+  history)" or with its year in Further reading, and never use it for a current number, default
+  or behaviour. Lesser-known pre-2020 sources still follow the 2020 rule.
 - Anything that can change (spec versions, product limits, defaults, prices) carries
   "as of <Month YYYY>" and a source link.
 - Prefer primary sources: RFCs, specs, official docs, original papers.

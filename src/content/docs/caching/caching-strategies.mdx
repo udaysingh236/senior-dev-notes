@@ -1,12 +1,12 @@
 ---
 title: Caching Strategies
-description: The three decisions behind every cache. Where it sits, how reads and writes reach it (cache-aside, read-through, write-through, write-behind, refresh-ahead), and what it keeps (LRU, LFU, W-TinyLFU, S3-FIFO). Why a 1-point drop in hit ratio can double database load, why delete-on-write still leaves stale values, and what versioned fills fix.
-tagline: A cache is a smaller, faster copy of data that lives somewhere else. Every strategy is an answer to what happens when the two disagree, and what to throw away when it is full.
+description: What a cache is and how to use one well, explained from zero with one shop and one database, then in depth. Where a cache sits, how reads and writes reach it (cache-aside, read-through, write-through, write-behind), what it throws away when full (LRU, LFU, W-TinyLFU, S3-FIFO), why a small drop in hit ratio can double the load on the database, and why deleting the cached copy after a write can still leave old values behind.
+tagline: How a cache keeps a fast copy of your data, what it throws away when it is full, and how to stop it from serving old values.
 difficulty: intermediate
 track: caching
 prerequisites: [latency-vs-throughput]
 next: [cache-invalidation, cache-stampede, hot-keys]
-lastReviewed: 2026-10-26
+lastReviewed: 2026-11-09
 sidebar:
   order: 1
 ---
@@ -15,6 +15,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/caching-strategies/MentalModel.astro';
 import Overview from '../../../components/diagrams/caching-strategies/Overview.astro';
 import Tiers from '../../../components/diagrams/caching-strategies/Tiers.astro';
 import WritePaths from '../../../components/diagrams/caching-strategies/WritePaths.astro';
@@ -26,141 +27,343 @@ import RaceSim from '../../../components/sims/caching-strategies/RaceSim.astro';
 
 ## The question
 
-A cache answers 99% of reads, and one morning the hit ratio reads 98%. Is the database doing 1%
-more work, or twice as much? Twice: it used to see 1 read in 100 and now sees 2. A common cause
-of a slip like that is a batch job that reads each of its keys exactly once. How does a key read
-once push out a key read a million times? And every guide says that after a write you should
-delete the cached key rather than update it. Why does deleting still leave stale values behind,
-sometimes more often than updating, and what actually stops it?
+An online shop shows the price of each product on its product page, and the page is opened 10,000
+times a second. The price of a product changes perhaps twice a day. Why ask the database for the
+same price 10,000 times a second? And if you stop asking it every time, how do you make sure
+nobody sees yesterday's price?
 
-## Why this problem exists
+The short answer: keep a copy of the prices you read often in a small, fast store next to your
+app, called a **cache**, and answer most reads from the copy. Only when the copy is missing does
+the app go to the database, and then it saves a copy for next time. Two rules keep the copy
+useful. The cache has less room than the database, so when it is full it throws out the copy
+least likely to be needed again. And when a price changes, the code that changed it tells the
+cache to drop the old copy, while a time limit on every copy makes sure no mistake lives forever.
 
-A **cache** is a smaller, faster copy of data whose source of truth lives somewhere else, usually
-a database. A read the cache can answer is a **hit**; one it cannot is a **miss**, and goes to the
-database. The **hit ratio** is the share of reads that hit. Its complement, the **miss ratio**, is
-the number that matters, because it is the share of reads the database still has to serve:
+## The idea in plain words
 
-`database reads = all reads × miss ratio`
+Follow one shop and one product. The shop has 10,000 products in its database. Reading one price
+from the database takes about 10 milliseconds (ms). The cache keeps copies in memory and answers in
+about 0.5 ms, twenty times faster (10 ÷ 0.5 = 20). All numbers in Part 1 are illustrative.
 
-At 10,000 reads a second, a 99% hit ratio leaves 100 reads a second for the database, 98% leaves
-200 and 90% leaves 1,000. Going from 99% to 90% looks like a 9% change and is a tenfold change in
-database load. Latency moves the same way. With illustrative numbers of 0.5 ms for a cache read and
-10 ms for a database read, the average is 0.6 ms at 99% and 1.45 ms at 90%. The tail moves first:
-once more than 1% of reads miss, the 99th-percentile request (the **p99**, slower than 99% of all
-requests) is a database read, whatever the average says.
+1. **The first read.** A customer opens the page for product 42. The app asks the cache: "do you
+   have the price of product 42?" The cache has never seen it, so the answer is no. That is a
+   **miss**.
+2. **Going to the database.** The app reads the price from the database, ₹499, which takes 10 ms.
+   Before replying to the customer it saves a copy in the cache: "product 42 costs ₹499". It also
+   attaches an expiry time to the copy: one hour from now.
+3. **The second read.** A millisecond later another customer opens the same page. The app asks
+   the cache again, and this time the copy is there. That is a **hit**. The customer gets the price
+   in 0.5 ms and the database is not touched.
+4. **Many customers.** Most visits go to a few popular products, so most reads find a copy. Say
+   99 of every 100 reads hit. Then out of 10,000 reads a second, 1 in 100 misses:
+   10,000 ÷ 100 = 100 reads a second reach the database, instead of 10,000.
+5. **The cache fills up.** The cache has room for, say, 2,000 products, a fifth of the 10,000. A
+   customer opens product 9,731, which is not cached, and there is no free room. One copy must go
+   to make space. The cache throws out the one least likely to be read again, for example the
+   product nobody has opened for the longest time.
+6. **The price changes.** The seller lowers product 42 to ₹449. The app writes ₹449 to the
+   database, then deletes the cached copy of product 42. The next read misses, reads ₹449 from the
+   database and saves the new copy.
+7. **A safety net.** If something goes wrong and the copy is never deleted (the app crashes between
+   the two steps, say), the customer sees ₹499 for at most one hour, because the copy expires then
+   and the next read fetches the real price.
 
-Caches work at all because popularity is uneven. A common model is the **Zipf distribution**: rank
-the keys by popularity, and the key at rank k gets 1/k of the traffic of the top key. Rank 2 gets
-half, rank 10 a tenth. Over 10,000 keys, that puts 53% of all reads on the top 100 keys and 76.5%
-on the top 1,000 (our numbers, from
-[examples/caching-strategies](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/caching-strategies)).
-Twitter's study of 153 production cache clusters found skewed popularity of this kind in most of
-them ([OSDI 2020](https://www.usenix.org/conference/osdi20/presentation/yang)).
+<Figure caption="The app asks the cache first. A hit is answered from the copy in 0.5 ms; a miss goes to the database (10 ms) and saves a copy on the way back. When the cache is full one copy is thrown out, and when a price changes the copy is deleted.">
+  <MentalModel />
+</Figure>
 
-The same numbers show the catch. Holding 1% of the keys can catch at most 53% of reads; 10 times
-the memory raises that only to 76.5%. Each doubling of the cache buys less than the one before.
-Memory runs out long before the misses do, so the cache is always smaller than the data. Two
-consequences follow:
+Notice what the picture does not show: the database never tells the cache anything. The cache is
+a copy that the app fills and the app cleans up. Everything on this page is about doing those two
+jobs well.
 
-- Something must decide which keys stay. **Eviction** removes a key to make room; the
-  **eviction policy** chooses which. **Admission** is the less known decision: whether a new key
-  should get in at all.
-- The cached copy goes out of date whenever the source changes. A **TTL** (time to live) expires
-  an entry after a fixed time, which bounds how stale it can get. Everything faster than the TTL
-  needs the write path to tell the cache.
+Step 4 hides the most important number about any cache. The database only sees the reads that
+miss. With 99 hits in 100, it sees 100 reads a second. Now suppose a change makes the cache hit
+only 98 in 100. That sounds like a 1% change. Work it out: 2 reads in 100 now miss, and
+10,000 ÷ 100 × 2 = 200 reads a second reach the database. The database does twice the work. So
+the number to watch is not how often the cache hits, but how often it misses.
 
-The policy is worth more than most people expect. On our Zipf traffic with the cache holding 10%
-of the keys, LRU (the default most people reach for) hits 67.6% and W-TinyLFU, the policy in the
-Java library Caffeine, hits 74.2%. That is a miss ratio of 32.4% against 25.8%: LRU sends 26% more
-reads to the database. W-TinyLFU with half the memory (5% of the keys, 67.1%) roughly matches LRU
-with all of it.
+An everyday picture: a shopkeeper keeps the best-selling items on a small shelf behind the counter
+and everything else in the storeroom at the back. Most customers are served from the shelf in
+seconds; for the rest, the shopkeeper walks to the storeroom and, if the item is popular, puts one
+on the shelf on the way back. When the shelf is full, the item nobody has asked for in a while goes
+back. The picture stops working in one place: the shopkeeper can see when the storeroom label
+changes, but a cache cannot see the database at all. If nobody tells it, it keeps the old price.
+
+## The building blocks
+
+Five ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A cache, a key and a value
+
+**What it is.** A **cache** is a small, fast store that keeps copies of data whose real home is
+somewhere slower, usually a database.
+
+**Why it exists.** Reading from a database means a network trip, a query and often a disk read.
+Reading from memory is much faster. When the same data is read again and again, keeping a copy in
+memory saves that work every time.
+
+**Example.** The shop's cache stores entries such as `product:42` → `₹499`. The left part, the name
+you look the entry up by, is the **key**. The right part, the data, is the **value**. A Python `dict`
+or a JavaScript `Map` works the same way.
+
+**The precise version.** A cache is a key-value store with a size limit. The database stays the
+**source of truth**: the one place whose answer counts when the two disagree. Filling the cache
+with a value after a miss is called a **fill**. A cache never holds anything the source does not,
+and nobody keeps it up to date except the code you write.
+
+### Hit ratio and miss ratio
+
+**What it is.** The **hit ratio** is the share of reads the cache answers. The **miss ratio** is the
+share it cannot answer, which go to the database.
+
+**Why it exists.** These two numbers tell you how much work the cache saves. The miss ratio is the
+one that predicts the database's load.
+
+**Example.** Out of 10,000 reads, 9,800 hit and 200 miss. The hit ratio is 9,800 ÷ 10,000 = 98%, and
+the miss ratio is 200 ÷ 10,000 = 2%. Together they always make 100%.
+
+**The precise version.** The load on the database is:
+
+`database reads per second = all reads per second × miss ratio`
+
+With the shop's numbers: 10,000 × 2% = 10,000 × 0.02 = 200 reads a second. Because the miss ratio is
+small, a change of one point in it is a large change in load: from 1% to 2% doubles it.
+
+### Stale data and the time to live
+
+**What it is.** A cached value is **stale** when the database has changed and the cache still holds
+the old value. A **time to live** (TTL) is an expiry time attached to each cached entry: after it,
+the cache forgets the entry.
+
+**Why it exists.** The cache cannot see the database, so it can be wrong. The TTL puts an upper
+limit on how long it can stay wrong, even if every other mechanism fails.
+
+**Example.** Product 42's copy was saved at 10:00 with a TTL of one hour. The price changes in the
+database at 10:20, and the app forgets to delete the copy. Customers see the old price from 10:20
+until 11:00, when the entry expires: 40 minutes of stale data, and never more than 60.
+
+**The precise version.** A TTL bounds staleness; it does not prevent it. Anything faster than the
+TTL needs the code that writes to the database to also tell the cache, by deleting or replacing the
+entry. Part 2 shows that even this has holes, and what closes them.
+
+### Eviction
+
+**What it is.** **Eviction** means removing an entry from a full cache to make room for a new one.
+
+**Why it exists.** The cache is always smaller than the data, because memory costs more than disk
+and because most of the data is rarely read. Something has to decide what stays.
+
+**Example.** A cache has room for three products and holds products 42, 7 and 13. Product 42 was read
+a second ago, 7 a minute ago, 13 an hour ago. Product 99 is read and misses. If the rule is "throw
+out the one read longest ago", product 13 goes and product 99 takes its place.
+
+**The precise version.** The rule that picks the entry to remove is the **eviction policy**. The
+example used the most common one, **LRU** (least recently used). Part 2 shows why LRU can be fooled,
+and compares it with policies that count how often each key is read. A second, less known decision
+is **admission**: whether a new key deserves a place at all.
+
+### In-process and remote caches
+
+**What it is.** An **in-process cache** lives in your application's own memory. A **remote cache** is
+a separate server that every copy of your application talks to over the network.
+
+**Why it exists.** In-process is the fastest possible: a lookup is a memory read. But big services run
+many copies of the same app on many machines, and they need one cache that all of them share. That is
+the remote cache.
+
+**Example.** The shop runs its app on 5 machines. An in-process cache means 5 separate caches, each
+holding its own copy of product 42's price. A remote cache means one cache server, and all 5 machines
+ask it.
+
+**The precise version.** The most common remote cache is **Redis**: a server that keeps keys and
+values in memory and answers commands such as `GET product:42` and `SET product:42 499` over the
+network. Valkey and Memcached are similar servers. In-process caches are
+libraries: `functools.lru_cache` in Python, the `lru-cache` package in Node, Caffeine in Java.
+
+:::tip[If you stop here]
+- A **cache** is a small, fast copy of data that lives in a slower place, usually a database. The app
+  asks the cache first; a **hit** is answered from the copy, a **miss** goes to the database and saves
+  a copy.
+- The database only sees the misses, so watch the **miss ratio**: going from 1% to 2% of reads
+  missing doubles the database's work.
+- The cache is smaller than the data, so when it is full it **evicts** the entry least likely to be
+  needed again.
+- The cache cannot see the database change. When you write, delete the cached copy; a **TTL** on
+  every entry limits how long a wrong copy can live.
+:::
+
+## Going deeper
+
+Part 1 described a cache that works. Here is where caches stop working. Part 1 showed that a slip
+from 99% to 98% hits doubles the database's work. A common cause of such a slip is a batch job that
+reads each of its keys exactly once: how does a key read once push out a key read a
+million times? And every guide says that after a write you should delete the cached key rather than
+update it. Why does deleting still leave stale values behind, sometimes more often than updating,
+and what actually stops it?
+
+### What a miss costs
+
+Part 1 showed the database's load. The miss ratio also sets how long requests take. Use
+illustrative numbers: 0.5 ms for a hit, 10 ms in all for a miss. The average time per read is each
+time weighted by how often it happens:
+
+- At 99% hits: 0.99 × 0.5 ms = 0.495 ms from hits, plus 0.01 × 10 ms = 0.1 ms from misses, which is
+  0.595 ms, about 0.6 ms.
+- At 90% hits: 0.9 × 0.5 ms = 0.45 ms from hits, plus 0.1 × 10 ms = 1 ms from misses, which is
+  1.45 ms.
+
+The average more than doubles (1.45 ÷ 0.6 ≈ 2.4), and the database's load goes up ten times (from
+1% of reads to 10%). But the slowest requests change first, and to see that we need one more term.
+
+A **percentile** is a way of describing the slow end of a set of timings. Averages hide slow
+requests: one request in a hundred taking 10 ms barely moves the average, yet users notice it. So
+engineers sort all the timings from fastest to slowest and read off a position. Take 100 reads
+sorted by time: the 99th from the fastest is the **p99**, the time that 99 out of 100 requests beat.
+If 2 of those 100 reads were misses, the two slowest are both 10 ms, so the 99th is a miss, and the
+p99 is 10 ms. So once more than 1 read in 100 misses, the p99 is a database read, whatever the
+average says.
+
+### Why some keys are read far more than others
+
+Caches work at all because popularity is uneven. A common model for this is the **Zipf
+distribution**.
+
+**What it is.** Rank the keys from most to least popular. In a Zipf distribution, the key at rank k
+gets 1/k of the traffic of the top key: rank 2 gets half as many reads as rank 1, rank 10 gets a
+tenth.
+
+**Why it matters.** It tells you how much of the traffic a cache of a given size can catch, before
+you build it.
+
+**Example.** Over 10,000 keys, the top 100 keys get 53% of all reads. Here is where that comes from.
+Give the top key 1 share of traffic, the second 1/2, the third 1/3, and so on. Adding up the shares
+of the top 100 keys gives 1 + 1/2 + … + 1/100 = 5.19. Adding up all 10,000 keys gives 9.79. The top
+100 get 5.19 ÷ 9.79 = 0.53 of the reads, which is 53%. The same sum for the top 1,000 keys is 7.49,
+and 7.49 ÷ 9.79 = 76.5%.
+
+**The precise version.** The share of rank k is proportional to 1/k<sup>s</sup>, where s sets how
+lopsided the traffic is: a bigger s puts more of it on the top keys. The numbers above use s = 1.
+A cache that somehow knew the most popular keys in advance and held exactly those is called the
+**best static cache**: no real policy can beat it on this traffic, so it is the yardstick in the
+simulations below. Twitter's study of 153 production cache clusters (a cluster is a group of cache
+servers serving one use) found skewed popularity of this kind in most of them
+([OSDI 2020](https://www.usenix.org/conference/osdi20/presentation/yang)).
+
+The same numbers show the catch. Holding 100 keys (1% of them) can catch at most 53% of reads. Ten
+times the memory, 1,000 keys, raises that only to 76.5%. Each doubling of the cache buys less than
+the one before. Reaching Part 1's 99% on this traffic would take the top 9,068 keys, more than 90%
+of all of them; real caches reach such numbers when their traffic is more lopsided than this model,
+or when they hold most of the data that is read at all. Memory usually runs out before the misses
+do, so the cache is smaller than the data, and the eviction policy matters.
+
+How much? We ran the policies on this page against the same Zipf traffic, with the cache holding 10%
+of the keys (the example code is linked in "Build it yourself"). LRU, the policy from Part 1, hits
+67.6% of reads. W-TinyLFU, a policy Part 2 explains below, hits 74.2%. Turn those into miss ratios:
+100% − 67.6% = 32.4% for LRU, and 100% − 74.2% = 25.8% for W-TinyLFU. Then 32.4 ÷ 25.8 = 1.26, so
+LRU sends about 26% more reads to the database with the same memory. W-TinyLFU with half the memory
+(5% of the keys) hits 67.1%, about what LRU does with all of it.
 
 ## The obvious fix, and why it breaks
 
-"Put Redis in front of the database. On a read, check Redis; on a miss, read the database and
-`SET` the result with a one-hour TTL. On a write, update the database and `SET` the new value."
-Four things go wrong, in roughly the order teams find them.
+The first design most teams write: "Put Redis in front of the database. On a read, check Redis; on a
+miss, read the database and `SET` the result with a one-hour TTL. On a write, update the database and
+`SET` the new value." Four things go wrong, in roughly the order teams find them.
 
-**It fills up and starts refusing writes.** Redis's default eviction policy is `noeviction`: once
-`maxmemory` is reached, every command that needs memory, including your cache fills, fails with an
-out-of-memory error, while reads keep working
+**It fills up and starts refusing writes.** Redis has a memory limit, set with `maxmemory`, and what
+it does when full is its eviction policy. The default policy is `noeviction`, which evicts nothing:
+once the limit is reached, every command that needs more memory, including your cache fills, fails
+with an out-of-memory error, while reads keep working
 ([Redis docs](https://redis.io/docs/latest/develop/reference/eviction/), as of October 2026; our
 local Redis 7.0 reports the same). A cache needs an eviction policy set on purpose.
 
-**Two writes land in the wrong order.** Writer A commits price 100, writer B commits price 95. B's
-`SET` reaches Redis first, A's arrives a millisecond later. The database says 95, the cache says
-100, and it will keep saying 100 for up to an hour.
+**Two writes land in the wrong order.** First a word: a database **commit** is the moment a write
+becomes permanent and visible to other readers. Writer A commits price 100, then writer B commits
+price 95. Each then sends its `SET` to Redis. B's `SET` reaches Redis first and A's arrives a
+millisecond later, because messages from two separate senders can overtake each other on the way. The
+database says 95, the cache says 100, and it will keep saying 100 until the TTL, up to an hour.
 
-**A batch job flushes the cache.** A nightly report reads every product once. Under LRU each of
-those reads becomes the most recently used key, and the keys your users read thousands of times an
-hour fall off the end. The next morning starts with a cold cache.
+**A batch job flushes the cache.** A nightly report reads every product once. Under LRU, each of
+those reads makes that product the most recently used key, and the keys your customers read
+thousands of times an hour slide to the end and are evicted. The next morning starts with a cache
+full of products nobody is looking at.
 
-**The cache becomes load-bearing.** At a 98% hit ratio, the database is sized for 2% of reads. If
-the cache restarts or a deploy empties it, the database sees 50 times its usual load at once. That
-is the subject of the cache stampede page (coming soon).
+**The cache becomes load-bearing.** At a 98% hit ratio, the database only ever sees 2% of reads, so
+it gets sized for 2%. If the cache restarts, or a deploy (releasing a new version of the app) empties
+it, every read misses: 100% of reads instead of 2%, and 100 ÷ 2 = 50 times the database's usual load,
+all at once. That is the subject of
+the cache stampede page (coming soon).
 
-Three neighbours get confused with caching. A **read replica** is a full copy of the database
-that the database itself keeps up to date; a cache holds a subset, shaped by your keys, and nobody
-updates it unless your code does. **Memoization** caches the result of a function of its inputs;
-it never goes stale because the same inputs always give the same output. A **CDN** caches HTTP
-responses close to users; its rules (cache headers, purges) have their own page (coming soon), but
-the policies on this page apply inside it.
+Three neighbours get confused with caching:
 
-## The core idea
-
-Every cache is three decisions. **Where it sits**: inside the application process, or across the
-network in a shared service, or both. **How reads and writes reach it**: who fills it on a miss,
-and what a write does to the cached copy. **What it keeps**: which key goes when it is full, and
-whether a new key deserves a place. The first decision sets the latency and how many copies must be
-kept in step. The second decides how stale the cache can be. The third decides the hit ratio for a
-given amount of memory.
-
-<Figure caption="The three decisions behind every cache. A read misses down to the database and fills the cache on the way back; a write goes to the database and then deletes, sets or marks the cached key; and when the cache is full, eviction and admission decide what stays.">
-  <Overview />
-</Figure>
-
-Each decision is made mostly independently of the others, which is why the section below takes
-them one at a time.
+- A **read replica** is a full second copy of the database that the database itself keeps up to date.
+  A cache holds a subset, shaped by your keys, and nobody updates it unless your code does.
+- **Memoization** caches a function's result for given inputs, such as `price_with_tax(499)`. It never
+  goes stale, because the same inputs always give the same output.
+- A **CDN** (content delivery network) is a set of servers around the world that cache whole HTTP
+  responses close to users. Its rules (cache headers, purges) have their own page (coming soon), but
+  the eviction policies on this page apply inside it too.
 
 ## How it works, piece by piece
 
+Every cache is three decisions. **Where it sits**: inside the application, across the network in a
+shared server, or both. **How reads and writes reach it**: who fills it on a miss, and what a write
+does to the cached copy. **What it keeps**: which key goes when it is full, and whether a new key
+deserves a place. The first decision sets the speed and how many copies must be kept in step. The
+second decides how stale the cache can get. The third decides the hit ratio for a given amount of
+memory.
+
+<Figure caption="The three decisions behind every cache. Where it sits: in the app process or across the network. How reads and writes reach it: a read misses down to the database and fills the cache on the way back; a write goes to the database and then deletes, sets or marks the cached key. What it keeps: when the cache is full, eviction and admission decide what stays.">
+  <Overview />
+</Figure>
+
+The three are mostly independent of each other, so the sections below take them one at a time.
+
 ### Where the cache sits
 
-An **in-process cache** is a hash map with a size limit inside your application: Caffeine in Java,
-`functools.lru_cache` or `cachetools` in Python, an `lru-cache` package in Node. A lookup is a
-memory access, well under a microsecond, with no serialisation and no network. A **remote cache**
-(Redis, Valkey, Memcached) is a separate server: every lookup is a network round trip, typically a
-few hundred microseconds inside one cloud zone, plus the cost of turning bytes back into objects.
+Part 1 introduced in-process and remote caches. The speed difference is large. A **microsecond** is a
+thousandth of a millisecond, and a **nanosecond** a thousandth of a microsecond. An in-process lookup
+takes well under a microsecond. A remote lookup is a network round trip, typically a few hundred
+microseconds inside one data centre, plus **deserialisation**: turning the bytes that came over the
+network back into objects your code can use.
 
-The difference that matters most is not speed but **copies**. Fifty pods with an in-process cache
-hold fifty copies of the hot data. A 2 GB cache per pod is 100 GB of memory holding the same 2 GB.
-A write must reach all fifty to keep them fresh, and in practice usually reaches none, so
-in-process caches rely on short TTLs. And every deploy restarts every pod with an empty cache.
+The difference that matters most is not speed but **copies**. Big services run many identical copies
+of the app at once; in Kubernetes, the most common platform for running them, each running copy is
+called a **pod**. Fifty pods with an in-process cache hold fifty copies of the hot data. At 2 GB per
+pod, that is 50 × 2 GB = 100 GB of memory holding the same 2 GB. A write must reach all fifty copies to keep them
+fresh, and in practice usually reaches none, so in-process caches rely on short TTLs. And every
+deploy restarts every pod with an empty cache.
+
+Look at the two sides of the next figure: the top row is the in-process copies, the bottom the one
+shared remote cache.
 
 <Figure caption="Five pods, five in-process copies, one remote cache. The in-process copies are the fastest to read and the hardest to keep in step: every write has five copies to fix, and every deploy empties all five.">
   <Tiers />
 </Figure>
 
-Large services use both, called a **near cache** or two-level cache: a small in-process cache with
-a TTL of seconds in front of a shared remote cache with a TTL of minutes. Redis can keep the near
-copies honest. With `CLIENT TRACKING` turned on, the server remembers which keys each connection
-read and pushes an invalidation message when one of them changes
-([Redis docs](https://redis.io/docs/latest/develop/reference/client-side-caching/)). The rule of
-thumb that falls out: in-process for small, hot, rarely changing data (feature flags,
-configuration, a currency table); remote for everything that must look the same from every pod.
+Large services use both, called a **near cache** or two-level cache: a small in-process cache with a
+TTL of seconds in front of a shared remote cache with a TTL of minutes. Redis can keep the near copies
+honest. With `CLIENT TRACKING` turned on, the Redis server remembers which keys each app connection
+read, and sends that connection a message when one of them changes, so the app can drop its own copy
+([Redis docs](https://redis.io/docs/latest/develop/reference/client-side-caching/)). The rule of thumb:
+in-process for small, hot, rarely changing data (feature flags, which switch features on and off;
+configuration; a currency table); remote for everything that must look the same from every pod.
 
 ### Cache-aside, and the write that races it
 
-**Cache-aside** (also called lazy loading) is the pattern most applications use. The application
-owns both paths. On a read it asks the cache; on a miss it reads the database and fills the cache.
-On a write it updates the database and then does something to the cached key.
+**Cache-aside** (also called lazy loading) is the pattern from Part 1, and the one most applications
+use. The application owns both paths. On a read it asks the cache; on a miss it reads the database
+and fills the cache. On a write it updates the database and then does something to the cached key.
 
-The "something" is where the trouble is. Setting the new value has the two-writer problem from
-above. So the standard advice is to **delete** the key and let the next read fill it. A delete is
-the same whatever order it arrives in, so the two-writer problem goes away.
+That "something" is where the trouble is. Setting the new value has the two-writer problem from the
+previous section. So the standard advice is to **delete** the key and let the next read fill it. A
+delete has the same result whichever order two of them arrive in, so the two-writer problem goes
+away.
 
-A different race remains, between a reader and a writer. It needs four events in one order, and
-each step below is one of them:
+A different problem remains. A **race condition** is a bug that appears only when two things happen
+at the same time in an unlucky order. It exists because the steps of two requests can interleave:
+request A does step 1, request B does steps 1 and 2, then A does step 2. Our race is between a reader
+and a writer, and it needs four events in one order. Each step below is one of them:
 
 <StepThrough
   title="Delete on write: a slow reader fills an old value"
@@ -180,251 +383,345 @@ each step below is one of them:
   summary="Deleting removes the race between two writers but not the race between a reader and a writer. The window is the reader's database read time, and it opens every time the key is missing, which delete-on-write makes more frequent."
 />
 
-That last point is the surprise. Delete-on-write empties the cache after every write, so the next
-few reads all miss and all go to the database. Each of them is a reader in flight, and if the next
-write commits while one is still reading, that reader fills an old value. On a hot key the race is
-not rare. In our simulation of one key with 500 reads a second, 10 ms database reads and 20 writes
-a second, the cache held an outdated version 7.14% of the time with delete-on-write and 0.96% with
-set-on-write. At 1 write a second the share drops to 0.25%, but a single stale fill lasted 1.49 s,
-until the next write came along.
+The last point of that summary is the surprise. Delete-on-write empties the cache after every write,
+so the next few reads all miss and all go to the database. Each of them is a reader **in flight**:
+it has started its database read and has not yet filled the cache. If the next write commits while
+one of them is still reading, that reader fills an old value.
 
-What fixes it is **versions**. Give every row a version that only increases (a counter, or the
-commit timestamp), and make the cache refuse to store anything older than what it already knows.
-For that to work after a write, the cache must still know something after the write, so the writer
-does not delete. It replaces the entry with a **marker**: "deleted, at version 2". A reader's fill
-of v1 is now refused; the next reader misses, reads v2 and fills it. Uber's CacheFront does exactly
-this in production: its invalidations write markers instead of deleting keys, and a Lua script in
-Redis compares row timestamps so a stale value is never written over a newer one
+On a hot key this is not rare. We simulated one key with 500 reads a second, 10 ms database reads and
+20 writes a second, for 10 minutes (600 seconds). With delete-on-write, the cache held an outdated
+version 7.14% of the time: 600 s × 0.0714 = about 43 seconds of the 10 minutes. With set-on-write it
+was 0.96%: 600 s × 0.0096 = about 6 seconds. At 1 write a second the delete lane was stale only 0.25%
+of the time, but one stale fill lasted 1.49 s, until the next write came along to delete it.
+
+What fixes it is **versions**.
+
+**What a version is.** A number attached to each row that goes up by one with every change: the
+first price is version 1, the next version 2.
+
+**Why it helps.** If every cached value carries the version it came from, the cache can refuse to
+store something older than what it already knows about.
+
+**Example.** The cache knows about version 2. A slow reader arrives with version 1 and asks to store
+it. The cache compares 1 with 2, sees the offer is older, and refuses.
+
+**The precise version.** The version can be a counter column or the row's commit timestamp, as long
+as it only ever increases. For the cache to know about version 2 after a write, the writer must not
+delete the entry, because then there is nothing left to compare with. Instead it replaces the entry
+with a **marker**: an entry with no value that says "deleted, at version 2". The slow reader's fill
+of v1 is refused; the next reader misses, reads v2 and fills it.
+
+There is one more requirement. The check ("is my version newer?") and the store must happen as one
+step, with nothing in between; if they are two separate commands, another client can write between
+them. An operation that cannot be split like this is called **atomic**. Redis runs small scripts
+written in **Lua** (a small programming language Redis has built in) atomically: while a script runs,
+no other command runs on that server. Uber's CacheFront does exactly this in production: its
+invalidations write markers instead of deleting keys, and a Lua script in Redis compares row
+timestamps so a stale value is never written over a newer one
 ([Uber, 2025](https://www.uber.com/blog/how-uber-serves-over-150-million-reads/)).
 
-Run the three write strategies against the same reads and writes. Each lane shows the cache over
-the last five seconds, red while it holds a version older than one a writer has already told it
-about.
+Run the three write strategies against the same reads and writes. Each lane shows the cache over the
+last five seconds: green while it is fresh, grey while it is empty, and red while it holds a version
+older than one a writer has already told it about.
 
 <RaceSim />
 
-The sim makes one more thing visible: the versioned lane never goes red, but it still misses after
-every write. Versions fix correctness, not load. Leases, which also limit how many readers refill
-at once, belong to the cache invalidation page (coming soon).
+The sim shows one more thing: the versioned lane never goes red, but it still misses after every
+write. Versions fix correctness, not load. Leases, which also limit how many readers refill at once,
+belong to the cache invalidation page (coming soon).
 
 ### Read-through and refresh-ahead
 
 **Read-through** moves the miss handling out of the application and into the cache layer. The
-application asks for a key; the cache library (or a caching proxy) calls a loader function on a
-miss, stores the result and returns it. The reads are the same as cache-aside. The difference is
-that one component now sees every miss, which lets it do two things cache-aside code rarely does:
+application only ever asks the cache for a key. On a miss, the cache calls a **loader**, a function
+you gave it that knows how to read that kind of data from the database, stores the result and returns
+it.
 
-- **Coalesce concurrent misses.** If 200 requests miss the same key in the same 10 ms, a
-  read-through cache runs the loader once and hands the result to all 200. Caffeine's loading
-  cache does this per key by default. Cache-aside code sends 200 identical queries.
-- **Refresh before expiry.** **Refresh-ahead** reloads a hot entry in the background when it is
-  old but not yet expired, and keeps serving the old value until the new one arrives. In Caffeine,
-  `refreshAfterWrite(1 min)` with `expireAfterWrite(5 min)` means: after a minute, the next read
-  triggers a reload and still gets the cached value; after five, the entry is gone and a read
-  waits ([Caffeine wiki](https://github.com/ben-manes/caffeine/wiki/Refresh)). Hot keys then never
-  miss on expiry; cold keys expire normally.
+The reads are the same as in cache-aside. The difference is that one component now sees every miss,
+which lets it do two things cache-aside code rarely does.
 
-The cost is coupling: the cache must know how to load each kind of data, which is natural for an
-in-process library and awkward for a shared Redis that many services use. Uber put the logic in the
-database's own query layer instead, so every service gets read-through behaviour without writing
-any (more on that below).
+**It can merge identical misses.** If 200 requests miss the same key within the same 10 ms, a
+read-through cache runs the loader once and hands the result to all 200. This is called **coalescing**
+the misses. Caffeine, the standard in-process cache library for Java, does it per key by default.
+Cache-aside code sends 200 identical queries.
+
+**It can refresh before expiry.** **Refresh-ahead** reloads a popular entry in the background (in a
+separate task, while requests carry on) when the entry is old but not yet expired, and keeps serving
+the old value until the new one arrives. In Caffeine, `refreshAfterWrite(1 min)` with
+`expireAfterWrite(5 min)` means: once an entry is a minute old, the next read starts a reload and
+still gets the cached value at once; once it is five minutes old, the entry is gone and a read waits
+for the database ([Caffeine wiki](https://github.com/ben-manes/caffeine/wiki/Refresh)). Popular keys
+then never miss because of expiry; rarely read keys expire normally.
+
+The cost is coupling: the cache must know how to load each kind of data. That is natural for an
+in-process library and awkward for a shared Redis that many services use. Uber put the logic in its
+database's own query layer instead, so every service gets read-through behaviour without writing any
+(more on that in "How real systems do it").
 
 ### Write-through
 
-**Write-through** sends writes through the cache layer: the application writes to the cache, the
-cache layer writes to the database synchronously, and the write is acknowledged once both are done.
+**Write-through** sends writes through the cache layer. The application writes to the cache; the
+cache layer writes to the database straight away; and only when both are done does the application
+get its **acknowledgement** (often shortened to "ack"): the reply that says "your write succeeded".
 
-The cache is always populated for keys that were written a moment ago, so a read right after a write hits.
-The costs are equally direct. Every write now pays for two writes. The cache fills with data that
-may never be read: a key written once and never read again takes the place of a key that was read
-often ([AWS ElastiCache docs](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html)).
-And "write both" is not atomic. If the database commit succeeds and the cache update fails (a
-timeout, a restart), the two disagree, so write-through still needs a TTL as the safety net. The
-same two-writer ordering problem applies if two cache nodes or two threads write the same key.
+The cache always holds keys that were written a moment ago, so a read right after a write hits. The
+costs are as direct:
 
-<Figure caption="The three write paths. Cache-aside writes the database and then deletes or marks the key. Write-through writes the database before acknowledging, so it pays two writes per request. Write-behind acknowledges first and writes the database later, so an acknowledged write can still be lost.">
+- Every write now pays for two writes.
+- The cache fills with data that may never be read: a key written once and never read again takes the
+  place of a key that was read often
+  ([AWS ElastiCache docs](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html)).
+- "Write both" is not atomic. If the database commit succeeds and the cache update fails (a timeout, a
+  restart), the two disagree, so write-through still needs a TTL as the safety net. The two-writer
+  ordering problem also returns if two requests write the same key at once.
+
+The next figure puts the three write paths side by side, one per row; read each row left to right.
+
+<Figure caption="The three write paths. Cache-aside writes the database and then deletes or marks the key. Write-through writes the database before saying OK, so it pays two writes per request. Write-behind says OK first and writes the database later, so a write the client was told succeeded can still be lost.">
   <WritePaths />
 </Figure>
 
 ### Write-behind and write-around
 
-**Write-behind** (also called write-back) acknowledges a write as soon as the cache has it, and
-writes the database later, in batches. The cache keeps a set of **dirty** keys (changed since the
-last flush) and flushes them every interval.
+**Write-behind** (also called write-back) acknowledges a write as soon as the cache has it, and writes
+the database later. The cache keeps a list of **dirty** keys, the ones changed since they were last
+written to the database, and every interval it **flushes** them: writes all of them to the database in
+one batch.
 
-The gain is **write coalescing**. A view counter incremented 5,000 times a second on one key,
-flushed every second, costs the database 1 write a second instead of 5,000. The loss is the same
-number seen from the other side: if the cache node dies, every write since the last flush is gone,
-up to 5,000 increments here. The client was told those writes succeeded.
+The gain is **write coalescing**: many changes to the same key turn into one database write. A view
+counter incremented 5,000 times a second on one key, flushed once a second, costs the database 1 write
+a second instead of 5,000. The loss is the same number seen from the other side. If the cache server
+dies, every change since the last flush is gone, up to 5,000 increments here, and the clients were
+told those writes succeeded.
 
-Two more costs are often missed. Anything that reads the database directly (reports, other
-services, a replica) sees data up to one interval old. And the flush must preserve order per key,
-or a later value can be overwritten by an earlier one. Use write-behind where losing a few seconds
-of writes is acceptable and the write rate is the problem: counters, analytics, rate-limit
-buckets, "last seen" timestamps. Never for money or orders.
+Two more costs are often missed. Anything that reads the database directly (reports, other services,
+a read replica) sees data up to one interval old. And the flush must keep the order of changes per
+key, or a later value can be overwritten by an earlier one. Use write-behind where losing a few
+seconds of writes is acceptable and the write rate is the problem: counters, analytics, rate-limit
+counters, "last seen" timestamps. Never for money or orders.
 
-**Write-around** writes only the database and leaves the cache alone, so keys are cached only when
-someone reads them. It is what cache-aside does on the write path, and it avoids write-through's
-problem of caching what nobody reads.
+**Write-around** writes only the database and leaves the cache alone, so a key is cached only when
+someone reads it. It is what cache-aside does on the write path, and it avoids write-through's problem
+of caching what nobody reads.
 
 ### Eviction: LRU and the scan
 
-Now the third decision, and its building blocks. When the cache is full and a new key arrives,
-some key must go. Two signals predict which keys will be read again. **Recency**: a key read a
-moment ago is likely to be read again soon. **Frequency**: a key read many times is likely to be
-read again. Most policies are a mix of the two, plus some way of dealing with **one-hit wonders**,
-keys that are read once and never again.
+Now the third decision. When the cache is full and a new key arrives, some key must go. Two signals
+predict which keys will be read again:
 
-**LRU** (least recently used) evicts the key whose last read is oldest. It is built from a hash map
-and a doubly linked list in recency order: a hit moves the key's node to the front, an insert adds
-at the front, an eviction removes from the back, all in constant time. With room for three keys and
-the reads `A B C A D`, the order after `A` is `A C B`, so `D` evicts `B`: `A` survived because it
-was read again.
+- **Recency**: a key read a moment ago is likely to be read again soon.
+- **Frequency**: a key read many times is likely to be read again.
 
-LRU's weakness is that it trusts every read equally. A key read once becomes "most recently used"
-and pushes out a key read a thousand times. A batch job reading 10,000 one-time keys through a
-cache of 8,000 entries leaves the cache holding the last 8,000 of them and nothing else.
+Most policies mix the two, plus some way of dealing with **one-hit wonders**: keys that are read once
+and never again.
+
+**LRU** (least recently used) evicts the key whose last read is oldest. With room for three keys and
+the reads `A B C A D`: after `A B C` the order from newest to oldest is `C B A`. Reading `A` again
+moves it to the front: `A C B`. Then `D` arrives, the cache is full, and the oldest, `B`, is evicted.
+`A` survived because it was read again.
+
+To do this fast, LRU keeps two structures. A hash map (a `dict`) finds a key's entry. A **doubly linked
+list** keeps the entries in recency order: each entry points to the one before and the one after it,
+so an entry can be unlinked from the middle and moved to the front by changing a few of those links.
+A hit moves the key to the front, a new key goes in at the front, and an eviction removes from the back.
+Each of these takes the same time however big the cache is, which is called **constant time**.
+
+LRU's weakness is that it trusts every read equally. A key read once becomes "most recently used" and
+pushes out a key read a thousand times. A **scan**, a job that reads a long run of keys once each, is
+the worst case: a batch job reading 10,000 one-time keys through a cache of 8,000 entries leaves the
+cache holding the last 8,000 of them and nothing else.
+
+The next figure shows a smaller version: a cache of eight, before and after a scan of eight keys.
 
 <Figure caption="An LRU cache of eight before and after a batch job reads eight keys once each. Every one-time key enters as most recently used, so after eight reads the cache holds only keys nobody will read again.">
   <LruScan />
 </Figure>
 
-In our simulation, adding a batch job that reads one new key for every two normal reads drops
-LRU's hit ratio on the normal traffic from 67.6% to 58.8% (cache of 10% of the keys), and leaves
-the frequency-aware policies below within half a point of where they were.
+In our simulation, adding a batch job that reads one new key for every two normal reads drops LRU's
+hit ratio on the normal traffic from 67.6% to 58.8% (cache of 10% of the keys), and leaves the
+frequency-aware policies below within one point of where they were.
 
-LRU has a second cost that only shows under concurrency: every hit is a write, because it moves a
-node in a shared list, so every hit takes a lock. That is why Redis does not run a real LRU. It
-samples 5 random keys (`maxmemory-samples`) and evicts the one idle longest, keeping a small pool of
-good candidates between evictions, which comes close to true LRU without a list
+LRU has a second cost that shows only when many requests use the cache at once. A server handles
+requests on several **threads**, separate lines of work running at the same time. Two threads must not
+change the linked list at the same moment, or it breaks, so each takes a **lock** first: a flag that
+lets only one thread in at a time while the others wait. In LRU every hit changes the list, so every
+hit takes the lock. That is why Redis does not run a real LRU. It picks 5 keys at random
+(`maxmemory-samples`) and evicts the one that has gone unread longest, keeping a small pool of good
+candidates between evictions. That comes close to true LRU without a list
 ([Redis docs](https://redis.io/docs/latest/develop/reference/eviction/)).
 
 ### Counting instead: LFU and W-TinyLFU
 
-**LFU** (least frequently used) keeps a hit count per key and evicts the smallest. A batch job's
-keys have count 1 and go first, so LFU ignores scans. Its own failure is the opposite one: counts
-never fade. A key that was hot yesterday keeps its count of 50,000 today, while today's hot keys
-start at 1 and are evicted before they can catch up. In our simulation, when popularity flips
-halfway through (the coldest keys become the hottest), exact LFU's hit ratio in the second half
-falls from 73% to 37%.
+**LFU** (least frequently used) keeps a count of hits per key and evicts the key with the smallest
+count. A batch job's keys have a count of 1 and go first, so LFU ignores scans.
 
-Redis's LFU mode fixes both problems in one byte per key. The counter is logarithmic: it starts at
-5, and each hit increments it with probability 1 / ((counter − 5) × 10 + 1), so the first hits
-always count, a key at 15 needs about 100 hits per step, and about a million hits reach the maximum
-of 255. And it decays: every minute a key goes unread, its counter drops by one (`lfu-log-factor`
-10 and `lfu-decay-time` 1 are the defaults, as of October 2026).
+LFU's own failure is the opposite one: counts never fade. A key that was hot yesterday keeps its count
+of 50,000 today, while today's hot keys start at 1 and are evicted before they can catch up. In our
+simulation, when popularity flips halfway through (the coldest keys become the hottest), plain LFU hits
+only 37.2% of reads in the second half, against 73.2% on steady traffic.
 
-**W-TinyLFU**, the policy in Caffeine, takes a different route: it uses frequency for admission,
-not for eviction. It needs one building block first. A **count-min sketch** estimates how often each
-key was seen, in a fixed amount of memory, without storing the keys. It is a few rows of small
-counters. To record a key, hash it once per row and add 1 to the counter it lands on in each row.
-To estimate, read those counters and take the smallest: a key whose counters read 3, 4, 3 and 4 is
-estimated at 3. Other keys share counters, so each counter can only overcount; the smallest is the
-least wrong. Caffeine uses 4-bit counters, about 8 bytes per
-cache entry ([Caffeine wiki](https://github.com/ben-manes/caffeine/wiki/Efficiency)), and halves every
-counter after a number of increments ten times the cache size, which is how old popularity fades.
+Redis's LFU mode fixes both problems, scans and counts that never fade, with one byte per key. A
+**bit** is a single 0 or 1, and a **byte** is 8 bits. Eight bits can be set in 2 × 2 × … × 2 (eight
+times) = 256 ways, so a byte holds a whole number from 0 to 255, and the counter stops at 255. To make 255 enough for keys
+read millions of times, the counter grows more slowly the higher it gets:
+
+- A new key starts at 5.
+- Each hit adds 1 only with a probability of 1 ÷ ((counter − 5) × 10 + 1). At 5, that is
+  1 ÷ (0 × 10 + 1) = 1, so the first hit always counts. At 15, it is 1 ÷ (10 × 10 + 1) = 1 ÷ 101, so a
+  key at 15 needs about 100 hits to move up one step.
+- About a million hits reach the maximum of 255.
+- The count also fades: every minute a key goes unread, its counter drops by one.
+
+The 10 in the formula is the setting `lfu-log-factor`, and "one per minute" is `lfu-decay-time` set to
+1; both are the defaults, as of October 2026. A counter like this, where each step up stands for many
+more hits than the step before (one hit from 5 to 6, about a hundred from 15 to 16), is called
+**logarithmic**.
+
+**W-TinyLFU**, the policy in Caffeine, takes a different route: it uses frequency for admission, not
+for eviction. It needs one building block first, and that block needs another: a hash.
+
+A **hash function** turns a key into a number in a fixed range, always the same number for the same
+key. It exists so you can find a slot for a key without searching. For example, a hash into 8 slots
+might send `product:42` to slot 5 every time, and `product:7` to slot 1. Different keys can land in the
+same slot; that is called a **collision**.
+
+A **count-min sketch** estimates how often each key was seen, in a fixed amount of memory, without
+storing the keys:
+
+- It is a few rows of small counters.
+- To record a key, hash it once per row, with a different hash function in each row, and add 1 to the
+  counter it lands on in each row.
+- To estimate a key's count, read the same counters and take the smallest. A key whose counters read
+  3, 4, 3 and 4 is estimated at 3.
+- Other keys collide into the same counters and add to them, so each counter can only overcount. The
+  smallest is the least wrong.
+
+Caffeine's counters use 4 bits each. Four bits give 2 × 2 × 2 × 2 = 16 values, so each counter counts
+from 0 to 15, and the sketch costs about 8 bytes per cache entry
+([Caffeine wiki](https://github.com/ben-manes/caffeine/wiki/Efficiency)). After a
+number of recorded reads equal to ten times the cache size, it halves every counter. That is how old
+popularity fades.
+
+With the sketch in place, the cache has three parts:
+
+1. **A small window** of about 1% of the capacity, run as plain LRU. Every new key lands here, so a key
+   that is about to become popular gets a few reads to prove it.
+2. **A main area** of the remaining 99%, split into a probation part (20% of it) and a protected part
+   (80%). A key that is read again while in probation moves to protected, so keys with a record of
+   repeat reads are the last to go.
+3. **The admission duel.** When the window evicts a key and the main area is full, the sketch compares
+   the window's evicted key (the candidate) with the key the main area would evict next (the victim).
+   The more frequent one stays; on a tie the victim stays.
+
+Read the figure top to bottom: the four rows of counters, the four the key lands on, then the duel
+the estimate decides.
 
 <Figure caption="A count-min sketch estimates a key's frequency as the smallest of its counters, here 3. W-TinyLFU uses that estimate to decide admission: a new key estimated at 1 does not replace a key estimated at 3.">
   <Sketch />
 </Figure>
 
-With the sketch in place, the cache has three parts:
-
-1. **A small window** of about 1% of the capacity, plain LRU. Every new key lands here, so a key
-   that is about to become popular gets a few reads to prove it.
-2. **A main area** of the remaining 99%, split into a probation part (20%) and a protected part
-   (80%). A key read again while in probation moves to protected.
-3. **The admission duel.** When the window evicts a key and the main area is full, the sketch
-   compares the window's evicted key with the main area's next victim. The more frequent one stays;
-   on a tie the victim stays.
-
 A batch job's key reaches the duel with an estimate of 1 and loses. Yesterday's hot key loses its
-advantage after a few halvings. Caffeine also resizes the window with hill climbing, growing it
-when recency pays and shrinking it when frequency does.
+advantage after a few halvings. Caffeine also adjusts the window's size while it runs: it tries a
+slightly bigger window, keeps the change if the hit ratio rose, and tries the other direction if it
+fell (a method called **hill climbing**).
 
 ### S3-FIFO and SIEVE: drop the one-hit wonders fast
 
-The newest policies start from an observation about real traces: many keys are read once, and the
-most useful thing a policy can do is drop those quickly, which the S3-FIFO paper calls **quick
-demotion**. They also avoid LRU's lock: nothing moves on a hit.
+A **FIFO queue** (first in, first out) is a line: keys join at the back and leave from the front, in
+the order they arrived, and nothing moves in between. The newest policies are built from FIFO queues.
+They start from an observation about real **traces** (recordings of every request a production cache
+received): many keys are read once, and the most useful thing a policy can do is drop those quickly.
+The S3-FIFO paper calls this **quick demotion**. They also avoid LRU's lock, because nothing moves on a
+hit.
 
-**S3-FIFO** (SOSP 2023) uses three FIFO queues, each first in, first out
+**S3-FIFO**, from a 2023 paper at SOSP (a major systems research conference), uses three FIFO queues
 ([Yang et al., 2023](https://dl.acm.org/doi/10.1145/3600006.3613147)):
 
 - A **small** queue holds 10% of the cache. Every new key enters here.
 - A **main** queue holds the other 90%.
-- A **ghost** queue holds only the names of keys recently dropped from small, no values.
+- A **ghost** queue holds only the names of keys recently dropped from small, with no values.
 
-A hit only increments a counter on the key, capped at 3. When a key reaches the end of the small
-queue, it moves to main if it was read while in small; otherwise it is dropped and its name goes
-into the ghost queue. A miss on a key whose name is in the ghost queue goes straight into main: it
-was dropped too early. At the end of the main queue, a key with a counter above zero goes back to
-the front with its counter lowered by one; a key at zero is evicted.
+A hit only adds 1 to a counter on the key, capped at 3. When a key reaches the front of the small
+queue:
+
+- if it was read while in small, it moves to main;
+- otherwise it is dropped, and its name goes into the ghost queue.
+
+A miss on a key whose name is in the ghost queue sends it straight into main: it was dropped too
+early. At the front of the main queue, a key with a counter above zero goes to the back with its
+counter lowered by one; a key at zero is evicted.
 
 <Figure caption="S3-FIFO. A one-hit wonder lives only in the small queue and leaves after 10% of the cache has passed. Keys that are read again reach main, and main gives each key one more lap per recent hit before it is evicted.">
   <S3Fifo />
 </Figure>
 
-The paper reports lower miss ratios than state-of-the-art policies on 6,594 production traces from
-14 datasets, the lowest mean miss ratio on 10 of the 14, and about six times the throughput of an
-optimised LRU at 16 threads. **SIEVE** (NSDI 2024), by an overlapping group, goes further down the
-same road with one FIFO queue, one "visited" bit per key and a pointer (the "hand") that sweeps
-from the oldest key, clearing bits and evicting the first key whose bit is clear
-([Zhang et al., 2024](https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo)). The
-Twitter study had already found plain FIFO close to LRU on many production workloads; these designs
-are FIFO with a cheap second chance.
+The paper tests it on 6,594 production traces from 14 datasets and reports lower miss ratios than
+state-of-the-art policies, the lowest average miss ratio on 10 of the 14 datasets. With 16 threads
+using the cache at once, it handles about six times as many requests per second as an optimised LRU,
+because hits take no lock.
+
+**SIEVE**, from a 2024 paper at NSDI (another systems conference) by an overlapping group, goes
+further down the same road
+([Zhang et al., 2024](https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo)). It has one
+FIFO queue and one "visited" bit per key, which a hit sets to 1. A pointer,
+called the "hand", walks from the oldest key towards the newest. At each key it clears a visited bit
+and moves on, and it evicts the first key whose bit is already 0. The Twitter study had already found
+plain FIFO close to LRU on many production workloads; these designs are FIFO with a cheap second
+chance.
 
 Run all four policies on the same traffic. Each lane plots its hit ratio on the normal traffic; the
-dashed line is the best a static cache of that size could do.
+dashed line is the best static cache of that size from "Why some keys are read far more than others".
 
 <EvictionSim />
 
 The two scenarios to try are the two failure modes: the batch job slider breaks LRU, and the flip
-button breaks LFU without aging. W-TinyLFU and S3-FIFO survive both, by different means.
+button breaks LFU without fading counts. W-TinyLFU and S3-FIFO survive both, by different means.
 
-### TTLs: a staleness bound, not an eviction policy
+### TTLs: a limit on staleness, not an eviction policy
 
 A TTL answers "how wrong can this get?", not "what should go when the cache is full?". Pick it from
-the data: how long can a reader tolerate an old value? A product description might take an hour,
-a price a few seconds, a permission check none at all (do not cache it, or cache it with
-invalidation you trust). The Azure guidance puts it well: too short and the cache keeps reloading,
+the data: how long can a reader live with an old value? A product description might take an hour, a
+price a few seconds, a permission check none at all (do not cache it, or cache it only with
+invalidation you trust). The Azure guidance names both sides: too short and the cache keeps reloading,
 too long and it serves stale data
 ([Azure Architecture Center](https://learn.microsoft.com/azure/architecture/patterns/cache-aside)).
 
-TTLs also shape memory more than people plan for. In the Twitter study, TTLs were short enough in
-many clusters that expiry, not eviction, decided what was in the cache: the working set was "keys
-written in the last TTL". Two practical details follow. Expired keys still take memory until the
-cache removes them, which Redis does lazily on access and with a periodic background sweep. And
-keys written together expire together, so add a little random jitter to TTLs; why that matters is
-on the cache stampede page (coming soon).
+TTLs also shape memory more than people plan for. In the Twitter study, TTLs were short enough in many
+clusters that expiry, not eviction, decided what was in the cache: what the cache held was the keys
+written in the last TTL. Two practical details follow. Expired keys still take memory until the cache
+removes them, which Redis does when someone reads the key and with a periodic background sweep. And
+keys written together expire together, so add **jitter**, a small random amount, to each TTL (an hour
+plus or minus a few minutes); why that matters is on the cache stampede page (coming soon).
 
 ## Choosing between them
 
-The write path, by what it guarantees and what it costs:
+The write path, by what it guarantees and what it costs. The column to read first is "Stale window":
+it is the one the patterns differ on most.
 
-| Pattern | Reads after a write | Write cost | Stale window | Loses acked writes | Use for |
+| Pattern | Reads after a write | Write cost | Stale window | Loses acknowledged writes | Use for |
 |---|---|---|---|---|---|
 | Cache-aside, delete | miss, then fill | DB + 1 delete | reader race until next write or TTL | no | the default for read-heavy data |
 | Cache-aside, versioned marker | miss, then fill | DB + 1 scripted write | none from races | no | hot keys, or when stale reads cost money |
-| Read-through | same as cache-aside | same | same | no | in-process caches with loaders; coalescing misses |
-| Write-through | hit | DB + cache, synchronous | if one of the two writes fails | no | read-after-write on data that is read often |
-| Write-behind | hit | cache only; DB batched | readers of the DB lag one interval | yes, up to one interval | counters, analytics, high write rates |
+| Read-through | same as cache-aside | same | same | no | in-process caches with loaders; merging misses |
+| Write-through | hit | DB + cache, before the reply | if one of the two writes fails | no | reading right after writing, on data that is read often |
+| Write-behind | hit | cache only; DB in batches | readers of the DB lag one interval | yes, up to one interval | counters, analytics, high write rates |
 
-The eviction policy, by how it behaves on the traffic that breaks policies:
+The eviction policy, by how it behaves on the traffic that breaks policies. Notice that only the last
+three rows handle both scans and shifts well.
 
-| Policy | Hit cost | One-time keys (scans) | Popularity shifts | Where you meet it |
+| Policy | Work on a hit | One-time keys (scans) | Popularity shifts | Where you meet it |
 |---|---|---|---|---|
-| LRU | list move, lock | flushed out | adapts fast | most libraries; Redis `allkeys-lru` (sampled) |
-| LFU, no aging | count update | ignored | stuck on old keys | textbook; rarely used plainly |
-| Redis LFU | counter in 8 bits | ignored | decays per minute | Redis `allkeys-lfu` |
+| LRU | list move, under a lock | flush the cache | adapts fast | most libraries; Redis `allkeys-lru` (sampled) |
+| LFU, counts never fade | count update | ignored | stuck on old keys | textbooks; rarely used plainly |
+| Redis LFU | counter in one byte | ignored | fades one step a minute | Redis `allkeys-lfu` |
 | W-TinyLFU | sketch update, window LRU | rejected at admission | sketch halves | Caffeine and its ports |
 | S3-FIFO, SIEVE | a bit or a counter | dropped from small queue | adapts | newer libraries and research caches |
 
-How to choose: start with cache-aside and delete-on-write, a TTL from the data, and an explicit
-eviction policy. Move a hot or money-sensitive key to versioned fills when the race starts to show
+How to choose: start with cache-aside and delete-on-write, a TTL from the data, and an eviction policy
+you chose on purpose. Move a hot or money-sensitive key to versioned fills when the race starts to show
 up. If you are choosing a library, prefer one with a frequency-aware or quick-demotion policy over
-plain LRU; on skewed traffic it is worth more than doubling the memory. In Redis, `allkeys-lfu` is
-usually the better fit for a pure cache; `allkeys-lru` when access is mostly recency-driven.
+plain LRU; on skewed traffic it is worth about as much as doubling the memory. In Redis, `allkeys-lfu`
+is usually the better fit for a pure cache; `allkeys-lru` when reads mostly follow recency.
 
 ## Build it yourself
 
@@ -433,8 +730,8 @@ track keys only, since values do not affect what gets evicted. The full programs
 traffic generator and race simulation behind this page's numbers, are in
 [`examples/caching-strategies`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/caching-strategies).
 
-An LRU in a few lines. Python's `OrderedDict` and JavaScript's `Map` both remember order, which is
-all an LRU needs:
+An LRU in a few lines. Python's `OrderedDict` and JavaScript's `Map` both remember the order in which
+keys were added, which is all an LRU needs:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -478,6 +775,10 @@ class Lru {
 ```
   </TabItem>
 </Tabs>
+
+Here the order is kept with the newest at the back rather than the front, but the idea is the same as
+the linked list above. `access` returns `True` for a hit and `False` for a miss, so a simulation can
+count hits.
 
 S3-FIFO. Notice that a hit touches one counter and nothing else:
 
@@ -588,8 +889,16 @@ class S3Fifo {
   </TabItem>
 </Tabs>
 
-`policies` runs LRU, LFU, a simplified W-TinyLFU and S3-FIFO on the same Zipf traffic and prints
-the hit ratios quoted on this page. The rows for a cache of 10% of the keys:
+Read it like this. `freq` holds a counter for every key in the cache, so "is it cached?" is one
+lookup. A hit raises the counter (up to 3) and returns. A miss first makes room: it evicts from small
+while small is over its 10% share, otherwise from main. Then it adds the new key to small, or to main
+if its name is still in the ghost queue. `evict_small` promotes a key that was read while in small and
+drops the rest, keeping their names in the ghost queue. `evict_main` gives keys with a positive counter
+another lap, one less each time, until it finds one at zero.
+
+`policies` runs LRU, LFU, a simplified W-TinyLFU and S3-FIFO on the same Zipf traffic and prints the hit
+ratios quoted on this page. The rows for a cache of 10% of the keys follow; notice that LRU is lowest in
+the first two rows and LFU collapses in the third:
 
 ```text
                     LRU        LFU  W-TinyLFU    S3-FIFO  best static
@@ -598,8 +907,8 @@ batch job         58.8%      72.7%      73.5%      74.2%        76.5%
 popularity flip   67.5%      37.2%      71.5%      72.5%        76.5%
 ```
 
-The versioned fill. A reader's fill is refused if the cache already holds this version or a newer
-one, and a writer leaves a marker instead of deleting:
+The versioned fill. A reader's fill is refused if the cache already holds this version or a newer one,
+and a writer leaves a marker instead of deleting:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -661,8 +970,10 @@ class Cache {
   </TabItem>
 </Tabs>
 
-In Redis the same check has to happen inside the server, or another client can write between
-your read and your write. A Lua script runs atomically:
+In Redis the same check has to happen inside the server, or another client can write between your read
+and your write. The Lua script below runs atomically. It stores the entry as a Redis **hash** (a small
+map of fields inside one key; `HMGET` reads fields, `HSET` writes them) with the fields `version`,
+`kind` and `payload`, and `PEXPIRE` sets the TTL in milliseconds:
 
 ```lua title="versioned_set.lua"
 -- runnable version: examples/caching-strategies/redis/versioned_set.lua (demo.sh replays the race)
@@ -680,40 +991,45 @@ redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 1
 ```
 
-`race` replays both interleavings and then measures the outdated share for each strategy (0.96%,
-7.14% and 0.00% at 20 writes a second). `demo.sh` runs the same race against a real Redis: the slow
-reader's fill of v1 returns 0, refused. Python and JavaScript print identical output.
+`race` replays both interleavings and then measures the outdated share for each strategy at 20 writes a
+second: 0.96% for set, 7.14% for delete and 0.00% for the versioned marker. `demo.sh` runs the same race
+against a real Redis: the slow reader's fill of v1 returns 0, refused. Python and JavaScript print
+identical output.
 
 ## How real systems do it
 
-**Redis** (as of October 2026) offers eight eviction policies: `noeviction` (the default),
-`allkeys-lru`, `allkeys-lfu`, `allkeys-random`, and `volatile-` versions of LRU, LFU and random that
-only consider keys with a TTL, plus `volatile-ttl`, which evicts the key closest to expiring. The
-`volatile-` policies behave like `noeviction` if no key has a TTL, a common surprise. LRU is
-approximated by sampling and LFU uses the decaying logarithmic counter described above. Valkey,
-the open-source fork, keeps the same policies.
+**Redis** (as of October 2026) offers eight eviction policies. `noeviction` (the default) evicts
+nothing. `allkeys-lru`, `allkeys-lfu` and `allkeys-random` choose among all keys. `volatile-lru`,
+`volatile-lfu` and `volatile-random` choose only among keys that have a TTL, and `volatile-ttl` evicts
+the key closest to expiring. The `volatile-` policies behave like `noeviction` if no key has a TTL, a
+common surprise. LRU is approximated by sampling and LFU uses the fading logarithmic counter described
+above. Valkey, a separate project started from a copy of Redis's code, keeps the same policies.
 
-**Caffeine**, the standard in-process cache for the JVM, runs W-TinyLFU with an adaptive window,
-coalesces concurrent loads per key, and separates `expireAfterWrite` from `refreshAfterWrite` so hot
-keys refresh in the background.
+**Caffeine** runs W-TinyLFU with a window that resizes itself, merges concurrent loads of the same key,
+and separates `expireAfterWrite` from `refreshAfterWrite` so popular keys refresh in the background.
 
-**Uber's CacheFront** puts the cache inside Docstore's query engine, so services get read-through
-caching without writing cache code. It started with TTLs (5 minutes by default) and added
-invalidation from **change data capture** (CDC): a service called Flux tails the MySQL binlog, the
-database's own log of committed changes, and invalidates the affected rows within seconds. Shadow
-reads compared against the database measured the cache as 99.99% consistent
+**Uber's CacheFront** puts the cache inside the query engine of Docstore, Uber's own database, so
+services get read-through caching without writing cache code. It started with TTLs (5 minutes by
+default) and then added invalidation from **change data capture** (CDC): reading the database's own
+record of changes to learn what changed. A service called Flux reads the MySQL **binlog**, the log in
+which MySQL records every committed change, and invalidates the affected rows within seconds. To measure
+the result, Uber sent a sample of reads to both the cache and the database and compared the answers;
+the cache agreed 99.99% of the time
 ([Uber, 2024](https://www.uber.com/blog/how-uber-serves-over-40-million-reads-per-second-using-an-integrated-cache/)).
-The 2025 follow-up describes the versioned markers and the Lua script that deduplicates fills, as
-covered above. Services can turn caching off per table or per request when they need strong
-consistency.
+The 2025 follow-up describes the versioned markers and the Lua script covered above. Services can turn
+caching off per table or per request when they need every read to be exact.
 
-**Meta** runs TAO, the cache in front of its social graph, at more than 10 trillion cache fills a
-day, and reports raising its consistency by one measure from 99.9999% to 99.99999999%
-([Meta, 2022](https://engineering.fb.com/2022/06/08/core-infra/cache-made-consistent/)). The
-lesson in that post is about measurement: Meta first built Polaris, a service that checks cache
-replicas against the database after invalidation events, tuned to report no false positives, so
-that engineers would trust it. Their CacheLib engine, used by over 70 services, is described in its
-own paper ([OSDI 2020](https://www.usenix.org/conference/osdi20/presentation/berg)).
+**Meta** runs TAO, the cache in front of the data that links people, posts and pages, at more than 10
+trillion cache fills a day. It reports raising its consistency, by one measure, from 99.9999% to
+99.99999999%
+([Meta, 2022](https://engineering.fb.com/2022/06/08/core-infra/cache-made-consistent/)). In plain
+numbers: 99.9999% consistent means 0.0001% inconsistent, which is 1 in 1,000,000; 99.99999999% means
+0.00000001%, which is 1 in 10,000,000,000. That is ten thousand times fewer stale results
+(10,000,000,000 ÷ 1,000,000 = 10,000). The lesson in that post is about measurement: Meta first built
+Polaris, a service that checks cache copies against the database after each invalidation, and tuned it
+never to raise a false alarm, so that engineers would trust it. Their CacheLib engine, used by over 70
+services and able to keep a cache in memory and on flash storage (SSD) together, is described in its own
+paper ([OSDI 2020](https://www.usenix.org/conference/osdi20/presentation/berg)).
 
 ## Gotchas and war stories
 
@@ -721,79 +1037,78 @@ own paper ([OSDI 2020](https://www.usenix.org/conference/osdi20/presentation/ber
 With `maxmemory` set and the default `noeviction`, a full cache rejects every fill with an
 out-of-memory error while reads keep working. Applications that treat a failed `SET` as fatal start
 failing requests; ones that ignore it quietly stop caching. Without `maxmemory` at all, Redis grows
-until the operating system kills it. Set both, and alert on evictions and rejected writes.
+until the operating system runs out of memory and kills it. Set both, and alert on evictions and
+rejected writes.
 :::
 
 :::caution[Not caching "not found" lets one bad key hit the database every time]
-A read for a key that does not exist misses, queries the database, finds nothing, caches nothing.
-A client that keeps asking for that key, or a bot walking IDs, sends every request to the database.
-**Negative caching** stores "not found" with a short TTL. The opposite mistake is caching an error
-(a timeout, a 500) as if it were a value: keep errors out of the cache, or give them a TTL of
+A read for a key that does not exist misses, queries the database, finds nothing and caches nothing. A
+client that keeps asking for that key, or a bot walking through IDs, sends every request to the
+database. **Negative caching** stores "not found" with a short TTL. The opposite mistake is caching an
+error (a timeout, a 500) as if it were a value: keep errors out of the cache, or give them a TTL of
 seconds.
 :::
 
 :::caution[The average hit ratio hides the endpoint that matters]
-A 97% overall hit ratio can be 99.5% on product pages and 60% on checkout, because the product
-pages have far more traffic. The database load and the p99 of checkout come from its own miss
-ratio. Record hits and misses per key prefix or per caller, not only per cache.
+A 97% overall hit ratio can be 99.5% on product pages and 60% on checkout, because the product pages
+have far more traffic and dominate the average. The database load and the p99 of checkout come from
+checkout's own miss ratio, 40%. Record hits and misses per key prefix or per caller, not only per
+cache.
 :::
 
 :::caution[Every deploy empties every in-process cache]
-A rolling deploy of 40 pods restarts 40 empty caches, a few at a time. Each new pod sends its whole
-miss stream to the remote cache or the database until it warms up, and with fast rollouts several
-are cold at once. Size the backend for it, keep in-process caches small with the remote cache
-behind them, or warm a pod before it takes traffic.
+A **rolling deploy** replaces the pods a few at a time, so 40 pods means 40 empty caches over the
+rollout. Each new pod sends all its misses to the remote cache or the database until it warms up, and
+with fast rollouts several are cold at once. Size the backend for it, keep in-process caches small with
+the remote cache behind them, or warm a pod before it takes traffic.
 :::
 
 :::caution[One huge value can stall everyone]
-A 5 MB cached object costs a network transfer and a deserialisation on every hit, and in
-single-threaded Redis a large `GET` delays every other client on that node. Cache the pieces readers
-need, compress large values, and watch for keys that are both big and hot; the hot keys page (coming
-soon) covers the second half.
+A 5 MB cached object costs a network transfer and a deserialisation on every hit. Redis runs commands
+on a single thread, one at a time, so a large `GET` also delays every other client on that server.
+Cache the pieces readers need, compress large values, and watch for keys that are both big and hot; the
+hot keys page (coming soon) covers the second half.
 :::
 
 ## Trade-offs and when not to use it
 
 A cache adds a second copy of the data, and with it a second answer to "what is the price?". Every
-strategy on this page narrows the time the two answers differ; none of them removes it, except by
-giving up the cache for that read. It also adds a component whose failure moves load: a cache that
-absorbs 98% of reads means a database sized for 2%, and a capacity plan that must say what happens
-when the cache is cold.
+strategy on this page narrows the time the two answers differ; none removes it, except by not caching
+that read. It also adds a component whose failure moves load: a cache that absorbs 98% of reads means a
+database sized for 2%, and a capacity plan that must say what happens when the cache is empty.
 
-Do not cache data that must be exactly current for the decision being made: an account balance
-before a payment, inventory at the moment of reservation, a permission check after a revocation.
-Read those from the source, or from a cache with versioned invalidation you have measured. Do not
-cache data that is rarely read twice: the cache pays for every insert and earns only on hits. And do
-not reach for a cache to hide a slow query that an index would fix; the cache hides it until the
-first cold start.
+Do not cache data that must be exactly current for the decision being made: an account balance before
+a payment, stock at the moment of reservation, a permission check after access was taken away. Read
+those from the source, or from a cache with versioned invalidation you have measured. Do not cache data
+that is rarely read twice: the cache pays for every insert and earns only on hits. And do not reach for
+a cache to hide a slow query that an index would fix; the cache hides it until the first cold start.
 
 ## Interview corner
 
 Caching appears in almost every system design interview, usually as "add a cache here". The strong
 answer turns that box into the three decisions.
 
-- **"How would you cache this read?"** Cache-aside with a remote cache, a TTL derived from how
-  stale the data may be, an explicit eviction policy, and what happens on a write. Mention the
-  near cache if latency matters and the copies problem that comes with it.
-- **"What happens on a write?"** Delete or update, the two races, and versions as the fix. A
-  strong answer says why delete is preferred (order-independent) and why it is not enough.
-- **"Your hit ratio dropped from 99% to 95%."** Database load went up five times. Look for a new
-  access pattern (a batch job, a crawler, a new feature reading cold data), a TTL change, an
-  eviction policy that does not resist scans, or a cache that shrank.
+- **"How would you cache this read?"** Cache-aside with a remote cache, a TTL derived from how stale the
+  data may be, an eviction policy chosen on purpose, and what happens on a write. Mention the near cache
+  if latency matters, and the copies problem that comes with it.
+- **"What happens on a write?"** Delete or update, the two races, and versions as the fix. A strong
+  answer says why delete is preferred (order does not matter) and why it is not enough.
+- **"Your hit ratio dropped from 99% to 95%."** The miss ratio went from 1% to 5%, and 5 ÷ 1 = 5, so the
+  database load went up five times. Look for a new access pattern (a batch job, a crawler, a new feature
+  reading cold data), a TTL change, an eviction policy that does not resist scans, or a cache that
+  shrank.
 - **"Design a cache for a feed or a product catalogue."** Size it from the popularity curve, pick a
   frequency-aware policy, plan the cold start, and say which data is never cached.
-
-Quantify once: the miss ratio arithmetic (99% to 98% doubles the database reads) is the fastest way
-to show you understand why caches matter.
 
 ## Check yourself
 
 <details>
 <summary>1. A service does 20,000 reads a second at a 95% hit ratio. A change raises it to 97.5%. What happens to database reads, and to the p99?</summary>
 
-Database reads go from 20,000 × 5% = 1,000 to 20,000 × 2.5% = 500 a second: halved. The p99 is
-still a database read in both cases, because more than 1% of requests miss. To move the p99 into
-cache territory, the miss ratio must drop below 1%.
+The miss ratio goes from 5% to 2.5%. Database reads go from 20,000 × 0.05 = 1,000 a second to
+20,000 × 0.025 = 500 a second: halved. The p99 is still a database read in both cases, because more
+than 1 read in 100 misses (2.5 in 100). To move the p99 into cache territory, the miss ratio must drop
+below 1%.
 
 </details>
 
@@ -801,56 +1116,55 @@ cache territory, the miss ratio must drop below 1%.
 <summary>2. You switched from "update the cache on write" to "delete on write". Stale values still appear on hot keys. How?</summary>
 
 A reader missed (the key had been deleted or had expired), read the old row, and was still in flight
-when a writer committed and deleted the empty key. The reader then filled the old value. Deleting
-makes misses more frequent, so on a key with many reads and writes this happens often. Versioned
-fills with a marker instead of a delete stop it: the old fill is refused because the cache knows a
-newer version.
+when a writer committed and deleted the already empty key. The reader then filled the old value.
+Deleting makes misses more frequent, so on a key with many reads and writes this happens often.
+Versioned fills with a marker instead of a delete stop it: the old fill is refused because the cache
+knows a newer version.
 
 </details>
 
 <details>
 <summary>3. Why does plain LFU do badly after popularity shifts, and how do Redis LFU and W-TinyLFU avoid it?</summary>
 
-Old keys keep the high counts they earned, so new hot keys with low counts are evicted first and
-never accumulate enough hits. Redis decays every counter by one per idle minute (by default);
-W-TinyLFU's count-min sketch halves all counters after a fixed number of increments. Either way old
+Old keys keep the high counts they earned, so new hot keys with low counts are evicted first and never
+build up enough hits. Redis lowers every counter by one per minute the key goes unread (by default);
+W-TinyLFU's count-min sketch halves all counters after a fixed number of reads. Either way old
 popularity fades.
 
 </details>
 
 <details>
-<summary>4. A write-behind cache counts likes at 2,000 increments a second per hot post and flushes every 5 seconds. The node crashes. What is lost, and is that acceptable?</summary>
+<summary>4. A write-behind cache counts likes at 2,000 increments a second per hot post and flushes every 5 seconds. The cache server crashes. What is lost, and is that acceptable?</summary>
 
-Up to 5 × 2,000 = 10,000 acknowledged increments per hot post. For a like counter that shows
-"12.4K", usually yes. For anything a user paid for, never: use write-through or a database write
-instead.
+Up to 5 seconds of increments: 5 × 2,000 = 10,000 acknowledged likes per hot post. For a like counter
+that shows "12.4K", usually yes. For anything a user paid for, never: use write-through or a direct
+database write instead.
 
 </details>
 
 <details>
 <summary>5. After every deploy, p99 latency spikes for ten minutes. The service has 40 pods, each with a 1 GB in-process cache, and Redis behind them. Why, and what are two fixes?</summary>
 
-Each restarted pod starts with an empty in-process cache, so its reads all go to Redis (and its
-misses to the database) until it warms up. With a rolling deploy, several pods are cold at once.
-Fixes: shrink the in-process tier so it warms in seconds and let Redis carry the hit ratio; warm
-each pod (replay the hottest keys) before it takes traffic; or slow the rollout so few pods are cold
-at the same time.
+Each restarted pod starts with an empty in-process cache, so its reads all go to Redis (and its misses
+to the database) until it warms up. With a rolling deploy, several pods are cold at once. Fixes: shrink
+the in-process tier so it warms in seconds and let Redis carry the hit ratio; warm each pod (replay the
+hottest keys) before it takes traffic; or slow the rollout so few pods are cold at the same time.
 
 </details>
 
 ## Recap
 
-- Database load is reads × miss ratio. 99% to 98% doubles it; past a 1% miss ratio the p99 is a
-  database read.
+- Database load is reads × miss ratio. 99% to 98% hits doubles it; once more than 1% of reads miss,
+  the p99 is a database read.
 - Three decisions: where the cache sits (in-process is fast but multiplies copies), how reads and
   writes reach it, and what it keeps.
 - Cache-aside with delete removes the two-writer race but not the reader-writer race, which delete
   makes more frequent on hot keys. Versions plus a marker instead of a delete stop it.
-- Read-through coalesces misses and enables refresh-ahead; write-through pays two writes for fresh
-  reads; write-behind batches writes and can lose acknowledged ones.
-- LRU is flushed by one-time keys, plain LFU is stuck on old ones. W-TinyLFU admits by sketch
-  frequency with aging; S3-FIFO drops one-hit wonders from a small queue and moves nothing on a hit.
-- TTLs bound staleness, not memory. Set an eviction policy on purpose: Redis's default refuses writes.
+- Read-through merges misses and enables refresh-ahead; write-through pays two writes for fresh reads;
+  write-behind batches writes and can lose acknowledged ones.
+- LRU is flushed by one-time keys, plain LFU is stuck on old ones. W-TinyLFU admits by estimated
+  frequency that fades; S3-FIFO drops one-hit wonders from a small queue and moves nothing on a hit.
+- TTLs limit staleness, not memory. Set an eviction policy on purpose: Redis's default refuses writes.
 
 ## Where to go next
 
@@ -868,7 +1182,7 @@ at the same time.
 - [Yang, Zhang, Qiu, Yue, Rashmi: FIFO queues are all you need for cache eviction](https://dl.acm.org/doi/10.1145/3600006.3613147) (SOSP 2023) — S3-FIFO, quick demotion and the scalability argument.
 - [Zhang et al.: SIEVE is simpler than LRU](https://www.usenix.org/conference/nsdi24/presentation/zhang-yazhuo) (NSDI 2024) — one queue, a visited bit and a hand.
 - [Yang, Yue, Rashmi: A large scale analysis of hundreds of in-memory cache clusters at Twitter](https://www.usenix.org/conference/osdi20/presentation/yang) (OSDI 2020) — popularity, TTLs and how FIFO compares on real traces.
-- [Berg et al.: The CacheLib caching engine](https://www.usenix.org/conference/osdi20/presentation/berg) (OSDI 2020) — Meta's general caching engine across DRAM and flash.
+- [Berg et al.: The CacheLib caching engine](https://www.usenix.org/conference/osdi20/presentation/berg) (OSDI 2020) — Meta's general caching engine across memory and flash.
 - [Uber: How Uber serves over 40 million reads per second using an integrated cache](https://www.uber.com/blog/how-uber-serves-over-40-million-reads-per-second-using-an-integrated-cache/) (2024) — read-through in the query layer, CDC invalidation, measuring consistency.
 - [Uber: How Uber serves over 150 million reads per second from integrated cache](https://www.uber.com/blog/how-uber-serves-over-150-million-reads/) (2025) — invalidation markers and versioned fills.
 - [Meta: Cache made consistent](https://engineering.fb.com/2022/06/08/core-infra/cache-made-consistent/) (2022) — why invalidation fails and how to measure it.

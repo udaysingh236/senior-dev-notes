@@ -1,0 +1,61 @@
+---
+// Part 1 mental model: the app asks the cache first. A hit is answered from the copy; a miss goes
+// to the database and saves a copy on the way back. When the cache is full one copy is thrown out,
+// and when the data changes the copy is deleted.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+---
+
+<svg viewBox="0 0 400 446" width="100%" role="img" aria-labelledby="cs-mm-t cs-mm-d">
+  <title id="cs-mm-t">A cache: a small fast copy in front of the database</title>
+  <desc id="cs-mm-d">
+    Your app asks the cache for the price of product 42. The cache is small and fast, holding
+    copies such as product 42 at 499 rupees, and answers in 0.5 ms. If the copy is there, a hit,
+    which happens for 99 of every 100 reads here, the app gets its answer at once. If not, a miss,
+    the app reads the database, which holds every product and answers in 10 ms, and saves a copy
+    in the cache on the way back. Two rules keep the cache useful: when it is full, it throws out
+    the product nobody has read for the longest time; when a price changes, the app updates the
+    database and deletes the copy, and every copy expires after one hour anyway.
+  </desc>
+  <defs>
+    {['flow', 'ok', 'warn'].map((t) => (
+      <marker id={`cs-mm-a-${t}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" style={`fill: var(--viz-${t})`} />
+      </marker>
+    ))}
+  </defs>
+
+  <rect {...box(110, 6, 180, 52)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="200" y="28" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">your app</text>
+  <text x="200" y="48" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">price of product 42?</text>
+
+  <line x1="250" y1="60" x2="250" y2="98" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#cs-mm-a-flow)" />
+  <text x="262" y="85" font-size="15" style="fill: var(--viz-flow)">1. ask the cache</text>
+  <line x1="150" y1="100" x2="150" y2="62" stroke-width="2" style="stroke: var(--viz-ok)" marker-end="url(#cs-mm-a-ok)" />
+  <text x="138" y="78" font-size="15" font-weight="700" text-anchor="end" style="fill: var(--viz-ok)">hit ✓</text>
+  <text x="138" y="95" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">99 of 100 reads</text>
+
+  <rect {...box(40, 102, 320, 74)} rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="125" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">cache: small, fast copy</text>
+  <text x="200" y="147" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">42 → ₹499 · 7 → ₹1,299 · …</text>
+  <text x="200" y="167" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">answers in 0.5 ms</text>
+
+  <line x1="250" y1="178" x2="250" y2="236" stroke-width="2" style="stroke: var(--viz-warn)" marker-end="url(#cs-mm-a-warn)" />
+  <text x="262" y="203" font-size="15" font-weight="700" style="fill: var(--viz-warn)">2. miss</text>
+  <text x="262" y="221" font-size="15" style="fill: var(--viz-muted)">1 of 100 reads</text>
+  <line x1="150" y1="238" x2="150" y2="180" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#cs-mm-a-flow)" />
+  <text x="138" y="203" font-size="15" text-anchor="end" style="fill: var(--viz-flow)">3. save a copy</text>
+  <text x="138" y="221" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">on the way back</text>
+
+  <path d="M40 252 v48 a160 12 0 0 0 320 0 v-48" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <ellipse cx="200" cy="252" rx="160" ry="12" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="285" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">database: every product</text>
+  <text x="200" y="305" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">answers in 10 ms</text>
+
+  <rect {...box(4, 330, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="351" font-size="16" font-weight="700" style="fill: var(--viz-ink)">cache full? throw one copy out</text>
+  <text x="16" y="371" font-size="15" style="fill: var(--viz-muted)">the product nobody has read for longest</text>
+
+  <rect {...box(4, 390, 392, 50)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="411" font-size="16" font-weight="700" style="fill: var(--viz-ink)">price changed? delete the copy</text>
+  <text x="16" y="431" font-size="15" style="fill: var(--viz-muted)">and every copy expires after 1 hour</text>
+</svg>

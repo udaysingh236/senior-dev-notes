@@ -92,3 +92,40 @@ docs (living), undici docs (living), Go net/http source docs (living), nginx doc
 timeouts FAQ and router docs (living), gRPC deadlines guide (living), PostgreSQL config docs
 (living), AWS SDK smart configuration defaults (living), Cloudflare error 524 docs (living), Canva
 incident report (2024).
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Page rewritten fresher-first: a new opening question (a payment service that ignores 5 in 100 calls
+takes checkout down), Part 1 with one running example (Orders, 20 workers, 200 req/s, 48 ms per
+healthy call; no limit vs 2 s vs 300 ms vs 100 ms, every number worked out in words), a new
+mental-model diagram (`MentalModel.astro`), five building blocks (worker and worker pool; how many
+workers a load keeps busy, i.e. Little's law; a timeout; a deadline; percentiles p99/p99.9), and
+the old opening question (3 s timeout, 20 s call) moved to "Going deeper". The defaults table moved
+after the terms it needs; the Canva incident moved to Gotchas with CDN, canary and API gateway
+explained.
+
+What the fresher read found and fixed:
+- Undefined before use: worker, pool, queue, thread, process, async server, dependency, TCP
+  connection, handshake, packet, TLS and encryption keys, socket, blocking operation, byte, chunk,
+  proxy, undici, gRPC, AWS SDK, cloud region, abort signal, hop, NTP and clock skew, monotonic vs
+  wall clock, handler, transaction, lock, `pg_sleep`, `psql`, cancel request, `SET LOCAL`, role,
+  schema migration, keep-alive, load balancer, cache, background job, CDN, canary, API gateway,
+  WebSocket, `select`, `pg_stat_activity`, Go's `context.Context`. Each now has at least a plain
+  sentence before it is used; the building blocks and the monotonic clock get the four steps.
+- Numbers without working: 9.6 / 9.1 workers, 10 hung calls a second, 29.1 and 12.1 workers, the
+  pool's 417 req/s ceiling, 125× (5,000 ÷ 40), 20 s (20 × 1 s), the clock-skew 2.5 s, the monotonic
+  example, 1,700 / 1,600 / 1,200 ms in the step-through, 1.5 s of wasted work, 0.4 s and the 0.1 s
+  left, the pool check (average hold 0.0606 s → 330 req/s; 0.1456 s → 137 req/s), 3 × 2 = 6 s,
+  6,000 s = 100 min, the Linux SYN resends at 1 s and 3 s, and every check-yourself answer.
+- Check-yourself 3 said B "needs 500 ms for most calls" from a p99; reworded the question to an
+  average so the answer follows. Step-through: the charge took 400 ms (matches its p99) instead of
+  an unexplained 500 ms.
+- "wall clock" was used in two senses; the requests-docs sense is now "real time that passes".
+
+A student's three sentences after Part 1: Every request holds one of a server's few workers until
+it finishes, and waiting for another service counts, so calls that never answer quietly use up all
+the workers and the whole service stops. A timeout is a limit on that waiting: set it a little above
+how long healthy calls take at the slow end (their p99.9), because too long lets a few stuck calls
+take every worker and too short fails calls that would have worked. Most "timeout" settings only
+limit one silence, so use a deadline for the whole call and pass the time left to the next service,
+because giving up does not stop the work on the other side.
