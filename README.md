@@ -34,7 +34,7 @@ explained.
   still in force. Each page ends with Further reading.
 - **Interview corner, a short quiz and a recap,** so a page also works for revision.
 
-A page usually takes 30–45 minutes to read.
+A page usually takes 40–60 minutes to read. Part 1 alone, about ten minutes, explains the whole idea in plain words.
 
 ## What it covers
 
