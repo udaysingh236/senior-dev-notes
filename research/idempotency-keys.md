@@ -203,3 +203,39 @@ https://shopify.engineering/building-resilient-payment-systems
 12. Google AIP-155 Request identification (updated 2024)
 13. Amazon SQS message deduplication ID (docs, 2026)
 14. Apache Kafka KIP-679 (2020) and design docs (2026)
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Rewrote the page fresher-first: new Part 1 (question, Meera's ₹500 payment in numbered steps,
+the new `MentalModel` diagram, eight building blocks, "If you stop here"); the old opening
+question moved to "Going deeper". Min read 32 → 51.
+
+What the fresher read found and fixed:
+
+- Terms used before they were explained: idempotent, retry and timeout, side effect (local and
+  remote), transaction and atomic, unique index and primary key, race and check-then-act, lock and
+  lease. Each is now a Part 1 building block with the four steps.
+- Part 2 terms now introduced in place before use: hash and fingerprint, Redis and `SET NX`,
+  `RunInstances`/EC2, ETag and If-Match, PostgreSQL, `ON CONFLICT` row count, connection pool,
+  snapshot and isolation level, IETF draft, median and p99, lognormal, garbage collection, fence,
+  phase and recovery point, reconcile and webhooks, sweeper, semantic equivalence, ULID and B-tree
+  pages, dead-letter queue, log scale, partitions, SQS FIFO, Kafka producer/broker/sequence numbers,
+  DynamoDB conditional write, JMESPath setting, sandbox and Region, single point of failure,
+  upsert and natural key, SDK, UUID, AWS, SQLite and `BEGIN IMMEDIATE`, paise amounts.
+- Numbers without their working: the 3% and "one in five" overlap figures now state the
+  assumed server-time spread and add 2 + 0.5 = 2.5 s and 0.75 + 0.5 = 1.25 s; the 7.5 s retry
+  window is 0.5 + 1 + 2 + 4; storage is 24 × 60 × 60 = 86,400 s, × 1,000/s = 86.4 million rows,
+  × 1 KB = 86.4 million KB ≈ 86 GB; connection pool "half of 20"; lease figure retry times
+  1.2 + 0.5, + 1, + 2, + 4.
+- Figures: each Part 2 figure now has a sentence before (what to look at) and after (what you saw);
+  the Overview's "recovery point", "retention" and "purge job" are explained right after it; the
+  sim gets a list naming its four lanes.
+- Tagline was a riddle ("a lock with a lease, and a log"); now one plain sentence. Description
+  rewritten without the unquoted colon.
+
+Three sentences a student could give after Part 1: The app makes up one unique key for each
+payment the user means to make and sends the same key with every retry. The server claims the key
+in its database before charging, so a repeat finds it and gets either "still working, try later"
+or the saved answer instead of a second charge. The claim can only be won by one try, and it
+expires if the server crashes, while the bank call carries its own key so asking again does not
+charge twice.

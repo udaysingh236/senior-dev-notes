@@ -1,0 +1,66 @@
+---
+// Part 1 mental model: the app labels one payment with a key and sends the same key on every try.
+// The server looks the key up in its key table and does one of three things, so the card is
+// charged once however many tries arrive.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const rows = [
+  { y: 262, tone: 'flow', head: 'key not seen yet', sub: 'claim it, charge the bank once, save the answer' },
+  { y: 320, tone: 'warn', head: 'key in progress', sub: 'answer 409: still working, try again later' },
+  { y: 378, tone: 'ok', head: 'key finished', sub: 'send the saved answer again, no new charge' },
+];
+---
+
+<svg viewBox="0 0 400 494" width="100%" role="img" aria-labelledby="ik-mm-t ik-mm-d">
+  <title id="ik-mm-t">One payment, sent twice, charged once</title>
+  <desc id="ik-mm-d">
+    Meera's app creates the key 7f3a and saves it before sending a payment of 500 rupees. It sends
+    try 1 and later try 2, both with the same key, to the server. The server looks the key up in its
+    key table, where the row for 7f3a says finished, with the saved answer 201 and charge ch_1. For
+    each try the server does one of three things: if the key has not been seen, it claims it,
+    charges the bank once and saves the answer; if the key is in progress, it answers 409, try again
+    later; if the key is finished, it sends the saved answer again without a new charge. Result:
+    Meera is charged 500 rupees once.
+  </desc>
+  <defs>
+    <marker id="ik-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect {...box(4, 8, 300, 60)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="18" y="33" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Meera’s app: pay ₹500</text>
+  <text x="18" y="56" font-size="15" style="fill: var(--viz-muted)">key <tspan style="font-family: var(--sl-font-mono); fill: var(--viz-ink)">7f3a…</tspan>, saved before sending</text>
+
+  <line x1="60" y1="70" x2="60" y2="140" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#ik-mm-a)" />
+  <text x="70" y="100" font-size="15" style="fill: var(--viz-ink)">try 1, key 7f3a</text>
+  <line x1="200" y1="70" x2="200" y2="140" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-flow)" marker-end="url(#ik-mm-a)" />
+  <text x="210" y="100" font-size="15" style="fill: var(--viz-ink)">try 2,</text>
+  <text x="210" y="119" font-size="15" style="fill: var(--viz-ink)">same key</text>
+
+  <rect {...box(4, 144, 214, 70)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="111" y="172" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">server</text>
+  <text x="111" y="195" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">looks the key up</text>
+
+  <line x1="220" y1="179" x2="244" y2="179" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#ik-mm-a)" marker-end="url(#ik-mm-a)" />
+
+  <path d="M248 142 a74 10 0 0 0 148 0 v72 a74 10 0 0 1 -148 0 z" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <path d="M248 142 a74 10 0 0 1 148 0" stroke-width="2" style="fill: none; stroke: var(--viz-store)" />
+  <text x="322" y="172" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">key table</text>
+  <text x="322" y="193" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">7f3a: finished</text>
+  <text x="322" y="212" font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">201, ch_1</text>
+
+  <text x="4" y="248" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">what the server does with each try</text>
+
+  {
+    rows.map((r) => (
+      <g>
+        <rect {...box(4, r.y, 392, 50)} rx="8" stroke-width="2" style={`fill: var(--viz-${r.tone}-soft); stroke: var(--viz-${r.tone})`} />
+        <text x="16" y={r.y + 21} font-size="15" font-weight="700" style="fill: var(--viz-ink)">{r.head}</text>
+        <text x="16" y={r.y + 41} font-size="15" style="fill: var(--viz-ink)">{r.sub}</text>
+      </g>
+    ))
+  }
+
+  <rect {...box(4, 442, 392, 46)} rx="8" stroke-width="2.5" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="471" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">result: ₹500 charged once ✓</text>
+</svg>
