@@ -1,7 +1,7 @@
 ---
 title: What Happens When You Type a URL
 description: What happens between pressing Enter and seeing a page, explained from zero with one request and real numbers, then in depth. Where the time goes, counted in round trips — DNS, TCP and TLS set-up, TCP slow start, connection reuse and what resets it, head-of-line blocking in HTTP/1.1, HTTP/2 and HTTP/3, the critical path of dependent requests, caches at every layer, and why a CDN speeds up pages it cannot cache.
-tagline: A 1 Gbit/s line does not download 100 KB in a millisecond. Here is where the other 839 go.
+tagline: What happens between pressing Enter and seeing the page, and why distance, not your internet speed, decides how long it takes.
 difficulty: beginner
 track: foundations
 prerequisites: []
@@ -26,10 +26,10 @@ import WaterfallSim from '../../../components/sims/how-the-web-works/WaterfallSi
 
 ## The question
 
-You type `www.example.com` into your browser and press Enter. Your internet plan is 1 Gbit/s, fast
-enough to carry the page's 100 KB of HTML in under a millisecond. But you are in Mumbai and the
-server is on another continent, and the last byte of that HTML arrives about 840 ms after you press
-Enter. Upgrading to 10 Gbit/s would not save even one of those milliseconds. Where does the time go?
+You type `www.example.com` into your browser and press Enter. Your internet connection is fast
+enough to download the whole page in less than a thousandth of a second. Yet the page takes almost a
+full second to arrive, and an internet plan ten times faster would not make it arrive any sooner.
+Where does the time go?
 
 The short answer: almost all of it is spent waiting for messages to cross the distance and come
 back. Before your browser can even ask for the page, it has to find the server's address, open a
