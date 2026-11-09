@@ -134,3 +134,41 @@ retry budgets (token buckets, ratios), server pushback, hedging, and the real li
 - Huang et al.: Metastable failures in the wild, OSDI (2022)
 - AWS: Summary of the AWS service event in us-east-1, December 2021 (2021)
 - RFC 9110 (2022): idempotent methods, Retry-After
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Rewritten as Part 1 / Part 2. Part 1 follows one running example (an order service calling a stock
+server: capacity 100/s, 70/s normal load, 1 s timeout, 3 retries, a 6 s half-speed rollout) in
+numbered steps, with a new mental-model diagram (`MentalModel.astro`) and eight building blocks in
+four steps: timeout and deadline; attempts, retries and transient failures; safe to repeat
+(idempotent, idempotency key); a queue; amplification; exponential backoff; jitter; a retry budget
+(token bucket). The old sharp opening question moved to "Going deeper", which now introduces open vs
+closed systems in four steps.
+
+Fixed in the fresher read:
+- Terms used before being explained: dependency, proxy (502/504), gRPC, HTTP/2 streams,
+  `REFUSED_STREAM`/`GOAWAY`, commit point, transparent retries, SDK, throttling, S3, DynamoDB,
+  metastable failure / stable / vulnerable / trigger / sustaining effect (now four steps), deploy,
+  Envoy, route, route timeout, upstream cluster, cache, urllib3, Polly, Finagle, metadata, p95 and
+  tail (now four steps), replica, C-core, service config, `UNAVAILABLE`, brownout, serverless
+  functions, process, thread, lock, connection pool, message queue, API gateway, sidecar, database
+  driver, us-east-1. "Goodput" was dropped (it was defined but never used).
+- Numbers without working: geometric sum now shown as 1,000 requests → 100 → 10 → 1; 99.84% shown as
+  0.2 × 0.2 × 0.2 × 0.2; the 26% "wanted" extra; gRPC's 9.1% break-even solved step by step; AWS
+  500 ÷ 5 and 500 ÷ 14; Envoy's (2^N − 1) × 25 ms waits; the deadline sum 1,500 + 300 = 1,800 ms;
+  the 40% fewer attempts (2,400 − 1,435 = 965; 965 ÷ 2,400); jitter table ranges; 2,000 × 100
+  serverless retries; the 300% in the comparison table; the floor (1 ÷ 0.2 = 5 minutes); Check
+  yourself 1 worked with counts. Removed an unsourced illustrative average from the p95 example.
+- New, checked against the sim model (run headless, seed 42, 60 s): the tipping trigger length
+  follows from the queue rule (timeout × capacity ÷ (load − half capacity)): at 70% load,
+  100 ÷ 20 = 5 s, and the sim recovers at 4 s and tips at 5 s with backoff + jitter (retry at once
+  tips at 4 s); at 80%, 100 ÷ 30 ≈ 3.3 s, sim recovers at 3 s and tips at 4 s; at 50% even 10 s
+  heals; no retries heals at every trigger length. Check yourself 4 now asks the 80% case instead
+  of repeating Part 1's 2 s vs 6 s arithmetic.
+
+What a student could say after Part 1 alone: "When a call fails because of a short hiccup, trying
+again fixes it, but when the server itself is slow, every caller retries at the same moment and the
+extra attempts can keep the server overloaded even after it is healthy again. Waiting longer and
+random amounts between retries spreads them out and gives the server time, but does not reduce how
+many are sent. A retry budget, which lets retries add only a fixed share like 10% to normal traffic,
+is what keeps the extra load below what the server can handle."

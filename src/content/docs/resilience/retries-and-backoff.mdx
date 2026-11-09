@@ -1,12 +1,12 @@
 ---
 title: Retries, Exponential Backoff and Jitter
-description: How much load retries add, why a server can stay down after the slowdown that started it has ended, what exponential backoff does and does not do, the jitter formulas, retry budgets as token buckets, server pushback and hedged requests, with the defaults of gRPC, Envoy and the AWS SDKs.
-tagline: A retry is load you borrow on the hope that the failure is brief. Budget it.
+description: Why trying a failed call again can keep a struggling server down, and how to retry safely, explained from zero with one caller and one server, then in depth. Which failures to retry, how much load retries add, why a server can stay down after the slowdown that started it has ended, what exponential backoff does and does not do, the jitter formulas, retry budgets, server pushback and hedged requests, with the defaults of gRPC, Envoy and the AWS SDKs.
+tagline: Trying a failed call again usually fixes it, but uncontrolled retries can keep a struggling server down. This page shows how to retry safely.
 difficulty: intermediate
 track: resilience
 prerequisites: [timeouts, rest-api-design, latency-vs-throughput]
 next: [circuit-breakers, idempotency-keys, load-shedding]
-lastReviewed: 2026-11-06
+lastReviewed: 2026-11-09
 sidebar:
   order: 2
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/retries-and-backoff/MentalModel.astro';
 import Overview from '../../../components/diagrams/retries-and-backoff/Overview.astro';
 import Amplification from '../../../components/diagrams/retries-and-backoff/Amplification.astro';
 import Jitter from '../../../components/diagrams/retries-and-backoff/Jitter.astro';
@@ -23,42 +24,257 @@ import StormSim from '../../../components/sims/retries-and-backoff/StormSim.astr
 
 ## The question
 
-A server runs at 70% of its capacity. For six seconds it slows to half speed, then it is fully
-healthy again. Its clients time out after 1 s and retry three times, with exponential backoff and
-jitter, as every guide recommends. A minute later the server is at 100% busy and answers none of
-its requests in time, with no more users than before. What keeps it down? And why did the backoff
-not help?
+Your code calls another service, and once in a while the call fails. So you do what everyone does:
+if a call fails, try it again, up to three times. Most days that fixes every hiccup. Yet the same
+three retries can turn a six-second slowdown of the other service into an outage that lasts until
+someone steps in, with no more users than before. How can trying again keep a server down, and how
+should you retry instead?
 
-## Why this problem exists
+The short answer: when one call fails by bad luck, trying again works. But when the server itself
+is struggling, every caller fails at the same moment and every caller tries again, so the server
+receives the most work exactly when it can do the least. Safe retries do three things: they retry
+only failures a second try can fix, they wait a growing and random time before each retry
+(**backoff** and **jitter**), and they cap how many retries all requests together may add (a
+**retry budget**).
 
-Most failures between services are **transient**: they go away on their own. A connection was
-reset by a deploy, a packet was lost, one replica was in a garbage collection pause, a leader
-election took two seconds. A **permanent** failure is one a second try repeats: a malformed
-request, a missing permission, a record that does not exist. For a transient failure, trying
-again is the cheapest fix there is. That is why almost every client library retries, often
-before your own code sees the error.
+## The idea in plain words
 
-A few words used on the rest of the page:
+Follow one pair of services through one bad minute. An order service calls a stock service to ask
+"is item 42 in stock?". The stock service runs on one server.
 
-- An **attempt** is one try at a call. A **retry** is every attempt after the first.
-- **Amplification** is attempts divided by requests: how much load the server sees for the work
-  the callers wanted. With no retries it is 1. If every request needs two attempts, it is 2.
-- **Goodput** is the requests answered in time to be useful. **Throughput** counts everything the
-  server finished, including answers whose caller had already given up.
+1. **What the server can carry.** The stock server can answer at most 100 requests a second. That
+   is its **capacity**. Each answer takes 1,000 ms ÷ 100 = 10 ms of its time.
+2. **A normal day.** The order service sends 70 requests a second. That is 70 × 10 ms = 700 ms of
+   work in every 1,000 ms, so the server is busy 70% of the time. Requests that arrive while it is
+   busy wait in a short line in front of it, and every answer comes back within a few milliseconds.
+3. **The rule in the caller.** The order service waits at most 1 second for an answer. If none
+   comes, it gives up on that try and sends the same request again, up to 3 more times. On a normal
+   day this rule fixes the rare failure, such as a dropped connection, and nobody notices.
+4. **A six-second slowdown.** A new version of the stock service is being rolled out, and for 6
+   seconds the server runs at half speed: 50 answers a second. Requests still arrive at 70 a second,
+   so the line grows by 70 − 50 = 20 requests every second. After 6 seconds, 6 × 20 = 120 requests
+   are waiting, and that is before counting a single retry.
+5. **Back to full speed, but too late.** The server is healthy again and answers 100 a second. A new
+   request joins the back of a line of 120. It waits for the 120 ahead of it: 120 ÷ 100 = 1.2
+   seconds. That is longer than the 1 second its caller waits, so the caller gives up and retries.
+6. **The server does not know the caller left.** The request that was given up on stays in the line.
+   When the server reaches it, it spends its 10 ms working out an answer that nobody reads. The retry
+   joins the back of the line and waits more than a second too.
+7. **The line feeds itself.** Now every request waits more than a second, so every try fails, so
+   every request is sent 4 times: once plus 3 retries. 70 requests a second become 70 × 4 = 280
+   attempts a second, against a server that finishes 100. The line grows by 280 − 100 = 180 every
+   second. The server is at full speed and busy all the time, and every answer it sends goes to a
+   caller that already gave up. It stays like this until a person steps in.
+8. **A shorter slowdown would have healed.** Had the slowdown lasted 2 seconds, the line would hold
+   2 × 20 = 40 requests, a wait of 40 ÷ 100 = 0.4 seconds at full speed. That is under 1 second, so
+   nobody gives up, nobody retries, and the line clears.
 
-The trouble is when the retries arrive. A transient failure at one client is noise. A transient
-failure at the server, a slowdown, a restart or an overload, hits every client at the same moment,
-and they all retry at the moment the server has the least capacity to spare. Retries are a bet that
-the failure is brief and independent; when it is long and shared, the bet doubles the load on the
-loser.
+<Figure caption="Callers send 70 new requests a second into a line in front of a server that finishes at most 100. A caller that gets no answer in 1 s gives up, waits, and sends the request again into the same line. With no limit, each request can be sent 4 times; with a retry budget, retries can add only 10% of the 70.">
+  <MentalModel />
+</Figure>
 
-One more distinction decides how much any retry policy can help. In a **closed system**, a fixed
-set of clients each sends its next request only after the previous one finishes: ten batch workers
-draining a job table. If a worker waits 2 s before retrying, it sends nothing else for 2 s, so
-waiting removes load. In an **open system**, requests arrive from outside whatever happens to the
-earlier ones: users opening an app, upstream services under their own traffic. At 70 new requests a
-second, a client that waits 2 s before its retry does not stop the 140 new requests that arrive in
-those 2 s. Most services you call from a web backend are open systems.
+The picture shows the loop: a retry goes back into the same line that made the first try too slow.
+It also shows the fix. The order service needs a limit on how many retries all its requests may
+add together, not only on how many each request may send.
+
+**Waiting longer between retries does not fix it.** Suppose the order service waits 0.1 s before
+the first retry, 0.2 s before the second and 0.4 s before the third. Each request still sends 4
+attempts; they arrive a little later. Meanwhile new requests keep arriving at 70 a second, because
+the people placing orders do not know the stock server is struggling. After a second or two the
+server again receives about 280 attempts a second.
+
+**A limit on the total does fix it.** Say retries may add at most 10% of normal traffic: 10% of 70
+is 7 retries a second. The server then receives at most 70 + 7 = 77 attempts a second. It finishes
+100, so the line shrinks by 100 − 77 = 23 every second. The 120 requests left by the slowdown are
+gone in about 120 ÷ 23 ≈ 5 seconds. Requests that are refused a retry fail at once with an error,
+which is the price: a few seconds of errors instead of an outage.
+
+**And the retries must be spread out.** If the server restarts and drops the whole line, 120
+callers see the failure in the same millisecond. If each waits exactly 0.1 s, all 120 retries
+arrive together, 0.1 s later: 120 attempts in one instant, more than the 100 the server finishes in
+a whole second.
+Each caller should wait a random time instead, so the retries spread over the interval.
+
+An everyday picture: a customer care line with one agent. Callers who wait on hold longer than a
+minute hang up and call again. If the phone system kept every abandoned call in the hold queue, the
+agent would spend the day picking up calls where nobody is on the line, while the real callers keep
+hanging up and redialling. The picture stops working in one place: a phone system knows when a
+caller hangs up and drops the call. A server usually does not know, and that is why the wasted work
+piles up.
+
+## The building blocks
+
+Eight ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A timeout and a deadline
+
+**What it is.** A **timeout** is the longest a caller waits for one answer before it gives up.
+
+**Why it exists.** A server that never answers would otherwise hold the caller forever: its memory,
+its connection, and a user staring at a spinner.
+
+**Example.** The order service's timeout is 1 second. An answer that would arrive at 1.2 seconds
+arrives to nobody: the caller stopped listening at 1 second.
+
+**The technical version.** A timeout covers one attempt. A **deadline** covers the whole request,
+every attempt and every wait included: "the user gets an answer or an error within 2 seconds".
+Giving up stops the waiting, not the work. The server is not told, so it still does the work for the
+abandoned attempt (the [timeouts page](/resilience/timeouts/) covers why, and how to pass a deadline
+along).
+
+### Attempts, retries and transient failures
+
+**What it is.** An **attempt** is one try at a call. A **retry** is every attempt after the first.
+
+**Why it exists.** Many failures go away on their own within a second. A failure like that is called
+**transient**, and for a transient failure, trying again is the cheapest fix there is.
+
+**Example.** At 10:00:00.000 a call fails because the connection was closed by a server that was
+restarting. The retry, 100 ms later, reaches the restarted server and succeeds. One request, two
+attempts, one retry.
+
+**The technical version.** Typical transient failures: a timeout, a connection reset (the other side
+closed the connection in the middle of a call), `503 Service Unavailable` and `429 Too Many Requests`.
+A **permanent** failure is one a second try repeats: `400 Bad Request`, `403 Forbidden`, `404 Not
+Found`, `422` for invalid input, or a bug in your own code. Retrying those only makes the failure
+slower.
+
+### Safe to repeat
+
+**What it is.** A request is **safe to repeat**, or **idempotent**, if sending it twice has the same
+effect as sending it once.
+
+**Why it exists.** After a timeout you do not know whether the server did the work. It may have
+finished a millisecond after you gave up. A retry repeats whatever the first attempt did.
+
+**Example.** `GET /stock/42` twice reads the stock twice; nothing changes. `POST /payments` for
+₹500 twice may charge ₹500 + ₹500 = ₹1,000.
+
+**The technical version.** By the HTTP standard (RFC 9110), `GET`, `PUT` and `DELETE` are idempotent
+and `POST` is not. A `POST` becomes safe to repeat when the client sends an **idempotency key**: a
+unique ID for the operation, which the server stores so it can recognise the repeat and return the
+first result instead of doing the work again (the
+[REST API design page](/networking/rest-api-design/) covers which requests are safe and why).
+
+### A waiting line (a queue)
+
+**What it is.** A **queue** is the line of requests waiting for the server, served in the order they
+arrived.
+
+**Why it exists.** The server can work on a fixed number of requests at once. A request that arrives
+while it is busy either is refused or waits; waiting is the queue.
+
+**Example.** 120 requests are waiting and the server finishes 100 a second. The newest request waits
+120 ÷ 100 = 1.2 seconds before the server starts on it.
+
+**The technical version.** Order of arrival is called **first in, first out** (FIFO). A queue can
+only shrink when requests arrive more slowly than the server finishes them, and the waiting time
+grows sharply as the server gets busier (the
+[latency vs throughput page](/foundations/latency-vs-throughput/) shows why). The server works
+through the queue whether or not each caller is still waiting.
+
+### Amplification
+
+**What it is.** **Amplification** is how many attempts the server receives for each request the
+callers wanted.
+
+**Why it exists as a measure.** It is the multiplier retries put on the server's load. A server
+sized for 70 requests a second has to survive 70 times the amplification.
+
+**Example.** The order service wants 1,000 answers. 100 of the first attempts fail and are retried
+once, and those retries succeed. The server received 1,000 + 100 = 1,100 attempts for 1,000
+requests: 1,100 ÷ 1,000 = 1.1. In the outage, every request was sent 4 times: 4,000 ÷ 1,000 = 4.
+
+**The technical version.** Amplification = attempts ÷ requests. With no retries it is exactly 1. With
+up to *N* retries per request it can reach 1 + *N*, and it does so exactly when every attempt fails.
+Part 2 works out the value in between.
+
+### Exponential backoff
+
+**What it is.** **Backoff** is a wait before each retry. **Exponential** backoff doubles the wait
+each time, up to a maximum.
+
+**Why it exists.** Retrying the instant something fails hits the same problem again: the restarting
+server is still restarting. Waiting gives it time, and doubling the wait gives more time to a problem
+that is lasting longer.
+
+**Example.** Start at 100 ms: wait 100 ms before the first retry, 200 ms before the second and 400 ms
+before the third. In total the three waits add up to 100 + 200 + 400 = 700 ms.
+
+**The technical version.** The wait before retry *k* is the **base** wait doubled *k* − 1 times,
+never more than a **cap**: wait = min(cap, base × 2<sup>*k*−1</sup>). For the third retry, *k* = 3,
+so the base is doubled twice: 100 ms × 2 × 2 = 400 ms.
+
+### Jitter
+
+**What it is.** **Jitter** is a random amount added to, or taken from, each wait.
+
+**Why it exists.** Callers that fail at the same moment and use the same formula compute the same
+wait, so they retry at the same moment and fail together again.
+
+**Example.** 120 callers fail at 10:00:06.000. With waits of exactly 100 ms, all 120 retries land at
+10:00:06.100, in the same millisecond. With a random wait anywhere between 0 and 100 ms, they arrive
+spread over those 100 ms: 120 ÷ 100 = about 1.2 retries per millisecond.
+
+**The technical version.** The most common form is **full jitter**: wait a random time between 0 and
+the exponential wait *d*, written random(0, *d*). Part 2 compares it with the other forms.
+
+### A retry budget
+
+**What it is.** A **retry budget** is a limit on retries as a share of normal traffic, for example
+"retries may add at most 10%".
+
+**Why it exists.** Backoff and jitter decide *when* retries are sent. Neither changes *how many* are
+sent. A budget does.
+
+**Example.** The order service sends 70 new requests a second. A 10% budget allows 70 × 0.1 = 7
+retries a second, however many attempts fail. On a normal day it needs fewer than that, so every
+retry is sent; in the outage, 7 retries a second are sent and the rest of the failed requests fail
+at once.
+
+**The technical version.** The usual way to build one is a **token bucket**. A **token** is
+permission to send one retry; the bucket holds a limited number of them. Every new request adds 0.1
+token, every retry spends 1, and a retry that finds no whole token is not sent. 70 new requests a
+second add 70 × 0.1 = 7 tokens a second, which pays for 7 retries a second.
+
+:::tip[If you stop here]
+- Retrying fixes **transient** failures, but only retry requests that are safe to repeat, and only
+  errors a second try can fix.
+- Each retry is extra load on the server. When the server struggles, every caller retries at once,
+  and the extra load can hold it down after the original problem is gone.
+- **Exponential backoff** (wait 100, 200, 400 ms) gives a server time to recover, and **jitter**
+  (make each wait random) stops callers that failed together from retrying together.
+- Neither of them reduces how many retries are sent. A **retry budget** does: retries may add at most
+  a fixed share, such as 10%, to normal traffic.
+:::
+
+## Going deeper
+
+Part 1's stock server stayed down because each request was sent four times. The callers in that
+story are what most guides recommend, and the obvious repair, exponential backoff with jitter, did
+not save it. Why does waiting longer between retries not reduce the load? A retry policy adds 11% to
+the load when 10% of attempts fail, and 300% when all of them fail: why is the extra load largest
+exactly when the server can least take it? And what decides whether a slowdown heals itself or tips
+the server into a state it cannot leave on its own?
+
+The answers rest on one distinction, about where requests come from.
+
+**What it is.** In a **closed system**, a fixed set of clients each sends its next request only
+after its previous one has finished. In an **open system**, new requests arrive from outside,
+whatever is happening to the earlier ones.
+
+**Why it matters.** In a closed system, a client that waits sends nothing during its wait, so
+waiting removes load. In an open system, a client that waits removes only its own retry; the new
+requests keep coming.
+
+**Example.** Ten batch workers emptying a table of jobs form a closed system: if a worker waits 2 s
+before a retry, it sends nothing else for those 2 s. The order service is an open system: while one
+request waits 2 s before its retry, 70 × 2 = 140 new requests arrive from people placing orders.
+
+**The precise version.** Most services you call from a web backend are open systems: their load
+comes from users or from other services under their own traffic. Every load-related claim on this
+page assumes an open system unless it says otherwise, and that is why backoff alone fails in Part 1.
 
 ## The obvious fix, and why it breaks
 
@@ -76,70 +292,69 @@ for attempt in range(4):
 It has three faults, and each fails in a different way.
 
 1. **It retries everything.** A `422` or a bug in your own code gets four tries and fails four
-   times, slower. A `POST /payments` that timed out may charge twice
-   (the [REST API design page](/networking/rest-api-design/) covers which requests are safe to
-   repeat, and why).
+   times, slower. A `POST /payments` that timed out may charge twice.
 2. **It retries at once.** If the server dropped a connection because it restarted, the retry
-   lands before the new process is listening. And every client that failed at the same moment
+   lands before the new copy of the server is ready. And every client that failed at the same moment
    retries at the same moment.
 3. **Nothing limits the total.** Each request can cost four attempts, and the loop does not care
-   how long they take: three attempts with a 2 s timeout each take 6 s, perhaps after the caller
-   has stopped waiting (the [timeouts page](/resilience/timeouts/) covers deadlines).
+   how long they take. Four attempts with a 2 s timeout each take 4 × 2 = 8 s, perhaps long after
+   the caller stopped waiting.
 
 **"Then add exponential backoff."** Waiting 100 ms, 200 ms, 400 ms between tries fixes the second
-fault for one client and helps a dependency that is restarting. It does not fix the third. Each
-request still sends up to four attempts; backoff only moves them later. In the opening question the
-clients used backoff, and the server stayed down. Marc Brooker's 2022 analysis of backoff makes the
-same point: with an unbounded population of clients, per-request backoff barely changes how much
-retries amplify a long overload, because new clients keep arriving and do not know the others are
-waiting.
+fault for one client, and it helps a **dependency** (any service your code calls) that is
+restarting. It does not fix the third. Each
+request still sends up to four attempts; backoff only moves them later. Marc Brooker's 2022 analysis
+of backoff makes the same point: when the number of clients has no limit, as in an open system,
+per-request backoff barely changes how much retries amplify a long overload, because new clients
+keep arriving and do not know the others are waiting.
 
-Retries sit next to five ideas they get confused with. **Idempotency keys** make a repeated write
-safe; they decide *whether* you may retry, not how much. A **circuit breaker** stops calling a
-dependency that keeps failing, first tries included. **Rate limiting** caps what one client may
-send. **Load shedding** is the server refusing work it cannot finish in time. And **hedging**,
-covered below, sends a second copy for speed rather than after a failure.
+Retries sit next to five ideas they get confused with:
 
-## The core idea
+- **Idempotency keys** (from Part 1) make a repeated write safe. They decide *whether* you may retry,
+  not how much.
+- A **circuit breaker** is a switch in the client that stops calling a dependency that keeps failing,
+  first attempts included, for a while, and then tests whether it has recovered.
+- **Rate limiting** is a server capping how many requests one client may send per second.
+- **Load shedding** is a server refusing work it cannot finish in time, so that it can finish the
+  rest.
+- **Hedging**, covered below, sends a second copy of a request for speed, before any failure.
 
-A retry is extra load you borrow on the hope that the failure is brief. Decide three things
-separately. **Whether**: only failures a second attempt can fix, only requests that are safe to
-repeat, and only while the caller's deadline leaves time for another answer. **How much**: cap the
-extra load at a share of normal traffic with a retry budget, so that retries help when a few
+So a retry policy has to decide three things, separately. **Whether**: only failures a second
+attempt can fix, only requests that are safe to repeat, and only while the deadline leaves time for
+another answer. **How much**: cap the extra load with a retry budget, so retries help when a few
 attempts fail and stop when most fail. **When**: back off and add jitter, so that clients that
-failed together do not retry together.
-
-Backoff answers "when". Most retry storms come from a policy that only answered "when".
-
-The diagram shows why a storm outlives the slowdown that started it.
-
-<Figure caption="The trigger starts the overload but is not part of the loop: once retries fill the queue with work nobody waits for, the server stays overloaded at full speed. A retry budget cuts the loop at the arrow from failure to retry; backoff leaves the arrow in place and moves the retries later.">
-  <Overview />
-</Figure>
-
-The loop has no step that depends on the trigger. That is the property the rest of the page is
-about: what feeds the loop, and which mechanism breaks it.
+failed together do not retry together. Most retry storms come from a policy that only answered
+"when".
 
 ## How it works, piece by piece
 
 ### Which failures to retry
 
-Every retry policy starts with a yes or no for each failure. Three questions decide it.
+Every retry policy starts with a yes or no for each failure. Part 1 gave two of the three questions:
+could a second attempt succeed, and is the request safe to repeat? The dangerous case is the
+ambiguous failure. A timeout tells you nothing about whether the server did the work, so a timed-out
+`POST` without an idempotency key must not be retried.
 
-**Could a second attempt succeed?** Timeouts, reset connections, `503`, `429` and `502` from a
-proxy usually describe the moment, not the request. `400`, `401`, `403`, `404` and `422` describe the
-request; repeating it repeats the mistake.
+The third question is the one libraries answer for you: **did the request reach the application at
+all?** If it never did, repeating it is always safe. To see how a library can tell, take gRPC as the
+example.
 
-**Is it safe to repeat?** `GET`, `PUT` and `DELETE` are idempotent by definition (RFC 9110);
-`POST` is not, unless the server stores an idempotency key. The dangerous case is the ambiguous
-failure: a timeout tells you nothing about whether the server did the work.
+**gRPC** is a framework for calls between services, made by Google. It sends each call as a stream
+inside an HTTP/2 connection. HTTP/2 is the version of HTTP that carries many requests, called
+**streams**, over one connection at the same time.
 
-**Did the request reach the application at all?** This is the case libraries retry on their own.
-gRPC retries a call that never left the client, and once, immediately, a call that reached the
-server's HTTP/2 layer but was refused before the application saw it (`REFUSED_STREAM`, or a
-`GOAWAY` naming an earlier stream). These **transparent retries** do not count against your retry
-policy. And gRPC stops retrying at the **commit point**: once response headers arrive, the server
-has started answering, and the call will not be sent again.
+gRPC knows three stages of a call, and treats each differently:
+
+- **The call never left the client.** gRPC retries it on its own, as often as the deadline allows.
+- **The call reached the server's HTTP/2 layer but not the application.** The server's networking
+  code refused it before any of the service's code ran: it reset the stream with `REFUSED_STREAM`,
+  or it was closing the connection and said so with a `GOAWAY` message naming the last stream it
+  would handle. gRPC retries this once, at once.
+- **The server has started answering.** Once the response headers arrive, gRPC will not send the
+  call again, whatever your policy says. gRPC calls this the **commit point**.
+
+The first two are **transparent retries**: they do not count against your retry policy, because they
+cannot cause the work to happen twice.
 
 | Failure | Retry? | Why |
 |---|---|---|
@@ -150,207 +365,305 @@ has started answering, and the call will not be sent again.
 | `400`, `401`, `403`, `404`, `422` | no | the same request fails the same way |
 | Your own `TypeError`, a bug | no | retrying a bug only delays the error |
 
-AWS's SDKs make this list concrete. Their standard mode retries `500`, `502`, `503` and `504`,
-connection errors, two timeout error codes and fourteen throttling codes, from `Throttling` and
-`TooManyRequestsException` to S3's `SlowDown`, and nothing else
-([aws-sdk-go-v2 source](https://github.com/aws/aws-sdk-go-v2/blob/main/aws/retry/standard.go), November 2026).
+`502 Bad Gateway` and `504 Gateway Timeout` come from a proxy in front of the server, a program that
+forwards requests: they say the proxy could not get an answer, not that the request was wrong.
+
+AWS's **SDKs**, the libraries AWS ships for calling its services from each language, make this list
+concrete. Their standard mode retries `500`, `502`, `503` and `504`, connection errors, two timeout
+error codes and fourteen **throttling** codes (errors meaning "you are sending faster than your
+limit"), from `Throttling` and `TooManyRequestsException` to `SlowDown` from S3, AWS's file
+storage, and nothing else ([aws-sdk-go-v2 source](https://github.com/aws/aws-sdk-go-v2/blob/main/aws/retry/standard.go), November 2026).
 
 ### How retries multiply load
 
-Start with one request and a server where each attempt fails with probability *p*, independently.
-The first attempt always goes out. The second goes out only if the first failed, with
-probability *p*; the third if the first two failed, *p*², and so on. With up to *N* retries, the
-expected attempts per request are
+Part 1 gave amplification two values: about 1.1 on a good day, 4 in an outage. Here is the value in
+between, worked out first with numbers.
+
+Take the stock service again, allow 3 retries, and suppose 10% of attempts fail, each one
+independently of the others. Follow 1,000 requests:
+
+1. All 1,000 send a first attempt.
+2. 10% of those fail: 1,000 × 0.1 = 100 send a second attempt.
+3. 10% of those fail: 100 × 0.1 = 10 send a third.
+4. 10% of those fail: 10 × 0.1 = 1 sends a fourth.
+5. In total: 1,000 + 100 + 10 + 1 = 1,111 attempts, so 1,111 ÷ 1,000 = 1.111 attempts per request.
+
+Retries add 11% to the load, and almost every request succeeds. The same steps at 50% failing give
+1,000 + 500 + 250 + 125 = 1,875 attempts: 1.875 per request. When every attempt fails, every request
+sends all four: 4.
+
+Written as a formula, with *p* the share of attempts that fail and *N* the number of retries: each
+step multiplies the previous count by *p*, so the attempts per request are
 
 1 + *p* + *p*² + … + *p*ᴺ
 
-With 3 retries and 10% of attempts failing, that is 1 + 0.1 + 0.01 + 0.001 = 1.11: retries add 11%
-to the load, and almost every request succeeds. At 50% failing it is 1.875. When every attempt
-fails, it is 4. The extra load is smallest when the server is healthy and largest when it is
-failing, which is the opposite of what a struggling server needs.
+where *p*² means *p* × *p*. With *p* = 0.1 and *N* = 3: 1 + 0.1 + 0.01 + 0.001 = 1.111, the number
+from the steps above. The extra load is smallest when the server is healthy and largest when it is
+failing: the opposite of what a struggling server needs.
 
-<Figure caption="Retries add little load while few attempts fail and the most load when all fail: with 3 retries, a full outage quadruples the attempts. A 10% retry budget follows the same curve while failures are rare, then stays at 1.1× however bad the failure gets.">
+The figure plots this for 1, 2 and 3 retries. Look at how flat each curve is on the left and how
+steeply it climbs on the right.
+
+<Figure caption="Attempts per request against the share of attempts that fail. With 3 retries, a server failing 10% of attempts gets 1.11 times its normal load, and a full outage gets 4 times. A 10% retry budget follows the same curve while failures are rare, then stays at 1.1 however bad the failure gets.">
   <Amplification />
 </Figure>
 
-The curve assumes failures are independent. Overload makes them depend on the load itself:
-more attempts mean a longer queue, which means more timeouts, which means more attempts. That
-feedback is what the sim below lets you see. It is an open system: new requests keep arriving at
-the same rate, one server completes 100 attempts a second from a first-in, first-out queue, and
-clients give up on an attempt after 1 s. A client that gives up does not remove its attempt from
-the queue, because the server does not know; when the server reaches it, the work is wasted.
+So retries cost almost nothing while failures are rare, and multiply the load once failures are
+common. The budget line is the same curve with a ceiling on it.
+
+The curve assumes failures are independent. Overload makes them depend on the load itself: more
+attempts mean a longer queue, a longer queue means more timeouts, and more timeouts mean more
+attempts. The simulation below lets you watch that feedback.
+
+It runs Part 1's setup as an open system. New requests arrive at a steady rate; one server completes
+100 attempts a second from a first-in, first-out queue; clients give up on an attempt after 1 s. The
+abandoned attempt stays in the queue, and when the server reaches it, the work is wasted. At 5 s the
+server drops to half speed for the trigger length you choose. Change the policy, the load or the
+trigger length, press Reset, and watch whether the server recovers when the trigger ends.
 
 <StormSim />
 
-What the sim shows has a name. A **metastable failure** (Bronson and others, HotOS 2021) is a bad
-state that persists after its trigger is gone, held in place by a **sustaining effect**, here the
-retries. A system can run for months in a **vulnerable** state, healthy but with too little headroom
-to absorb its own retries, and nothing looks wrong until a trigger arrives.
+What the sim shows has a name.
 
-The arithmetic of the defaults shows where the line is. Normal load is 70 requests a second. Once
-the queue wait passes 1 s, every attempt times out, and 3 retries make it 4 × 70 = 280 attempts a
-second against a server that completes 100. The queue can only grow, so every answer keeps arriving
-late, and the state holds itself. The trigger matters only for whether the queue wait crosses 1 s.
-At half speed the queue grows by 20 attempts a second; a 2 s trigger leaves 40 queued, a wait of
-0.4 s at full speed, and it drains. A 6 s trigger leaves the wait past 1 s, and the retries take it
-from there. A system is safe from this when its load times its maximum amplification stays below
-capacity: 70 × 1.1 = 77 is, and 70 × 4 = 280 is not.
+**What it is.** A **metastable failure** is a bad state that a system stays in after the event that
+pushed it there has gone.
+
+**Why the name matters.** It tells you where to look. The cause you can see, the slowdown, is over.
+What keeps the system down is something the bad state itself produces, here the retries, and fixing
+the cause does nothing.
+
+**Example.** The stock server in Part 1. The rollout ended after 6 seconds, and the server ran at
+full speed afterwards, yet it answered nobody in time, because 280 attempts a second kept the queue
+wait above 1 second.
+
+**The precise version.** Bronson and others (HotOS 2021) describe three states. A **stable** system
+absorbs a bad moment and recovers. A **vulnerable** system is healthy, but has too little spare
+capacity to absorb its own retries; it can run like that for months with nothing looking wrong. A
+**trigger** (a slowdown, a **deploy** of new code, a sudden jump in traffic) pushes a vulnerable system into the **metastable** state,
+and a **sustaining effect**, here the retries, keeps it there after the trigger has gone.
+
+The stock server's numbers show exactly where the line between vulnerable and stable lies. A system
+is safe from this loop when its normal load times its largest possible amplification stays below
+its capacity:
+
+- With 3 retries and no budget: 70 × 4 = 280 attempts a second, above 100. Vulnerable.
+- With a 10% budget: 70 × 1.1 = 77 attempts a second, below 100. Stable.
+
+A vulnerable system tips over when the trigger pushes the queue wait past the clients' timeout. With
+the stock server, a 1 s wait at full speed means 1 × 100 = 100 attempts in the queue. At half speed,
+the queue grows by 70 − 50 = 20 a second, so it reaches 100 after 100 ÷ 20 = 5 seconds. Any slowdown
+of about 5 seconds or more tips it; shorter ones heal. The sim agrees: at the defaults, a 4 s trigger
+recovers and a 5 s one does not.
+
+The same arithmetic shows why spare capacity matters. At 50% load, the half-speed server still
+finishes 50 a second, as many as arrive, so the queue does not grow at all, and in the sim even a
+10 s trigger heals. At 80% load, the queue grows by 80 − 50 = 30 a second and reaches 100 after
+100 ÷ 30 ≈ 3.3 seconds.
+
+The figure below draws the loop that keeps the system down.
+
+<Figure caption="The trigger starts the overload but is not part of the loop: once retries fill the queue with work nobody waits for, the server stays overloaded at full speed. A retry budget cuts the loop at the arrow from failure to retry; backoff leaves the arrow in place and moves the retries later.">
+  <Overview />
+</Figure>
+
+The loop has no step that depends on the trigger, so ending the trigger cannot end the loop. Getting
+out needs the load to fall below capacity: fewer retries, load shed at the server, or more capacity.
 
 This is not a thought experiment. Huang and others studied 22 metastable failures at 11
 organisations (OSDI 2022) and found the retry policy was the sustaining effect in more than half of
-them; at least 4 of 15 major AWS outages in a decade were metastable. Getting out of the state
-needs the load to fall below capacity: fewer retries, load shed at the server, or more capacity.
-Waiting for the trigger to pass does nothing, because it already has.
+them; at least 4 of 15 major AWS outages in a decade were metastable.
 
-This page owns the arithmetic for one caller. When several layers each retry, the numbers
-multiply, 3 × 3 = 9 executions for two layers; the
-[proxy, load balancer and gateway page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs)
+This page owns the arithmetic for one caller. When several layers each retry, the numbers multiply:
+a caller that tries 3 times, around a library that also tries 3 times, makes 3 × 3 = 9 attempts.
+The [proxy, load balancer and gateway page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs)
 covers that case and why only one layer should retry.
 
 ### Exponential backoff: what it is for
 
-**Backoff** is the wait between attempts. **Exponential** backoff doubles it each time, from a
-base, up to a cap. With a base of 100 ms, a multiplier of 2 and a cap of 2 s, the waits are 100,
-200, 400, 800 ms, 1.6 s, then 2 s for every retry after that. The cap matters because without it the
-seventh wait is 6.4 s and the tenth 51 s, long after anyone wants the answer.
+Part 1 gave the doubling. The **cap** matters because doubling grows fast. With a base of 100 ms and
+no cap, the seventh wait is 100 ms doubled six times: 100 → 200 → 400 → 800 → 1,600 → 3,200 → 6,400
+ms, or 6.4 s. The tenth wait, doubled three more times, is 51,200 ms, about 51 s, long after anyone
+wants the answer. With a cap of 2 s, the waits are 100, 200, 400, 800 ms, 1.6 s, and then 2 s for
+every retry after that.
 
-The waits add up, and they come out of the caller's deadline along with the attempts. Three
-attempts with a 500 ms per-try timeout and the waits above take up to 3 × 500 + 100 + 200 = 1.8 s
-before the last one has finished. With a 2 s deadline that fits; a fourth attempt, 400 ms later,
-would not, and a policy that checks the deadline before each wait fails at once instead of
-sending an attempt whose answer nobody will read. Envoy does this by design: the route timeout
-includes all retries, so a request with 3 s that spends 2.7 s on its first try has 0.3 s left
-for every retry and wait together.
+The waits come out of the caller's deadline, along with the attempts themselves. Take a 2 s deadline,
+a 500 ms timeout per attempt, and the waits above:
+
+1. Three attempts can take 3 × 500 ms = 1,500 ms.
+2. The two waits between them take up to 100 + 200 = 300 ms.
+3. Together that is up to 1,500 + 300 = 1,800 ms, or 1.8 s: inside the 2 s deadline.
+4. A fourth attempt would add a wait of up to 400 ms and another 500 ms attempt: up to 1,800 + 400 +
+   500 = 2,700 ms, past the deadline.
+
+A policy that checks the deadline before each wait fails at once in that case, instead of sending an
+attempt whose answer nobody will read.
+
+**Envoy** works this way by design. Envoy is a **proxy**: a program that runs next to your services
+and forwards their requests, applying rules such as retries along the way. Its **route timeout**, the
+time limit for one request through Envoy, includes all retries. A request with a 3 s route timeout that
+spends 2.7 s on its first try has 3 − 2.7 = 0.3 s left for every retry and wait together.
 
 What backoff buys:
 
-- **Time for a dependency to come back.** A restarting process, a leader election, a cold cache: a
-  retry 100 ms later fails, a retry 1.6 s later succeeds.
+- **Time for a dependency to come back.** A restarting server, or a **cache** (a store of recent
+  answers kept in memory) that is empty after a restart and has to fill again: a retry 100 ms later
+  fails, a retry 1.6 s later succeeds.
 - **Less load in a closed system.** A batch worker that waits sends nothing meanwhile.
-- **Smaller bursts.** Retries spread over seconds instead of arriving in the same tick.
+- **Smaller bursts.** Retries spread over seconds instead of arriving in the same instant.
 
-What it does not buy, in an open system: fewer attempts. Each request still sends 1 + *N* attempts
-during an outage; backoff delays the 4× by a second or two. The sim showed the result: backoff
-moved the tipping point a little, not the outcome. Brooker's 2022 conclusion is the one to keep:
-backoff is a good idea for short spikes and does not reduce the total work or the amplification of
-retries. Something else has to do that.
+What it does not buy, in an open system: fewer attempts. During an outage each request still sends
+1 + *N* attempts; backoff delays the 4× by a second or two. In the sim at 70% load, "retry at once"
+tips over with a 4 s trigger, and backoff with jitter with a 5 s trigger: one second later, the
+same outcome. With no retries at all, even a 10 s trigger heals. Brooker's 2022 conclusion is the
+one to keep: backoff is a good idea for short spikes and does not reduce the total work or the
+amplification of retries. Something else has to do that.
 
 ### Jitter: why clients that fail together retry together
 
-**Jitter** is randomness added to each wait. It exists because failures are correlated in time.
-When a deploy resets 600 connections, all 600 clients see the error in the same millisecond. With
-the same backoff formula and no randomness, they compute the same wait, 500 ms, and send 600
-retries in the same millisecond. The server takes 60 of them; the other 540 fail together, wait
-together and return together. The clients stay synchronised for as long as they keep retrying.
+Failures are shared in time. When a deploy closes 600 connections, all 600 clients see the error in
+the same millisecond. With the same backoff formula and no randomness, they compute the same wait,
+say 500 ms, and send 600 retries in the same millisecond. Suppose the server can take 60 of them. The
+other 600 − 60 = 540 fail together, wait together and return together. The clients stay in step for
+as long as they keep retrying.
 
-The common jitter formulas, for a wait *d* = min(cap, base × 2ᵏ⁻¹) before retry *k*. For the third
-retry with a 100 ms base, *d* = 400 ms:
+There are several ways to add randomness. In the table, *d* is the capped exponential wait from Part
+1, before any randomness: *d* = min(cap, base × 2<sup>*k*−1</sup>) before retry *k*. For the third
+retry with a 100 ms base, *d* = 100 × 2 × 2 = 400 ms. **random(a, b)** means a number picked at
+random between a and b, each value equally likely.
 
 | Variant | Wait before retry *k* | Third retry, *d* = 400 ms | Who uses it |
 |---|---|---|---|
 | None | *d* | exactly 400 ms | urllib3 (jitter is off by default) |
-| ±20% | *d* × random(0.8, 1.2) | 320–480 ms | gRPC |
-| Equal | *d*/2 + random(0, *d*/2) | 200–400 ms | |
-| Full | random(0, *d*) | 0–400 ms | AWS SDKs, Envoy |
+| ±20% | *d* × random(0.8, 1.2) | 400 × 0.8 = 320 to 400 × 1.2 = 480 ms | gRPC |
+| Equal | *d* ÷ 2 + random(0, *d* ÷ 2) | 200 + (0 to 200) = 200 to 400 ms | |
+| Full | random(0, *d*) | 0 to 400 ms | AWS SDKs, Envoy |
 | Decorrelated | drawn from a range set by the *previous* wait | varies | Polly (.NET), when jitter is on |
 
-The diagram runs the deploy example: 600 clients fail at once against a server that completes 60
-attempts per 100 ms, and retry with a 500 ms base, up to 6 times. Look at the width of each burst.
+urllib3 is a Python HTTP library (the one `requests` is built on); Polly is a library for retries and
+similar policies in .NET.
 
-<Figure caption="With no jitter, the 540 clients that fail together retry together, and each burst is as large as the last: after 8.5 s only half have succeeded. Full jitter spreads the first retries over half a second, close to what the server can take, and every client is done by 2.5 s with 40% fewer attempts.">
+The diagram runs the deploy example with three of these variants: none, ±20% and full. 600 clients fail at once against a
+server that completes 60 attempts in each 100 ms, which is 60 × 10 = 600 a second. They retry with a
+500 ms base, up to 6 times. Each bar is how many attempts arrive in one 100 ms slot; look at how tall
+and how wide each burst is.
+
+<Figure caption="With no jitter, the 540 clients that fail together retry together, and each burst is as large as the last: after 8.5 s only 300 of the 600 have succeeded. Full jitter spreads the first retries over half a second, and every client is done by 2.5 s with 1,435 attempts instead of 2,400.">
   <Jitter />
 </Figure>
 
-Full jitter wins here because it spreads each round of retries over the whole interval, from 0 to
-*d*, instead of a narrow band around *d*. The ±20% that gRPC uses breaks the exact synchronisation
-but leaves each round of retries in a band only 0.4 *d* wide, so the server still sees humps.
-Full jitter's one cost is that some waits are close to zero; that is what the cap and the
-budget are for.
+Full jitter needed 2,400 − 1,435 = 965 fewer attempts than no jitter, and 965 ÷ 2,400 ≈ 0.4: 40%
+fewer. It wins because it spreads each round of retries over the whole interval, from 0 to *d*. The
+540 first retries land across five 100 ms slots, about 540 ÷ 5 = 108 per slot, instead of all 540 in
+one. The ±20% that gRPC uses stops the clients from matching to the millisecond, but leaves each round in a band only
+480 − 320 = 160 ms wide when *d* is 400 ms, so the server still sees humps. Full jitter's one cost is
+that some waits are close to zero; the cap and the budget handle that.
 
-Jitter is not only for retries. Anything that many machines schedule with the same timer
-synchronises the same way: cache entries written together that expire together, cron jobs at
-`0 * * * *`, connection lifetimes. The [load balancing page](/traffic/load-balancing/) shows gRPC adding ±10% to
-connection ages for exactly this reason.
+Jitter is not only for retries. Anything that many machines schedule with the same timer falls into
+step the same way: cache entries written together that expire together, scheduled jobs that all run
+at the top of the hour, connections that are all closed after the same lifetime. The
+[load balancing page](/traffic/load-balancing/) shows gRPC adding ±10% to connection lifetimes for
+exactly this reason.
 
 ### Retry budgets: capping the extra load
 
-Backoff and jitter shape *when*. A **retry budget** limits *how many*: retries may add at most a
-fixed share to normal traffic, for example 10%, however many attempts fail.
+Part 1 built the budget as a token bucket. The bucket also has a size, and the size decides how many
+retries can go out in a burst before the ratio takes over.
 
-The usual way to build one is a token bucket. A **token** is permission to send one retry. A
-**bucket** holds a limited number of tokens. Two rules:
+A small example: a bucket that holds at most 10 tokens and starts full.
 
-- Every new request (a first attempt) adds a fraction of a token, say 0.1, up to the bucket's size.
-- Every retry spends one whole token. A retry that finds less than one token is not sent; the
-  request fails at once with the error it already has.
+1. Twenty new requests each add 0.1 token: 20 × 0.1 = 2 tokens. The bucket is already at its cap of
+   10, so it stays at 10.
+2. Three of them fail and retry: 10 − 3 = 7 tokens left.
+3. Now every request starts failing. The 7 tokens pay for 7 retries in a burst.
+4. After that, every 10 new requests earn 10 × 0.1 = 1 token: one retry.
 
-Tiny example: a bucket that holds 10 tokens and starts full. Twenty new requests add 2 tokens; the
-bucket is still at its cap of 10. Three of them fail and retry: 7 left. If every request starts
-failing, the 10 tokens pay for 10 retries in a burst, and after that each 10 new requests earn one
-retry. The ratio of 0.1 means retries can never be more than about 10% of first attempts for long.
+The ratio of 0.1 means retries cannot stay above about 10% of first attempts for long. The size of
+the bucket only decides how big the first burst can be.
+
+The figure shows two days for a client sending 100 new requests a second with up to 3 retries per
+request. The bucket earns 100 × 0.1 = 10 tokens a second either way.
 
 <Figure caption="On a normal day the bucket earns more than retries spend, stays full, and every retry is sent. In an outage, 3 retries per request would mean 300 retries a second; the budget lets 10 through, and the other requests fail at once without adding load.">
   <Budget />
 </Figure>
 
-That is the property the sim showed: with a budget, amplification is bounded at about 1.1
-whatever happens, so a server at 70% load can absorb its own retries, and the queue drains when
-the trigger ends. The cost is visible too. In our example run, a dependency failing 20% of
-attempts has 99.84% of requests succeed with 3 retries and no budget, and 87.58% with a 10% budget,
-because the clients wanted 26% extra attempts and the budget allowed 10%. A budget trades some
-success during a brownout for survival during an outage, which is why its ratio is a choice and
-not a constant.
+On the good day, 5% of 100 = 5 retries a second are wanted and 10 tokens a second are earned, so the
+bucket stays full. In the outage, 100 × 3 = 300 retries a second are wanted and 10 are sent. With a
+budget, amplification stays at about 1.1 whatever happens, so the stock server at 70% load can absorb
+its own retries, and its queue drains when the trigger ends.
+
+The cost is real, and the runnable example in "Build it yourself" measures it. Against a dependency
+failing 20% of attempts:
+
+- **With 3 retries and no budget, 99.84% of requests succeed.** A request fails only if all four of
+  its attempts fail: 0.2 × 0.2 × 0.2 × 0.2 = 0.0016, which is 0.16%. And 100% − 0.16% = 99.84%.
+- **The clients wanted 26% extra attempts.** The run measured 1.26 attempts per request: 1 first
+  attempt plus 0.26 retries, so retries wanted to add 26% to the load.
+- **With a 10% budget, 87.58% succeed.** The budget allowed 10% extra instead of 26%, so some requests
+  that a retry would have saved failed instead.
+
+A budget trades some success during a **brownout**, a partial failure where a service is slow or
+failing some requests but not down, for survival during an outage. That is why its ratio is a choice
+and not a constant.
 
 Real budgets, as of November 2026:
 
 - **gRPC retry throttling** keeps a count per server name that starts at `maxTokens`. Every failed
   call subtracts 1, every successful call adds `tokenRatio`, and retries stop while the count is at
   or below half of `maxTokens`. With the documented example, 10 and 0.1, the count holds steady when
-  0.1 × (1 − *f*) = *f*, a failure rate *f* of about 9.1%. Above that, the count falls to 5 and
-  retries stop until successes refill it.
+  successes add as much as failures take away. With a share *f* of calls failing, that is
+  0.1 × (1 − *f*) = *f*. Multiply out the left side: 0.1 − 0.1*f* = *f*. Add 0.1*f* to both sides:
+  0.1 = 1.1*f*. Divide by 1.1: *f* = 0.1 ÷ 1.1 ≈ 0.091, a failure rate of about 9.1%. Above that,
+  the count falls to 10 ÷ 2 = 5, and retries stop until successes refill it.
 - **AWS SDKs** (standard mode) give each client a 500-token quota. A retry costs 5 tokens, a retry
-  after a timeout 10, and a first attempt that succeeds adds 1. That is 100 retries in a burst, then
-  about one retry per 5 successful requests.
-- **Envoy** limits concurrent retries per upstream cluster: by default 3 at a time (`max_retries`
-  in the circuit breaker settings); with a `retry_budget`, 20% of active and pending requests, never
-  fewer than 3.
-- **Finagle** allows by default about 20% of requests to be retried, on top of 10 retries a
-  second so that a new or quiet client can still retry at all.
+  after a timeout 10, and a first attempt that succeeds adds 1. A full quota pays for 500 ÷ 5 = 100
+  retries in a burst. After that, it takes 5 successful requests, adding 1 token each, to pay for one
+  more retry.
+- **Envoy** limits retries in progress at the same time, per **upstream cluster** (the group of
+  servers it forwards one service's requests to). By default at most 3 retries are in progress at
+  once (`max_retries`, in the settings Envoy calls circuit breakers). With a `retry_budget`, retries
+  in progress may be at most 20% of the active and waiting requests, but never fewer than 3.
+- **Finagle**, Twitter's library for calls between services on the Java platform, allows by default
+  about 20% of requests to be retried, on top of 10 retries a second so that a new or quiet client
+  can still retry at all.
 
-The minimum matters more than it looks. A pure ratio gives a client that sends 2 requests a minute
-no retries at all, so budgets add a floor: Finagle's 10 a second, Envoy's 3 concurrent, a bucket
-that starts full.
+The floor matters more than it looks. A pure 10% ratio gives a client that sends 2 requests a minute
+2 × 0.1 = 0.2 tokens a minute, so it needs 1 ÷ 0.2 = 5 minutes to earn one retry. So budgets add a floor: Finagle's
+10 a second, Envoy's 3 at once, a bucket that starts full.
 
 :::caution[A budget per process is a budget per process]
-The bucket lives in each client process. A fleet of 2,000 serverless instances, each with a fresh
-SDK client and a full 500-token quota, can send 2,000 × 100 retries before any bucket runs dry.
-Brooker's 2022 comparison found the same: a token bucket that starts full, in short-lived
-clients, behaves almost like plain N retries. Keep clients alive across requests, share one per
-process, and give short-lived workers small buckets.
+The bucket lives in each client process, each running copy of the client program. **Serverless
+functions**, code that the cloud starts on demand in short-lived copies, often create a fresh SDK
+client per run. A fleet of 2,000 such copies,
+each with a full 500-token quota, can send 2,000 × 100 = 200,000 retries before any bucket runs dry.
+Brooker's 2022 comparison found the same: a token bucket that starts full, in short-lived clients,
+behaves almost like plain *N* retries. Keep clients alive across requests, share one per process,
+and give short-lived workers small buckets.
 :::
 
 A circuit breaker is the other way to stop retrying a failing dependency: it watches the failure
 rate and stops all calls, first attempts included, for a while. A budget only removes retries, so
-first attempts keep probing the dependency and recovery is seen at once. The
-circuit breakers page, later in this track, covers when you want the stronger tool.
+first attempts keep testing the dependency and its recovery is seen at once. The circuit breakers
+page, later in this track, covers when you want the stronger tool.
 
 ### Listening to the server
 
 The server knows things the client does not: whether it is overloaded, when a limit resets, and
-whether the request can ever succeed. Three ways to say it:
+whether the request can ever succeed. There are three common ways for it to say so:
 
-- **`Retry-After`** on a `429` or `503`, as seconds or a date. A client waits at least that long,
-  plus jitter, so that clients told the same time do not return in the same second (the
+- **`Retry-After`** on a `429` or `503`, as a number of seconds or a date. A client waits at least
+  that long, plus jitter, so that clients told the same time do not return in the same second (the
   [rate limiting page](/resilience/rate-limiting/#429-retry-after-and-the-client-on-the-other-side)
   measures the difference). urllib3 honours it on `413`, `429` and `503` by default. Envoy can read
   `Retry-After` or `X-RateLimit-Reset` with `rate_limited_retry_back_off`.
-- **gRPC pushback**: the server sets `grpc-retry-pushback-ms` in its response metadata. A
-  non-negative value means "retry after exactly this long", and backoff resets after it; a negative
-  value means "do not retry". It is the only way a gRPC server can switch its clients' retries off
-  during an incident without a config push.
+- **gRPC pushback**: the server sets `grpc-retry-pushback-ms` in its response **metadata**, the
+  key-value pairs gRPC sends alongside a response, like HTTP headers. A value of zero or more means
+  "retry after exactly this many milliseconds", and the backoff starts again from the base after it;
+  a negative value means "do not retry". It is the only way a gRPC server can switch its clients'
+  retries off during an incident without changing every client's configuration.
 - **Throttling errors get a longer base.** In the 2026 update to the AWS SDKs, a throttling error
-  backs off from a 1 s base and other transient errors from 50 ms. A throttle means the limit will
-  still be there in 50 ms.
+  backs off from a 1 s base and other transient errors from 50 ms. A throttle means "you are over
+  your limit", and the limit will still be there in 50 ms.
 
 On the server side, the same thinking says: when you are overloaded, answer quickly with `503` and
 `Retry-After` instead of slowly with a timeout. A fast refusal costs the server microseconds; a
@@ -358,48 +671,73 @@ timeout costs it the whole request, and the client retries either way.
 
 ### Hedged requests: retrying for speed
 
-A retry waits for a failure. A **hedged request** does not: if the first attempt has not answered
-within a delay, usually around the p95 latency, the client sends a second copy to another replica
-and uses whichever answer arrives first, cancelling the other. It cuts the tail, the slowest few
-percent of calls, when slowness comes from one replica (a slow disk, a pause) rather than from the
+A retry waits for a failure. A hedged request does not wait for one; it fires when an answer is
+merely late. "Late" is measured with a percentile, so that comes first.
+
+**What it is.** The **p95 latency** is the time within which 95% of requests finish; only 5 in 100
+take longer.
+
+**Why it exists.** An average hides the slow few, and the slow few are the ones users notice.
+
+**Example.** Out of 100 reads, 95 finish within 40 ms and the other 5 take between 60 and 180 ms.
+The p95 is 40 ms. An average of all 100 can look healthy and still say nothing about the read that
+took 180 ms.
+
+**The precise version.** Sort the latencies and take the value 95% of the way up the list. The p99
+is the value 99% of the way up. The slowest few percent of requests are called the **tail**.
+
+A **hedged request** works like this: if the first attempt has not answered by a delay, usually
+around the p95, the client sends a second copy to another **replica** (a copy of the same service on
+another machine) and uses whichever answer arrives first, cancelling the other. It cuts the tail
+when the slowness comes from one replica, such as a slow disk or a program that pauses, rather than from the
 request itself.
 
-<Figure caption="The first copy waits behind a slow disk; the hedge sent at the p95 answers in 12 ms. Only requests slower than the p95 send a second copy, so the cost is about 5% more load on a normal day.">
+The figure follows one read with illustrative numbers: a p95 of 40 ms, and a first copy stuck behind
+a slow disk.
+
+<Figure caption="The first copy waits behind a slow disk; the hedge sent at the p95, 40 ms, answers 12 ms later, at 52 ms, instead of 180 ms. Only requests slower than the p95 send a second copy, so the cost is about 5% more load on a normal day.">
   <Hedging />
 </Figure>
 
-The costs follow from the mechanism. A hedge sends duplicates, so the request must be safe to run
-twice: reads, or writes with an idempotency key. On a normal day about 5% of requests send a copy.
-On a bad day, when every replica is slow, every request passes the p95 and the extra load is up to
-100%, which is why gRPC throttles hedges with the same token count as retries: once failures pass
-the threshold, only first attempts are sent. gRPC's `hedgingPolicy` sets `maxAttempts` (5 at most),
-`hedgingDelay`, and `nonFatalStatusCodes`, the errors that send the next copy at once; a method has a
-retry policy or a hedging policy, never both. Hedging is supported in gRPC's Java, .NET and Node
-implementations, not in Go or C-core, according to the gRFC.
+The costs follow from the mechanism. A hedge sends a duplicate, so the request must be safe to run
+twice: reads, or writes with an idempotency key. On a normal day only requests slower than the p95
+send a copy, which is 5% of them by the definition of the p95. On a bad day, when every replica is
+slow, every request passes the p95, every request sends a copy, and the extra load is up to 100%.
+That is why gRPC throttles hedges with the same token count as retries: once failures pass the
+threshold, only first attempts are sent.
+
+gRPC's `hedgingPolicy` sets `maxAttempts` (5 at most), `hedgingDelay`, and `nonFatalStatusCodes`,
+the errors that send the next copy at once. A method has a retry policy or a hedging policy, never
+both. Hedging is supported in gRPC's Java, .NET and Node implementations, not in Go or in C-core (the C library that gRPC's C++,
+Python and Ruby versions are built on), according to gRPC's design document.
 
 ## Choosing between them
 
-| Policy | Extra load on a normal day (5% failing) | Extra load in a full outage, 3 retries | What it fixes | Pick it when |
+The table compares the policies on the same two days: a normal day with 5% of attempts failing, and a
+full outage. On the normal day, retrying the failed 5% adds about 5%. In the outage, 3 retries per
+request means 3 extra attempts for every first attempt: 300% extra.
+
+| Policy | Extra load, normal day (5% failing) | Extra load, full outage, 3 retries | What it fixes | Pick it when |
 |---|---|---|---|---|
 | No retries | 0 | 0 | nothing | the caller (a user, a queue) will retry anyway |
-| Retry at once | 5% | 300%, in synchronised bursts | one dropped packet | never as a default |
+| Retry at once | 5% | 300%, in bursts that arrive together | one dropped packet | never as a default |
 | Exponential backoff | 5% | 300%, a little later | a dependency restarting; closed systems | always, but never alone |
 | Backoff + full jitter | 5% | 300%, spread out | clients failing together | always |
 | + retry budget | 5% | about 10% | retry storms, metastable failures | every client of a shared service |
-| Hedging | about 5% | up to 100% unless throttled | tail latency from one slow replica | idempotent reads with a long p99 |
+| Hedging | about 5% | up to 100% unless throttled | tail latency from one slow replica | safe-to-repeat reads with a long p99 |
 
-The order I would build in: classify failures and check the deadline first, because a wrong
-retry is worse than none; then full jitter on a capped exponential; then a budget sized for the
-failure rate you want to ride through, 10% to 20%. Retry at one layer, the one closest to the
-caller that still knows whether the request is safe to repeat. Add hedging only after you have
-measured a tail it would fix.
+The order I would build in: classify failures and check the deadline first, because a wrong retry is
+worse than none; then full jitter on a capped exponential; then a budget sized for the failure rate
+you want to survive, 10% to 20%. Retry at one layer: the one closest to the caller that still
+knows whether the request is safe to repeat. Add hedging only after you have measured a tail it would
+fix.
 
 ## Build it yourself
 
-The naive loop from the start of the page, and two steps beyond it: a correct retry that
-classifies errors, backs off with full jitter and respects the caller's deadline, then the same
-with a retry budget. The full files run each policy for 10,000 requests against a fake dependency;
-`sleep` moves a virtual clock, so a run takes a second.
+The naive loop from the start of Part 2, and two steps beyond it: a correct retry that classifies
+errors, backs off with full jitter and respects the caller's deadline, then the same with a retry
+budget. The full files run each policy for 10,000 requests against a fake dependency; `sleep` moves
+a pretend clock forward instead of waiting, so a run takes about a second.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -489,11 +827,21 @@ export async function callWithRetries(fn, {
   </TabItem>
 </Tabs>
 
-Two details carry most of the value. The deadline check happens *before* the wait, so a retry
-that cannot finish in time is never sent. And `Retry-After` sets a floor under the backoff rather
-than replacing it, so clients told the same time still spread out.
+Read it like this. `TransientError` marks the failures worth retrying; anything else, a permanent
+error or a bug, leaves the function on the first try. `backoff_delay` is full jitter: a random number
+between 0 and 1, times the capped exponential wait. Each time a transient error arrives, the function
+counts the retry, gives up if it has used them all, works out the wait (never shorter than the
+server's `Retry-After`), gives up if that wait would end past the deadline, asks the budget for a
+token, and only then sleeps and tries again. The `clock`, `sleep` and `rand` parameters exist so the
+example can swap in a pretend clock and a seeded random generator, which makes every run print the
+same numbers.
 
-The budget is a dozen lines. One instance per process and dependency, shared by every request:
+Two details carry most of the value. The deadline check happens *before* the wait, so a retry that
+cannot finish in time is never sent. And `Retry-After` sets a floor under the backoff rather than
+replacing it, so clients told the same time still spread out.
+
+The budget is a dozen lines: the token bucket from Part 1. One instance per process and dependency,
+shared by every request:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -536,6 +884,11 @@ export class RetryBudget {
   </TabItem>
 </Tabs>
 
+The Python version holds a **lock** (`threading.Lock`) while it changes the count. A **thread** is
+one line of work running inside a program, and a Python server often runs many at once, one per
+request it is handling. They all share one budget, and without the lock two threads could both see
+1 token and both spend it.
+
 Both languages print the same table:
 
 ```text
@@ -551,30 +904,34 @@ Both languages print the same table:
     100%  budget        0.00%              1.10
 ```
 
-Read it by column. Backoff changes nothing in the attempts column at any failure rate: it was
-never meant to. The budget changes nothing on a normal day, costs 12% of requests at 20% failing,
-and is the only policy that does not quadruple the load in an outage. The jitter numbers in the
-diagram above come from `jitter_storm.py` and `jitter-storm.mjs` in the same folder.
+Read it by column. Backoff changes nothing in the attempts column at any failure rate: it was never
+meant to. The budget changes nothing on a normal day. At 20% failing it lets
+99.84 − 87.58 = 12.26 more requests in every 100 fail. And it is the only policy that does not
+multiply the load by 4 in an outage. The jitter numbers in the diagram above come from `jitter_storm.py` and `jitter-storm.mjs`
+in the same folder.
 
 ## How real systems do it
 
-**AWS SDKs** have three retry modes. *Standard* retries up to 3 attempts with full jitter, a
-1 s base and a 20 s cap, under the 500-token quota described above. *Adaptive* adds a client-side
-rate limiter that can delay first attempts when throttled; AWS calls it experimental. *Legacy* is
-each SDK's older behaviour, with no quota, and it is still the default in some: botocore (boto3)
-uses legacy, with 5 attempts and 10 for DynamoDB, unless you set `AWS_RETRY_MODE=standard`. A 2026
-update changes standard mode: transient errors back off from 50 ms and throttling errors from
-1 s, the cap applies before the jitter, and a retry costs 14 tokens (5 after a throttle), so a full
-quota pays for about 35 retries rather than 100. As of November 2026 it is opt-in with
-`AWS_NEW_RETRIES_2026=true`; AWS's announcement (May 2026) says it becomes the default this month,
-and it moves botocore's default mode from legacy to standard. Check your SDK version before
+**AWS SDKs** have three retry modes. *Standard* makes up to 3 attempts with full jitter, a 1 s base
+and a 20 s cap, under the 500-token quota described above. *Adaptive* adds a client-side rate limiter
+that can delay first attempts when throttled; AWS calls it experimental. *Legacy* is each SDK's older
+behaviour, with no quota, and it is still the default in some. botocore, the library under boto3
+(AWS's Python SDK), uses legacy, with 5 attempts, and 10 for AWS's DynamoDB database, unless you set
+`AWS_RETRY_MODE=standard`.
+
+A 2026 update changes standard mode. Transient errors back off from 50 ms and throttling errors from
+1 s; the cap applies before the jitter; and a retry costs 14 tokens (5 after a throttle), so a full
+quota pays for 500 ÷ 14 ≈ 35 retries rather than 100. As of November 2026 it is opt-in with
+`AWS_NEW_RETRIES_2026=true`. AWS's announcement (May 2026) says it becomes the default this month,
+and that it moves botocore's default mode from legacy to standard. Check your SDK version before
 relying on either set of numbers.
 
-**gRPC** retries nothing unless the service config says so. A policy names `maxAttempts`
-(counting the first, at most 5), `initialBackoff`, `maxBackoff`, `backoffMultiplier` and the
-`retryableStatusCodes`; the deadline covers all attempts. The service config can be served by the
-service owner rather than compiled into every client, which puts the retry policy, and the
-throttling that stops it, under the control of the team that runs the server:
+**gRPC** retries nothing unless the **service config** says so: a JSON document that tells gRPC
+clients how to call a service. A retry policy names `maxAttempts` (counting the first, at most 5),
+`initialBackoff`, `maxBackoff`, `backoffMultiplier` and the `retryableStatusCodes`, and the deadline
+covers all attempts. The service config can be delivered by the team that runs the service rather
+than compiled into every client, which puts the retry policy, and the throttling that stops it, under
+the control of the people who see the server struggling:
 
 ```json
 {
@@ -592,54 +949,66 @@ throttling that stops it, under the control of the team that runs the server:
 }
 ```
 
-**Envoy** retries only when a route or virtual host has a retry policy, and then once by default
-(`num_retries`). Backoff is fully jittered from a 25 ms base: the first retry waits 0–24 ms, the
-second 0–74 ms, the third 0–174 ms, capped at 250 ms. `retry_on` names the conditions (`5xx`,
-`gateway-error`, `reset`, `connect-failure`, `retriable-4xx`, `refused-stream`, gRPC status names),
-and a host predicate such as `previous_hosts` sends the retry to a different backend from the one
-that failed, which is most of the value of a retry at a proxy. The route timeout includes every
-retry, and the cluster's retry circuit breaker or `retry_budget` caps them.
+This config allows 3 attempts (one first try and two retries), waits of about 0.1 s and 0.2 s with
+gRPC's ±20% jitter, and retries only `UNAVAILABLE`, gRPC's code for "the server cannot take the call
+right now". The `retryThrottling` part is the 9.1% budget worked out above.
+
+**Envoy** retries only when a **route** (Envoy's rule for where one kind of request goes) has a
+retry policy, and then once by default (`num_retries`). Backoff is full jitter from a 25 ms base: retry *N* waits a random time below (2<sup>*N*</sup> − 1) ×
+25 ms. For the first retry that is (2 − 1) × 25 = 25 ms, so 0–24 ms; for the second, (4 − 1) × 25 =
+75 ms, so 0–74 ms; for the third, (8 − 1) × 25 = 175 ms, so 0–174 ms. The cap is 10 times the base:
+10 × 25 = 250 ms.
+
+`retry_on` names the conditions (`5xx`, `gateway-error`, `reset`, `connect-failure`,
+`retriable-4xx`, `refused-stream`, gRPC status names). A rule such as `previous_hosts`
+sends the retry to a different server from the one that failed, which is most of the value of a retry
+at a proxy. The route timeout includes every retry, and the cluster's `max_retries` or `retry_budget`
+caps them.
 
 :::note[From the trenches]
 The useful exercise is to list every retry between your user and your database: the mobile app,
-the gateway, the service mesh sidecar, your code, the SDK, the database driver. Teams that do it
-the first time usually find three or four, each configured by a different person who assumed the
-others did not retry.
+the API gateway (the proxy at the front door of your system), the service mesh sidecar (a proxy
+such as Envoy running beside each service), your code, the SDK, the database driver (the library
+your code uses to talk to the database). Teams that do it the first time usually find three or four,
+each configured by a different person who assumed the others did not retry.
 :::
 
 ## Gotchas and war stories
 
 :::danger[Retries that keep an outage going]
-On December 7, 2021, an automated scaling activity in AWS us-east-1 triggered a surge of connection
-activity from a large number of clients on AWS's internal network, which overwhelmed the devices
-between that network and the main one. AWS's summary describes the loop on this page: the delays
-increased latency and errors, which caused even more connection attempts and retries, and the
-congestion persisted; a latent issue kept those clients from backing off adequately. Removing the
-trigger does not end a metastable failure. Plan how you will shed load or switch retries off,
-before you need it.
+On December 7, 2021, an automated scaling activity (a system adding capacity on its own) in AWS's
+us-east-1 region (its data centres in Northern Virginia) triggered a surge of connection activity from a large number of clients on AWS's
+internal network. The surge overwhelmed the network devices between that internal network and the
+main one. AWS's summary describes the loop on this page: the delays increased latency and errors,
+which caused even more connection attempts and retries, and the congestion persisted; a hidden
+fault kept those clients from backing off adequately. Removing the trigger does not end a metastable
+failure. Plan how you will shed load or switch retries off before you need it.
 :::
 
 :::caution[Retries stacked in the libraries you did not write]
-Defaults as of November 2026: `requests` retries nothing (`max_retries=0`), but urllib3 used directly
-retries 3 times with no backoff. AWS SDKs make 3 to 5 attempts. Polly (.NET) defaults to 3 retries,
-2 s apart with no jitter, on any exception. Envoy retries once when a policy exists. Your own loop of
-3 around an SDK call of 3 is 9 attempts per request, before the gateway adds its own. Find the
-library defaults, turn retries off in all but one layer, and log `attempt` numbers so that a storm
-is visible.
+Defaults as of November 2026: Python's `requests` retries nothing (`max_retries=0`), but urllib3 used
+directly retries 3 times with no backoff. AWS SDKs make 3 to 5 attempts. Polly (.NET) defaults to 3
+retries, 2 s apart with no jitter, on any exception. Envoy retries once when a policy exists. Your own
+loop of 3 attempts around an SDK call of 3 attempts makes 3 × 3 = 9 attempts per request, before the
+gateway adds its own. Find the library defaults, turn retries off in all but one layer, and log
+attempt numbers so that a storm is visible.
 :::
 
 :::caution[Retrying a timeout duplicates work]
 A timed-out attempt is usually still running on the server (the
 [timeouts page](/resilience/timeouts/#a-timeout-stops-the-waiting-not-the-work) covers why). The
-retry starts a second copy of the same expensive query beside the first. That is exactly the
-wasted work in the sim. Pass the deadline to the server so it can stop, and do not retry a timeout
-on an endpoint you know is overloaded.
+retry starts a second copy of the same expensive query beside the first. That is exactly the wasted
+work in the sim. Pass the deadline to the server so it can stop, and do not retry a timeout on an
+endpoint you know is overloaded.
 :::
 
 :::caution[Retrying while holding a lock]
-A retry loop inside a database transaction, or while holding a lock or a connection from a pool,
-holds it through every backoff wait. Three retries with backoff up to 2 s each can keep a row lock
-for 6 s. Retry outside the transaction: roll back, wait, start again.
+A database transaction that changes a row holds a **lock** on it: other transactions that want the
+same row wait until this one commits or rolls back. A retry loop inside the transaction holds the
+lock through every backoff wait; so does a loop that holds a connection borrowed from a **pool** (a
+fixed set of open database connections shared by all requests). Three retries with waits of up to
+2 s each can keep a row locked for 3 × 2 = 6 s. Retry outside the transaction: roll back, wait, start
+again.
 :::
 
 :::caution[Budgets that hide failures]
@@ -650,22 +1019,24 @@ rising count is the earliest signal that a dependency is in trouble.
 
 ## Trade-offs and when not to use it
 
-Every retry policy trades load for success. No retries puts the failure in front of the user at
-once and adds nothing to a struggling server. Unbounded retries hide every blip and turn a long
-failure into an overload. A budget sits between, and its ratio decides where: 10% rides through
-blips and stops storms; 20%, Finagle's default, rides through worse brownouts and adds more load
-during outages.
+Every retry policy trades load for success. No retries puts the failure in front of the user at once
+and adds nothing to a struggling server. Unlimited retries hide every blip and turn a long failure
+into an overload. A budget sits between, and its ratio decides where: 10% survives blips and
+stops storms; 20%, Finagle's default, survives worse brownouts and adds more load during
+outages.
 
 Retries also cost latency. Each one adds a wait and another attempt to the request's time, and a
-request that succeeds on its third try took longer than the user wanted. For interactive paths with
-a tight deadline, one retry is often all that fits.
+request that succeeds on its third try took longer than the user wanted. For interactive paths with a
+tight deadline, one retry is often all that fits.
 
 Do not retry when:
 
-- **Someone else will.** A message queue redelivers, a user taps again, a batch job reruns. Retrying
-  inside a consumer that the queue will also redeliver multiplies attempts, as stacked layers do.
+- **Someone else will.** A message queue (a service that holds tasks until a worker takes them)
+  delivers a failed task again, a user taps again, a batch job reruns. Retrying inside a worker
+  whose task the queue will also deliver again multiplies attempts, as stacked layers do.
 - **The request is not safe to repeat** and has no idempotency key.
-- **The server said no**: a `4xx` other than `408`, `425` and `429`, or a gRPC pushback that says stop.
+- **The server said no**: a `4xx` other than `408 Request Timeout`, `425 Too Early` and `429`, or a
+  gRPC pushback that says stop.
 - **The deadline cannot fit another attempt.**
 - **The dependency is known to be overloaded.** Then the server needs less load: shed it there, and
   let callers fail fast.
@@ -683,10 +1054,10 @@ Typical questions:
   retry together, in bursts the size of the first failure. Full jitter spreads each round of
   retries over the whole interval.
 - *"Does exponential backoff protect an overloaded server?"* Only from short spikes. In an open
-  system new requests keep arriving; each request still sends up to 1 + *N* attempts. A budget
-  bounds the extra load; backoff only delays it.
+  system new requests keep arriving, and each request still sends up to 1 + *N* attempts. A budget
+  limits the extra load; backoff only delays it.
 - *"The service recovered, but errors stayed high for an hour. Why?"* A metastable failure:
-  retries keep the queue past the clients' timeout, so every answer arrives late. Shed load or
+  retries keep the queue wait past the clients' timeout, so every answer arrives late. Shed load or
   switch retries off; waiting does not help.
 - *"How would you retry a payment?"* Only with an idempotency key, only on errors that a retry can
   fix, at one layer, inside the user's deadline, and with a budget.
@@ -696,8 +1067,10 @@ Typical questions:
 <details>
 <summary>1. Each attempt to a dependency fails with probability 0.3, independently. How many attempts per request do 2 retries send, and what share of requests fail after all of them?</summary>
 
-1 + 0.3 + 0.09 = 1.39 attempts per request. A request fails only if all three attempts fail:
-0.3³ = 2.7%. Retries turned a 30% failure rate into 2.7% for 39% more load.
+Follow 1,000 requests. All 1,000 send a first attempt; 30% of them fail, so 1,000 × 0.3 = 300 send a
+second; 30% of those fail, so 300 × 0.3 = 90 send a third. That is 1,000 + 300 + 90 = 1,390 attempts:
+1.39 per request. A request fails only if all three attempts fail: 0.3 × 0.3 × 0.3 = 0.027, which is
+2.7%. Retries turned a 30% failure rate into 2.7%, for 39% more load.
 
 </details>
 
@@ -705,50 +1078,51 @@ Typical questions:
 <summary>2. You change your clients from "retry at once" to exponential backoff with full jitter, still 3 retries. During a full outage, by how much does the load on the dependency fall?</summary>
 
 Barely. Each request still sends 4 attempts; backoff delays the last three by up to a few seconds,
-and in an open system new requests keep arriving meanwhile. The load is still close to 4× after
-the first few seconds. Only a budget, fewer retries or a circuit breaker reduces it.
+and in an open system new requests keep arriving meanwhile. The load is still close to 4 times normal
+after the first few seconds. Only a budget, fewer retries or a circuit breaker reduces it.
 
 </details>
 
 <details>
 <summary>3. A gRPC client has retryThrottling with maxTokens 10 and tokenRatio 0.1. Roughly what failure rate stops its retries?</summary>
 
-The count is steady when successes add as much as failures take: 0.1 × (1 − *f*) = *f*, so *f* is
-about 9%. Above that, the count falls to half of `maxTokens`, 5, and retries stop while it stays
-there. First attempts keep going, and successes refill the count.
+The count is steady when successes add as much as failures take away. With a share *f* failing, that
+is 0.1 × (1 − *f*) = *f*, which works out to *f* = 0.1 ÷ 1.1 ≈ 9%. Above that, the count falls to half
+of `maxTokens`, 5, and retries stop while it stays there. First attempts keep going, and their
+successes refill the count.
 
 </details>
 
 <details>
-<summary>4. In the simulation, why does a 2 s trigger recover and a 6 s trigger not, with the same retry policy?</summary>
+<summary>4. Part 1's stock server normally runs at 80% load instead of 70%: 80 requests a second against a capacity of 100. With 3 retries and no budget, roughly how long a half-speed slowdown tips it over?</summary>
 
-At half speed the queue grows by 20 attempts a second. After 2 s it holds about 40, a wait of
-0.4 s at full speed: below the 1 s timeout, so attempts succeed and the queue drains. After 6 s the
-wait passes 1 s, attempts time out, each request sends up to 4, and 280 attempts a second against a
-capacity of 100 keep the wait above 1 s for good. The trigger decides whether the system crosses the
-line; the retries decide whether it stays there.
+At half speed the server finishes 50 a second while 80 arrive, so the queue grows by 80 − 50 = 30 a
+second. Clients give up at 1 s, which at full speed is a queue of 1 × 100 = 100 attempts. The queue
+reaches 100 after 100 ÷ 30 ≈ 3.3 seconds. So a slowdown of about 3 to 4 seconds is enough; in the sim
+at 80% load, 3 s recovers and 4 s does not. Less spare capacity means a shorter trigger tips it.
 
 </details>
 
 <details>
-<summary>5. 2,000 serverless functions each create a new AWS SDK client per invocation and call a throttled API. Why does the SDK's retry quota not stop a retry storm?</summary>
+<summary>5. 2,000 serverless functions each create a new AWS SDK client per run and call a throttled API. Why does the SDK's retry quota not stop a retry storm?</summary>
 
-Each client has its own 500-token quota, full at creation. A client that lives for one invocation
-never drains its bucket, so each behaves like plain "3 attempts". Create the client once per
-execution environment so its quota persists across invocations, and add a budget or a circuit
-breaker that is shared more widely.
+Each client has its own 500-token quota, full when it is created. A client that lives for one run
+never drains its bucket, so each behaves like plain "3 attempts". Create the client once per copy of
+the function, outside the code that handles each run, so its quota lasts across runs, and add a
+budget or a circuit breaker that is shared more widely.
 
 </details>
 
 ## Recap
 
-- Retries amplify load by 1 + *p* + … + *p*ᴺ: about 1.1× on a healthy day, and 1 + *N* times when
+- Retries multiply load by 1 + *p* + … + *p*ᴺ: about 1.1 on a healthy day, and 1 + *N* when
   everything fails, which is when the dependency can least afford it.
 - In an open system, retries can hold a server down after its trigger has gone: a metastable
-  failure. Safe means load × maximum amplification stays below capacity.
+  failure. A system is safe when its normal load times its largest amplification stays below
+  capacity.
 - Exponential backoff with a cap decides when to retry. It helps restarts and closed systems; it
   does not reduce the number of attempts.
-- Full jitter, random(0, *d*), desynchronises clients that failed together; ±20% only blurs them.
+- Full jitter, random(0, *d*), spreads out clients that failed together; ±20% only blurs them.
 - A retry budget, tokens earned by new requests and spent by retries, caps the extra load at a ratio.
   It costs some success during brownouts and saves the service during outages.
 - Retry only transient failures, only safe requests, only inside the deadline, at one layer, and
@@ -757,7 +1131,7 @@ breaker that is shared more widely.
 ## Where to go next
 
 <NextTopics items={[
-  { slug: 'circuit-breakers', why: 'A budget removes retries; a breaker stops all calls to a dependency that keeps failing, and probes for recovery.' },
+  { slug: 'circuit-breakers', why: 'A budget removes retries; a breaker stops all calls to a dependency that keeps failing, and tests for recovery.' },
   { slug: 'idempotency-keys', why: 'How to make a POST safe to retry: storing the key, the in-progress state and the stored response.' },
   { slug: 'load-shedding', why: 'The server-side half of escaping a retry storm: refusing work you cannot finish in time, by priority.' },
 ]} />
@@ -778,8 +1152,8 @@ breaker that is shared more widely.
 
 **Engineering writing and research**
 
-- [Marc Brooker: What is backoff for?](https://brooker.co.za/blog/2022/08/11/backoff.html) (2022) — why backoff barely changes amplification with an unbounded number of clients.
-- [Marc Brooker: Fixing retries with token buckets and circuit breakers](https://brooker.co.za/blog/2022/02/28/retries.html) (2022) — simulations of N retries, budgets and breakers, and where each one fails.
+- [Marc Brooker: What is backoff for?](https://brooker.co.za/blog/2022/08/11/backoff.html) (2022) — why backoff barely changes amplification with an unlimited number of clients.
+- [Marc Brooker: Fixing retries with token buckets and circuit breakers](https://brooker.co.za/blog/2022/02/28/retries.html) (2022) — simulations of *N* retries, budgets and breakers, and where each one fails.
 - [Bronson, Aghayev, Charapko, Zhu: Metastable failures in distributed systems](https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf) (HotOS 2021) — the stable, vulnerable and metastable states, with retries as the classic sustaining effect.
 - [Huang and others: Metastable failures in the wild](https://www.usenix.org/conference/osdi22/presentation/huang-lexiang) (OSDI 2022) — 22 incidents at 11 organisations; retries sustain more than half.
 - [AWS: Summary of the AWS service event in the Northern Virginia region, December 2021](https://aws.amazon.com/message/12721/) (2021) — a retry storm on an internal network, in AWS's words.
