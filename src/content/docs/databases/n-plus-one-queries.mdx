@@ -1,12 +1,12 @@
 ---
 title: N+1 Queries
-description: Why a list endpoint that takes 17 ms on your laptop takes 112 ms with the database 1 ms away, measured on PostgreSQL 16. Where the N comes from, what each extra query costs, batching with IN, JOINs that multiply rows, loaders for GraphQL resolvers, pipelining, and how to keep N+1 from coming back.
-tagline: Every query is fast. There are 101 of them, and each one waits for the network.
+description: Why a list page that runs one database query per row is fast on your laptop and slow in production, explained from zero with one page of 50 orders, then in depth. Round trips and lazy loading, batching with IN, JOINs that multiply rows, loaders for GraphQL resolvers, pipelining, all measured on PostgreSQL 16, and how to keep N+1 from coming back.
+tagline: Why a page that runs one small database query for every row of a list gets slow, and how to fetch the whole list in a few queries instead.
 difficulty: intermediate
 track: databases
 prerequisites: [database-indexing, connection-pooling, latency-vs-throughput]
 next: [query-optimization, pagination, caching-strategies]
-lastReviewed: 2026-10-29
+lastReviewed: 2026-11-09
 sidebar:
   order: 7
 ---
@@ -15,6 +15,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/n-plus-one-queries/MentalModel.astro';
 import Overview from '../../../components/diagrams/n-plus-one-queries/Overview.astro';
 import LazyLoad from '../../../components/diagrams/n-plus-one-queries/LazyLoad.astro';
 import Growth from '../../../components/diagrams/n-plus-one-queries/Growth.astro';
@@ -23,212 +24,463 @@ import PoolSim from '../../../components/sims/n-plus-one-queries/PoolSim.astro';
 
 ## The question
 
-An endpoint lists 50 orders, each with its customer and its line items. Against PostgreSQL on the
-same machine it answers in 17 ms. Move the database to the next availability zone, 1 ms away, and
-the same code on the same data with the same indexes takes 112 ms. The database's CPU is almost
-idle, and the slow query log is empty, because no query took longer than a fraction of a
-millisecond. Where did the other 95 ms go, and why does a page of 200 orders take 477 ms?
+A page lists 50 orders, and for each order it shows the customer's name and the items in it. Every
+database query the page runs finishes in well under a millisecond. On your laptop, with the database
+on the same machine, the page answers in 17 ms. In production the database sits on another machine
+about 1 ms away, and the same code, with the same data, answers in 112 ms. Nothing inside the
+database got slower. Where does the extra time come from?
 
-## Why this problem exists
+The short answer: the page does not ask the database one question. It asks 101 questions, one after
+another, and each question has to travel to the database and back before the next one can start.
+On your laptop that trip takes a tenth of a millisecond, so 101 trips cost almost nothing. In
+production each trip takes about a millisecond, so 101 trips cost about a tenth of a second. The fix
+is to ask fewer, bigger questions: three questions can load the same page, and then the trips cost
+about 3 ms. This mistake is called **N+1 queries**, and the rest of Part 1 shows where the 101
+comes from.
 
-The endpoint runs one query for the page of orders, and then, for each of the 50 orders, one query
-for its customer and one for its items. That is 1 + 2 × 50 = 101 queries. The pattern is called
-**N+1 queries**: one query returns N rows, and the code then runs one more query per row to fetch
-something related to it. With two relations it is 1 + 2N; with a relation of a relation it
-multiplies, as the next section shows.
+## The idea in plain words
 
-Every query, however small, costs two things. The first is a **round trip**: the query travels to
-the database and the answer travels back, and the code waits for both before it can send the next
-one. The second is the work around the query itself: the database parses and plans the statement,
-runs it, and sends the rows, and the driver decodes them. A request that runs Q queries one after
-another spends about Q × (round trip + per-query work) before it can answer.
+Follow one page: an online shop's "recent orders" screen. It shows 50 orders. The data lives in
+three tables: `orders`, `customers` and `order_items`. Each order row holds the id of its customer
+(`customer_id`), not the customer's name, and the items live in their own table, one row per item,
+each pointing back to its order (`order_id`).
 
-We measured that on PostgreSQL 16 with 4 vCPUs, 100,000 orders, 5 items and 3 payments per order,
-and a proxy that adds a network round trip (scripts and our full output in
-[`examples/n-plus-one-queries`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/n-plus-one-queries)).
-One request for a page of 50 orders:
+1. **The first question.** The code asks for the page of orders:
+   `SELECT * FROM orders ORDER BY id LIMIT 50`. That is one query, and it returns 50 rows.
+2. **The loop.** Now the code walks through the 50 orders to build the page. For the first order it
+   needs the customer's name, so it asks `SELECT * FROM customers WHERE id = 42`. Then it needs the
+   items, so it asks `SELECT * FROM order_items WHERE order_id = 17`. That is two more queries for
+   one order.
+3. **Count them.** Two queries for each of 50 orders is 50 × 2 = 100 queries. Add the first query
+   for the page: 100 + 1 = 101 queries for one page.
+4. **Each query is a trip.** The app sends the query over the network, the database runs it, and the
+   answer travels back. The app waits for the answer before it sends the next query, because the
+   loop handles one order at a time. In production we measured that trip at 1.06 ms.
+5. **Add up the waiting.** 101 trips, one after another, at 1.06 ms each: 101 × 1.06 ms = about
+   107 ms spent waiting for the network. The page took 112 ms, so the database's real work for all
+   101 queries was only the rest: 112 − 107 = about 5 ms.
+6. **Why the laptop hid it.** On the laptop each trip takes about 0.1 ms, so 101 trips add up to
+   101 × 0.1 ms = about 10 ms. The page answered in 17 ms and felt fine. Only the length of the
+   trip changed between the laptop and production; the number of trips was always 101.
+7. **The fix: ask about all 50 orders at once.** Instead of 50 questions about one customer each,
+   ask one question about all of them: "give me the customers whose ids are in this list". Do the
+   same for the items. Now the page needs 3 queries: the orders, their customers, their items.
+8. **Add up the new waiting.** 3 trips at 1.06 ms each: 3 × 1.06 ms = 3.2 ms of waiting. The
+   page took 5.0 ms in our measurement, so the database work was the rest: 5.0 − 3.2 = about 2 ms. The page went
+   from 112 ms to 5 ms, about 22 times faster (112 ÷ 5 = 22.4), and every single query was as fast
+   as before.
 
-| Round trip (a `select 1` measured on it) | 101 queries, one per order | 3 queries, batched |
+<Figure caption="The same page of 50 orders, asked for in two ways, with the database 1 ms away. One question per order means 101 trips to the database and back, made one after another: 112 ms. One question per kind of data means 3 trips: 5 ms.">
+  <MentalModel />
+</Figure>
+
+In the picture, each double arrow is one trip: a question going to the database and its answer
+coming back. The top half makes 101 of them, so its time is mostly travel. The bottom half makes 3,
+and its time is mostly the database's own work, which was small all along.
+
+That is the whole idea. The problem is never that one query is slow. It is that the code asks one
+question per row, and each question costs a trip. The name comes from the count: one query returns
+**N** rows (here N = 50 orders), and then the code runs one more query per row. With one related
+table that is N + 1 queries; our page reads two related tables per order, so it runs 2N + 1 =
+2 × 50 + 1 = 101.
+
+Why does nobody notice while writing the code? Because the loop rarely contains the word `SELECT`.
+Most applications read the database through a library that turns rows into objects, and that
+library runs the customer query quietly the moment the code reads `order.customer.name`. The
+building blocks below explain how.
+
+An everyday picture: you need 50 books from a library's closed stacks. You can hand the clerk one
+slip, wait for the book, walk back to your desk, and repeat 50 times. Or you can hand over one slip
+with all 50 titles. Finding each book takes the clerk the same time either way; what you save is the
+walks to the counter: 50 walks become 1, so you save 49. The picture stops working in one place: a busy clerk gets tired of 50 slips,
+and so does a database. Each query costs the database some fixed work of its own, which Part 2
+measures.
+
+## The building blocks
+
+Four ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A round trip
+
+**What it is.** A **round trip** is the journey of one query from the app to the database and of
+its answer back to the app.
+
+**Why it matters.** The app usually cannot do anything with a query's answer until the answer has
+arrived, so every round trip is time the request spends waiting. A request that runs its queries
+one after another pays for every trip in full.
+
+**Example.** On a laptop, with the app and the database on the same machine, we measured a round
+trip at 0.098 ms, about a tenth of a millisecond. With the database on another machine 1 ms away it
+was 1.06 ms. With a database far away, 5 ms. The query itself, `select 1`, did no work at all; the
+time is all travel and handling.
+
+**The precise version.** A round trip includes the network in both directions plus the fixed
+handling on each side: the driver (the library in your app that talks to the database)
+packs the query, the database reads it and sends the result, and the driver unpacks it. Many
+production databases run in a different **availability zone** from the app: cloud providers split
+each region into separate data centres, so that a fire or a power cut in one does not take down the
+others, and a database in another zone survives the loss of the app's zone. Our measurements use
+1 ms to stand for that distance. A request that runs Q queries one after another takes about
+Q × (round trip + work per query), and when the work is tiny, the round trips are nearly all of it.
+
+### An ORM and lazy loading
+
+**What it is.** An **ORM** (object-relational mapper) is a library that turns database rows into
+objects in your code, so you write `order.customer.name` instead of SQL. Django, SQLAlchemy, Active
+Record (in Rails), Hibernate, Laravel's Eloquent and Prisma are ORMs.
+
+**Why it exists.** Writing SQL by hand for every screen is slow and repetitive, and objects are
+easier to pass around than rows. The ORM also decides *when* to load related rows, and that choice
+is where N+1 comes from.
+
+**Example.** The ORM loads order 17 with its own columns: `id = 17`, `total = 1240`,
+`customer_id = 42`. It does not load customer 42. The first time your code reads `order.customer`,
+the ORM notices the customer is missing, runs `SELECT * FROM customers WHERE id = 42`, waits for the
+answer, and hands you the customer. That is **lazy loading**: a related row is loaded at the moment
+the code first touches it, not before.
+
+**The precise version.** Lazy loading is the default in most ORMs for a good reason: loading every
+related row of every object up front would fetch far more data than most pages use. The cost is that
+each touch of a missing relation is one query, and a loop over N objects that touches a relation
+makes N queries. The opposite, loading related rows ahead of time because you know you will need
+them, is called **eager loading**, and every ORM has a way to ask for it.
+
+### N, and why the count grows with it
+
+**What it is.** **N** is the number of rows the first query returns, and the pattern is called
+**N+1** because the code then runs one more query for each of those rows.
+
+**Why it matters.** The number of queries, and so the number of round trips, grows with the data.
+A page of 3 orders in a test runs 7 queries and looks fine; a page of 200 orders in production runs
+401.
+
+**Example.** For our page, with two related tables read per order:
+
+- 3 orders: 2 × 3 + 1 = 7 queries.
+- 50 orders: 2 × 50 + 1 = 101 queries.
+- 200 orders: 2 × 200 + 1 = 401 queries.
+
+**The precise version.** With one related table it is N + 1 queries; with k related tables it is
+k × N + 1. A relation of a relation multiplies: if each of the 50 orders also shows the product of
+each of its 5 items, the products add 50 × 5 = 250 more queries. In general that is
+1 + N + N + N × M, where M is the number of items per order. Part 2 works through that case.
+
+### Batching: one question for many rows
+
+**What it is.** **Batching** means asking one query about many rows at once, instead of one query
+per row.
+
+**Why it exists.** It makes the number of round trips stop depending on N. Fifty customers cost one
+trip, and so do five hundred.
+
+**Example.** The 50 orders on the page belong to, say, 40 different customers (some customers have
+more than one order). Instead of 50 queries like `WHERE id = 42`, the app collects the 40 distinct
+ids and sends one query:
+
+```sql
+SELECT * FROM customers WHERE id IN (3, 7, 42, ...)   -- the 40 ids from the page
+```
+
+One round trip, 40 rows back. Then it does the same for the items with
+`WHERE order_id IN (17, 18, ...)` and the 50 order ids: one more trip. With the page query that is
+3 queries, for any page size.
+
+**The precise version.** `IN (...)` is plain SQL: "the value is one of these". After the rows
+arrive, the app matches each row back to its order in memory, which Part 2 shows. ORMs call this
+eager loading with a separate query per relation: Django's `prefetch_related`, SQLAlchemy's
+`selectinload`, Rails' `preload`, Laravel's `with()`.
+
+:::tip[If you stop here]
+- **N+1** is one query that returns N rows, followed by one more query per row to fetch something
+  related to it. A page of 50 orders with customers and items runs 101 queries.
+- Every query costs a **round trip** to the database and back, and the loop waits for each one. 101
+  trips at about 1 ms each is about 100 ms of waiting, even though every query is fast.
+- It hides on a laptop, where a trip takes 0.1 ms, and in tests with three rows. It shows up in
+  production, where the network is real and N is large.
+- It usually comes from an ORM's **lazy loading**: reading `order.customer` quietly runs a query.
+- The fix is **batching**: ask about all the rows at once (`WHERE id IN (...)`), so the page needs 3
+  queries whatever N is.
+:::
+
+## Going deeper
+
+Part 1 counted trips. Real systems raise harder questions. If each query runs in a few hundredths of
+a millisecond, why does the slow query log stay empty while the page breaks, and why does adding an
+index change nothing? Why does the database's CPU go *down* on the day the N+1 endpoint falls over?
+And if batching is the cure, why can one JOIN that fetches everything in one query return the wrong
+page, or send five times more data than three separate queries?
+
+The rest of the page answers those with measurements. We ran PostgreSQL 16 on a machine with 4
+**vCPUs** (virtual CPU cores: each can run one piece of work at a time), filled it with 100,000
+orders, each with 5 items and 3 payments, and put a small **proxy** between the client and the
+database: a program that passes the traffic through and holds it back for a set time, to stand in
+for a network. The scripts and our full output are in
+[`examples/n-plus-one-queries`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/n-plus-one-queries).
+The round trip in the first column was measured with a `select 1`, a query that does no work. One
+request for a page of 50 orders:
+
+| Round trip | 101 queries, one per order | 3 queries, batched |
 |---|---|---|
 | 0.1 ms, database on the same machine | 16.9 ms | 1.4 ms |
-| 1.1 ms, another availability zone | 112.0 ms | 5.0 ms |
+| 1.06 ms, another availability zone | 112.0 ms | 5.0 ms |
 | 5.0 ms, a database far away | 523.7 ms | 17.5 ms |
 
-Read the middle row with the formula: 101 round trips of 1.06 ms is 107 ms of waiting, and the
-statements add about 5 ms of work. The batched version waits for three round trips, about 3 ms,
-and spends 2 ms on work. The queries are not slow; there are too many of them, and each one waits.
+Part 1 worked through the middle row. The bottom row follows the same rule: 101 trips at 5 ms each
+is 101 × 5 ms = 505 ms of waiting, and the page took 523.7 ms, so about 523.7 − 505 = 19 ms was work. Batched, 3
+trips at 5 ms is 3 × 5 ms = 15 ms of waiting, and the page took 17.5 ms, so about 17.5 − 15 = 2.5 ms was work. The farther the database, the larger
+the gap: at 5 ms the N+1 page is about 30 times slower (523.7 ÷ 17.5 = 29.9).
 
-This is why N+1 survives code review and testing. On a laptop the round trip is 0.1 ms, so 101
-queries cost 17 ms, which feels fine. Test data has three orders, not fifty. Each query takes
-a fraction of a millisecond on the server, so PostgreSQL's slow query log
-(`log_min_duration_statement`) never shows one, and an index would change nothing because every
-lookup already uses a primary key. The cost appears only when the network is real and N is large,
+This is why N+1 survives code review and testing. Test data has three orders, not fifty. Each
+query takes a fraction of a millisecond on the server, so PostgreSQL's **slow query log**, which
+writes down every statement that runs longer than a threshold you set
+(`log_min_duration_statement`), never shows one. And an index, a lookup structure that lets the
+database find a row by a column without reading the whole table, changes nothing, because every one
+of these lookups already finds its row by the **primary key** (the column that identifies each row,
+here `id`) or by an indexed column. The cost appears only when the network is real and N is large,
 which describes production.
 
 ## The obvious fix, and why it breaks
 
 **"Add an index."** The 100 extra queries look up `customers.id` and `order_items.order_id`, and both
 are indexed. Each runs in a few hundredths of a millisecond on the server. An index makes one query
-cheaper; it cannot remove a query.
+cheaper; it cannot remove a query or its round trip.
 
-**"Cache the lookups."** Put customers in Redis and the database sees fewer queries, but the loop now
-makes 50 round trips to Redis, which is also across the network. The waiting has moved, not gone.
-The fix for that is a cache read for all 50 keys at once (`MGET`), which is the batching fix again,
-applied to the cache.
+**"Cache the lookups."** A **cache** is a fast store that keeps copies of data you read often, so
+you do not ask the database again. **Redis**, a server that keeps keys and values in memory, is a
+common one. Put the customers in Redis and the database sees fewer queries, but the loop now makes
+50 trips to Redis, which is also on the other end of a network. The waiting has moved, not gone.
+The fix for that is to read all 50 keys in one command (Redis's `MGET`, "get many"), which is the
+batching fix again, applied to the cache.
 
-**"Run the 100 queries in parallel."** A database connection runs one statement at a time, as the
-[connection pooling page](/databases/connection-pooling/) explains, so parallel queries need
-parallel connections: one request would take 100 of them, and ten such requests would exhaust any
-reasonable pool. The database still does all 100 pieces of work.
+**"Run the 100 queries in parallel."** A database **connection** (the open network link between the
+app and the database over which queries travel) runs one statement at a time, as the
+[connection pooling page](/databases/connection-pooling/) explains. So 100 parallel queries need 100
+connections for one request, and ten such requests at once would need 1,000, far more than any
+reasonable pool holds. The database still does all 100 pieces of work.
 
 **"Then JOIN everything into one query."** This is half right. A JOIN fixes the order-to-customer
-lookup well, but joining collections multiplies rows, and a `LIMIT` on a JOIN quietly returns the
+lookup well, but joining two lists multiplies rows, and a `LIMIT` on a JOIN quietly returns the
 wrong page. Both get their own section below.
 
-Three neighbours get confused with N+1. A **slow query** is one statement doing too much work,
-fixed by [indexing](/databases/database-indexing/) or rewriting it; N+1 is many cheap statements.
-**N+1 API calls** are the same shape over HTTP: one request per item to another service, with the
-same fix, a batch endpoint. And **over-fetching** is the opposite mistake: loading relations the
-page never uses, which is what eager loading everything by default does.
-
-## The core idea
-
-Make the number of round trips independent of N. Instead of asking "the customer of order 17", then
-"the customer of order 18", ask once for "the customers of these 50 orders". There are three ways to
-say "these 50" in SQL: a list of keys (`WHERE id IN (...)`), a JOIN, or a subquery that nests the
-children inside each parent row. A fourth fix keeps every query but stops waiting between them:
-pipelining. The diagram puts the four side by side on the same request.
-
-<Figure caption="The same page of 50 orders at a 1 ms round trip. The N+1 version spends its 112 ms waiting for 101 round trips, one after another; batching, a JOIN or pipelining each cut it to a few milliseconds.">
-  <Overview />
-</Figure>
+Three neighbours get confused with N+1. A **slow query** is one statement doing too much work, fixed
+by [indexing](/databases/database-indexing/) or rewriting it; N+1 is many cheap statements. **N+1
+API calls** are the same shape over HTTP: one request per item to another service, with the same
+fix, a batch endpoint. And **over-fetching** is the opposite mistake: loading related rows the page
+never uses, which is what eager loading everything by default does.
 
 ## How it works, piece by piece
 
 ### Where the N comes from
 
-Nobody writes 101 queries on purpose. They come from an **ORM** (object-relational mapper: the
-library that turns rows into objects, such as Django, SQLAlchemy, Active Record, Hibernate or
-Prisma). When it loads an order, it fills in the order's own columns, including `customer_id`, but
-not the customer row itself. The `order.customer` attribute is a placeholder that knows the key and
-runs a query the first time your code reads it. That is **lazy loading**, and it is the default in
-most ORMs for a good reason: loading every relation of every row up front would fetch far more data
-than most pages use.
+Part 1 showed an ORM running a query when the code touches a relation that is not loaded. The
+diagram shows what that object looks like from the inside.
 
 <Figure caption="The order holds customer_id, not the customer. Reading order.customer or order.items runs a query, so a loop that reads both for 50 orders runs 100 queries, and one more level of relations multiplies that again.">
   <LazyLoad />
 </Figure>
 
-The loop that triggers it rarely looks like database code. It is a template that prints
-`{{ order.customer.name }}` for each row, a serializer with a nested `customer` field, a
-`__str__` method, a permission check per row, or a GraphQL resolver for `Order.customer`. Each of
-these reads one attribute of one object, and the ORM does what it was told.
+The green values came with the page query; the two amber slots are the lazy relations, each one
+query away. The bottom lines are the counts from the building blocks, now including products.
 
-Nesting multiplies. If each order also shows the product name of each of its 5 items, the page runs
-1 query for the orders, 50 for customers, 50 for items, and 5 × 50 = 250 for products: 351 queries,
-or 1 + N + N + N × M in general. Django's documentation names the default plainly: its `FETCH_ONE`
-mode fetches the missing field for the current instance only, which is how the N+1 queries problem
-arises ([Django 6.1 docs](https://docs.djangoproject.com/en/6.1/topics/db/fetch-modes/)).
+The loop that triggers it rarely looks like database code. It can be any of these:
+
+- a template that prints `{{ order.customer.name }}` for each row;
+- a **serializer** (the code that turns objects into JSON for an API response) with a nested
+  `customer` field;
+- a `__str__` method, Python's "how to print this object", that mentions the customer;
+- a permission check that runs once per row and reads the row's owner;
+- a GraphQL resolver for `Order.customer`, which the loaders section explains.
+
+Each of these reads one attribute of one object, and the ORM does what it was told.
+
+Nesting multiplies. If each order also shows the product name of each of its 5 items, count the
+queries in four parts:
+
+- 1 query for the page of orders;
+- 50 queries for the customers, one per order;
+- 50 queries for the item lists, one per order;
+- 5 × 50 = 250 queries for the products, one per item.
+
+Added up: 1 + 50 + 50 + 250 = 351 queries for one page. Django's documentation names its own
+default plainly: its `FETCH_ONE` mode fetches the missing field for the current object only, which
+is how the N+1 queries problem arises
+([Django 6.1 docs](https://docs.djangoproject.com/en/6.1/topics/db/fetch-modes/)).
+
+### The fixes at a glance
+
+There are four ways out, and the sections below take them one at a time. Three of them say "these
+50 orders" in one query: a list of keys (`WHERE id IN (...)`, batching), a JOIN that returns orders
+and customers side by side, or a query that nests each order's items inside the order's row. The
+fourth, **pipelining**, keeps all 101 queries but sends them without waiting for each answer.
+
+Before the details, here is how long each takes on the same page. Each bar is one request; the
+longer the bar, the longer the user waits.
+
+<Figure caption="The same page of 50 orders at a 1 ms round trip. The N+1 version spends its 112 ms waiting for 101 round trips, one after another; pipelining, batching or a JOIN each cut it to a few milliseconds.">
+  <Overview />
+</Figure>
+
+The top bar is striped because it is 101 trips laid end to end. The other three fit in under 7 ms.
+The time is almost the same for the three fixes; what differs between them is the data they send
+back and the work they give the database, which the next sections measure.
 
 ### What each extra query costs
 
-Three costs grow with N, and the first two hide on a laptop.
+Three costs grow with N. The first two hide on a laptop.
 
-**Latency.** The table above is the whole story for one request: about one round trip per query.
-Plot it against the page size and the shape is plain:
+**Latency.** Latency is how long one request takes. Part 1 showed it is about one round trip per
+query. Plot it against the page size at a 1 ms round trip:
 
-<Figure caption="At a 1 ms round trip, N+1 latency grows by about 2.3 ms per order on the page; the batched version makes 3 queries for any page size and stays under 8 ms. Measured in a separate run from the table above, so the 50-order point differs by a few milliseconds.">
+<Figure caption="At a 1 ms round trip, N+1 latency grows by about 2.4 ms per order on the page; the batched version makes 3 queries for any page size and stays under 8 ms. Measured in a separate run from the table above, so the 50-order point differs by a few milliseconds.">
   <Growth />
 </Figure>
 
-Is it the planning? Each of our statements was parsed and planned every time, as many drivers do by
-default. With prepared statements, planned once and reused, the N+1 page took 11.5 ms instead of
-16.9 ms on the same machine, and 106 ms instead of 112 ms at a 1 ms round trip. Preparing helps
-locally; across a network the round trips are almost all of it.
+Where the 2.4 ms per order comes from: going from 10 orders to 200 is 190 more orders, and the
+N+1 page went from 26.7 ms to 477.1 ms, which is 450.4 ms more. 450.4 ms ÷ 190 orders = about
+2.4 ms per order. Each order adds two queries, so each query costs about 2.4 ÷ 2 = 1.2 ms: the 1.06 ms round
+trip plus a little work. The batched line barely moves, from 4.3 ms to 7.2 ms, because it sends 3
+queries whatever the page size, only with longer lists inside them.
+
+Is it the planning? Before PostgreSQL runs a statement it **parses** it (reads the SQL text and
+checks it) and **plans** it (decides how to run it, for example which index to use). Many drivers
+send every statement fresh, so it is parsed and planned every time. A **prepared statement** is
+parsed and planned once and then reused with new values. With prepared statements, the N+1 page took
+11.5 ms instead of 16.9 ms on the same machine: 16.9 − 11.5 = 5.4 ms saved, and 5.4 ÷ 16.9 = about
+a third. At a 1 ms round trip it took 106.3 ms instead of 112.0 ms: 112.0 − 106.3 = 5.7 ms saved,
+and 5.7 ÷ 112.0 = about 5%. Preparing helps locally; across a network the round trips are
+almost all of it.
 
 **Database CPU.** Each statement costs the server work that has nothing to do with the rows: receive
-it, plan it, start and finish it, send the result. With 8 clients over a Unix socket, so no network
-delay at all, our 4-core server completed 337 N+1 requests a second and 3,462 batched ones. The
-same pages, ten times the CPU per request. (pgbench ran on the same machine and its CPU is in that
-number, which is also true of an app whose driver decodes 101 results instead of 3.)
+it, parse and plan it, start and finish it, send the result. To see that cost without any network
+delay, we ran **pgbench**, PostgreSQL's own load-testing tool, with 8 clients talking to the
+database over a **Unix socket** (a connection between two programs on the same machine that never
+touches the network). The 4-core server completed 337 N+1 requests a second and 3,462 batched ones.
+That is 3,462 ÷ 337 = about 10 times as many batched requests on the same cores, so each N+1 request
+costs about ten times the CPU. (pgbench ran on the same machine and its CPU is in that number, which
+is also true of an app whose driver unpacks 101 results instead of 3.)
 
-**Connection time.** A request holds its pooled connection for all of its queries. The pooling
-page's rule is that a pool of P connections, each held for H seconds, serves at most P ÷ H requests
-a second. At a 1 ms round trip, N+1 holds a connection for 112 ms, so a pool of 10 serves at most
-89 requests a second; batched, it holds it for 5 ms, and the same pool serves 2,000.
+**Connection time.** This one needs a new idea first.
 
-The simulation runs both versions behind their own pools, on the same traffic. Start with the
-database next to the app, then move it 1 ms away.
+A **connection pool** is a fixed set of open database connections that requests borrow and give
+back. It exists because opening a connection to PostgreSQL takes several round trips and a new
+server process, far too slow to do for every request, and because the database can only handle a
+limited number of connections at once. Say a pool has 10 connections, and each request holds one
+for 5 ms. Each connection can then serve 1,000 ms ÷ 5 ms = 200 requests a second, and 10 of them
+can serve 10 × 200 = 2,000 requests a second. The [connection pooling
+page](/databases/connection-pooling/) writes that as a rule: a pool of P connections, each held for
+H seconds per request, serves at most P ÷ H requests a second.
+
+A request holds its connection for all of its queries, round trips included. At a 1 ms round trip
+the batched page holds it for 5 ms, so a pool of 10 serves the 2,000 requests a second we worked
+out above. The N+1 page holds it for 112 ms. One connection can then serve 1,000 ms ÷ 112 ms = about
+8.9 requests a second, and 10 connections serve about 89. Past that, requests queue for a
+connection, and they wait while the database itself sits mostly idle.
+
+The simulation below runs both versions behind their own pools, on the same random stream of
+requests. One of its numbers needs a word first. **p99 latency** is the 99th **percentile**: sort
+every request's latency from fastest to slowest, and p99 is the value 99% of requests beat. Out of
+1,000 requests, it is the 990th fastest. It tells you what the slowest 1 in 100 users feel, which an
+average hides.
+
+Start with the database next to the app, then move the round trip to 1 ms.
 
 <PoolSim />
 
 What it shows: the N+1 version can look healthy for months while the database sits next to it, and
 fall over on the day the network between them gets slower: a database moved to another zone, a
-failover to a replica further away, or a proxy added in between. Nothing in the code changed, and
-the database's CPU goes down, not up, because the requests spend their time waiting on the network.
+**failover** (switching to a standby copy of the database after the main one fails) to a copy
+further away, or a proxy added in between. Nothing in the code changed, and the database's CPU goes
+down, not up, because the requests spend their time waiting on the network, not on the database.
 
 ### Batch by key: one query per relationship
 
-The default fix collects the keys from the first result, fetches all the related rows in one query,
-and joins them up in memory.
+Part 1 introduced batching. Here is how the rows find their way back to the right orders.
 
-The building block is a **hash map** (a `dict` in Python, a `Map` in JavaScript): a table from key
-to value that answers "what is stored under key 42?" in one step, however many keys it holds. With
+The tool for that is a **hash map** (a `dict` in Python, a `Map` in JavaScript): a table from key to
+value that answers "what is stored under key 42?" in one step, however many keys it holds. Without
+it, attaching 40 customers to 50 orders would mean searching the list of 40 for each order. With
 the 50 orders in hand:
 
 1. Collect the distinct customer ids: 50 orders, perhaps 40 different customers.
-2. Run `SELECT ... FROM customers WHERE id IN (3, 7, 42, ...)` once, and put the rows in a map by `id`.
-3. Run `SELECT ... FROM order_items WHERE order_id IN (17, 18, ...)` once, and group the rows in a
-   map from `order_id` to a list.
-4. Walk the orders and attach each one's customer and items from the maps.
+2. Run `SELECT ... FROM customers WHERE id IN (3, 7, 42, ...)` once, and put the rows in a map by
+   `id`.
+3. Run `SELECT ... FROM order_items WHERE order_id IN (17, 18, ...)` once, and group the rows in a map
+   from `order_id` to a list of items.
+4. Walk the orders and attach each one's customer and items from the two maps.
 
-Three queries for any page size, and nesting adds one query per level instead of one per row: the
-351-query page with products becomes 4. In our run it returned 350 rows and 19 KB for the page of 50,
-against 33 KB for the N+1 version, which sends a result header with every one of its 101 answers.
+That is 3 queries for any page size, and nesting adds one query per level instead of one per row.
+The 351-query page with products becomes 4: orders, customers, items, and one query for the products
+of all 250 items.
 
-Every ORM has this. Django calls it `prefetch_related`, Active Record `preload` (and `includes`
-picks it when it can), SQLAlchemy `selectinload`, Laravel `with()`, and Hibernate batch fetching
-with `@BatchSize`. Prisma's `include` does it by default, with one query per table merged in the
+Batching also sends less data. In our PostgreSQL run, where the 50 orders on the page happen to
+belong to 50 different customers, the batched queries returned 50 orders + 50 customers + 250 items
+= 350 rows, 19 KB. A **byte** is the basic unit of computer storage, enough for one letter of plain
+text, and a KB (kilobyte) is a thousand bytes. The N+1 version sent 33 KB for the same content,
+because each of its 101 answers carries its own **result header**, a description of the columns
+that PostgreSQL sends before the rows.
+
+Every ORM has batching. Django calls it `prefetch_related`, Active Record `preload` (and `includes`
+picks it when it can), SQLAlchemy `selectinload`, Laravel `with()`, and Hibernate batch fetching with
+`@BatchSize`. Prisma's `include` does it by default, with one query per table merged in the
 application.
 
-Two details matter at scale. An `IN` list sends every key as its own bind parameter, and the
-PostgreSQL protocol counts parameters in a 16-bit field, so one statement can carry at most 65,535.
-SQLAlchemy's `selectinload` sends at most 500 keys per statement, because some databases cap the
-size of an `IN` list and a statement should not grow without bound
+Two details matter at scale. The first is the length of the list. An `IN` list sends every key as
+its own **bind parameter**: the SQL text holds a placeholder such as `$1` or `?`, and the value is
+sent separately, which keeps values from being mistaken for SQL. The PostgreSQL **protocol**, the agreed format of the messages between a driver and the database,
+writes the number of parameters in a 16-bit field. A bit is a single 0 or 1, and 16 bits can hold
+2 × 2 × … × 2 (sixteen times) = 65,536 different values, from 0 to 65,535, so one statement can carry
+at most 65,535 parameters. SQLAlchemy's `selectinload` sends at most 500 keys per statement, because
+some databases cap the size of an `IN` list and a statement should not grow without bound
 ([SQLAlchemy docs](https://docs.sqlalchemy.org/en/20/orm/queryguide/relationships.html#select-in-loading)).
-On PostgreSQL you can pass the whole list as one array instead, `WHERE id = ANY($1)`: one parameter,
-and the same statement text for any number of keys, which keeps prepared statements and
-`pg_stat_statements` from filling with one variant per list length.
 
-The other detail is the empty case. An order with no items has no rows in the second result, so
-code that reads `items[order_id]` must default to an empty list, not fail with a missing key.
+On PostgreSQL there is a way around the list entirely: pass all the keys as one **array** parameter,
+`WHERE id = ANY($1)`. That is one parameter for any number of keys, and the SQL text is identical
+whether the list has 3 keys or 3,000. The identical text matters for two tools that keep one entry
+per distinct statement text: prepared statements, and `pg_stat_statements`, PostgreSQL's extension
+that records how often each statement ran and how long it took. With `IN`, a list of 40 keys and a
+list of 41 are two different statements, so both fill up with one variant per list length.
+
+The other detail is the empty case. An order with no items has no rows in the second result, so code
+that reads `items[order_id]` must default to an empty list, not fail with a missing key.
 
 ### JOIN, and when rows multiply
 
-A **JOIN** returns one row for every matching combination of rows from the tables it joins. Fetch
-50 orders joined to their customers and you get 50 rows, each with the order's columns and its
-customer's: one query, one round trip, nothing wasted. For a **many-to-one** relation (each order
-has one customer) this is the best fix, and it is what Django's `select_related`, SQLAlchemy's
-`joinedload` and Active Record's `eager_load` produce. SQLAlchemy's documentation recommends
-joined loading for many-to-one and `selectinload` for collections.
+A **JOIN** returns one row for every matching combination of rows from the tables it joins. Fetch 50
+orders joined to their customers and you get 50 rows, each with the order's columns and its
+customer's: one query, one round trip, nothing wasted.
 
-Collections are where it turns. Join the orders to their 5 items each and you get 5 rows per order,
-and every one of them repeats the order and customer columns. Join items and payments in the same
-query and every item row is repeated once per payment: 5 × 3 = 15 rows per order, a small
-**cartesian product** (every combination of two lists). The diagram shows one order under each fix:
+That works because the relation is **many-to-one**: many orders point to one customer, and each
+order has exactly one. For a many-to-one relation the JOIN is the best fix, and it is what Django's
+`select_related`, SQLAlchemy's `joinedload` and Active Record's `eager_load` produce. SQLAlchemy's
+documentation recommends joined loading for many-to-one and `selectinload` for collections.
+
+A **collection** is the other direction, **one-to-many**: one order has many items. That is where
+the JOIN turns. Join the orders to their 5 items each and you get 5 rows per order, and every one of
+them repeats the order's and the customer's columns. Join items and payments in the same query and
+every item row is repeated once per payment: 5 items × 3 payments = 15 rows per order. That is a
+small **cartesian product**: every combination of two lists, the way 5 shirts and 3 trousers make
+15 outfits.
+
+The diagram shows what comes back for one order under each fix. Each small bar is one row; a
+faded bar repeats data the query already sent.
 
 <Figure caption="One JOIN with items repeats the order and customer on every item row; adding payments repeats every item for every payment. Batching sends each row once. A JSON aggregate sends one row per order with the items nested.">
   <QueryShapes />
 </Figure>
 
-For the page of 50, the single JOIN with items and payments returned 750 rows and 106 KB; the
-batched queries returned 450 rows and 23 KB. On our fast link the JOIN was still a little quicker
-(3.9 ms against 4.5 ms, one round trip against three), but the multiplication grows with each
-collection's size: orders with 20 items and 10 payments would send 200 rows each.
+For the page of 50, the single JOIN with items and payments returned 50 orders × 15 rows = 750 rows,
+106 KB. The batched version of the same data, one query each for orders, items and payments,
+returned 50 orders + 250 items + 150 payments = 450 rows, 23 KB: about a fifth of the bytes
+(23 ÷ 106 = 0.22). On
+our fast test network the JOIN was still a little quicker (3.9 ms against 4.5 ms, one round trip
+against three), but the multiplication grows with each collection's size: orders with 20 items and
+10 payments would send 20 × 10 = 200 rows each.
 
 The second trap is pagination. `LIMIT 50` on a JOIN limits joined rows, not orders. We ran
-`SELECT ... FROM orders JOIN order_items ... ORDER BY orders.id LIMIT 50` and got the first 10
-orders, each with its 5 items. The page must be chosen first, in a subquery, and joined after:
+`SELECT ... FROM orders JOIN order_items ... ORDER BY orders.id LIMIT 50` and got 10 orders: each
+order produces 5 rows, so 50 rows ÷ 5 rows per order = 10 orders, each with its 5 items. The page
+must be chosen first, in a **subquery** (a query inside another query), and joined after:
 
 ```sql
 SELECT o.*, i.*
@@ -237,11 +489,13 @@ LEFT JOIN order_items i ON i.order_id = o.id
 ORDER BY o.id, i.id;
 ```
 
-SQLAlchemy does this wrapping for you when a joined eager load meets `LIMIT`, `OFFSET` or
+The inner query picks exactly 50 orders; the outer query attaches their items, however many rows
+that makes. (`LEFT JOIN` keeps an order on the page even when it has no items.) SQLAlchemy does this wrapping for you when a joined eager load meets `LIMIT`, `OFFSET` or
 `DISTINCT`. When you write the JOIN yourself, it is your job.
 
-PostgreSQL offers a way to get one query without repeated rows: build the children into an array
-inside each parent row.
+PostgreSQL offers a way to get one query without repeated rows: build each order's items into a
+**JSON array** (a list written in JSON, like `[[1, "A12", 2, 499], [2, "B07", 1, 1299]]`) inside the
+order's own row.
 
 ```sql
 SELECT o.*, c.name, items.list
@@ -253,24 +507,46 @@ CROSS JOIN LATERAL (
 ) AS items;
 ```
 
-`LATERAL` lets the subquery refer to the current order row, and `json_agg` folds that order's items
-into one JSON array. It returned 50 rows and 14 KB, the smallest result of all, in one round trip.
-Prisma's `relationLoadStrategy: "join"`, introduced in 2024, generates this kind of query on
-PostgreSQL ([Prisma, 2024](https://www.prisma.io/blog/prisma-orm-now-lets-you-choose-the-best-join-strategy-preview)).
+Read it from the inside out. `json_build_array` turns one item row into a small array. `json_agg`
+("JSON aggregate") collects those arrays into one list. `LATERAL` lets the subquery refer to the
+current order row, `o`, so it runs once per order and collects only that order's items, and
+`CROSS JOIN` attaches that one collected list to its order's row.
+
+It returned 50 rows and 14 KB, the smallest result of all, in one round trip. Prisma's
+`relationLoadStrategy: "join"`, introduced in 2024, generates this kind of query on PostgreSQL
+([Prisma, 2024](https://www.prisma.io/blog/prisma-orm-now-lets-you-choose-the-best-join-strategy-preview)).
 The price is on the server: building JSON took enough CPU that our 4 cores served 2,558 of these
-requests a second against 3,462 batched. One query is not automatically less work than three.
+requests a second against 3,462 batched, about a quarter fewer (3,462 − 2,558 = 904, and
+904 ÷ 3,462 = 26%). One query is not automatically less work than three.
 
 ### When there is no loop to fix: batching loaders
 
-Batching assumes one piece of code can see all 50 orders. In a GraphQL server it cannot. GraphQL
-resolves each field separately: the resolver for `Order.customer` is called once per order, with
-that one order, and has no idea that 49 others are being resolved next to it. Nested serializers
-and per-row permission checks have the same shape.
+Batching assumes one piece of code can see all 50 orders. Sometimes none can. Three ideas explain
+where and why.
 
-The fix is a **loader**, popularised by Facebook's DataLoader library. The building block is the
-**event loop tick**: in Node.js or Python's asyncio, the event loop runs every callback that is
-ready, then waits for I/O. When 50 resolvers start together, all 50 run up to their first `await`
-within one tick. A loader exploits that:
+**GraphQL and resolvers.** **GraphQL** is a way of building APIs where the client sends a query
+describing the exact fields it wants, such as "orders, and for each order its customer's name".
+The server answers it with **resolvers**: one small function per field. It exists so that one
+endpoint can serve many screens without a custom endpoint each. For our page, the resolver for
+`Order.customer` is called once per order, with that one order, and has no idea that 49 others are
+being resolved next to it. Each call looks up one customer: N+1, with no loop anywhere in your code
+to fix. Nested serializers and per-row permission checks have the same shape.
+
+**Promises.** A **promise** (in JavaScript; Python's asyncio calls it a **future**) is a placeholder
+for a value that will arrive later. Code that needs the value writes `await`, which pauses that
+piece of code until the value arrives, while other code keeps running. A resolver that writes
+`await customers.load(42)` gets a promise back immediately and pauses until the customer is filled
+in.
+
+**The event loop and its tick.** In Node.js and in Python's asyncio, one **event loop** runs all
+these pieces of code in turn: it runs every piece that is ready to continue, then waits for the
+network or a timer, then runs the next set. One pass through "everything that is ready" is often
+called a **tick**. When 50 resolvers start together, all 50 run up to their first `await` within one
+tick, before any database answer has arrived.
+
+A **loader**, popularised by Facebook's open-source DataLoader library, uses that tick. Each call to
+`load(key)` writes the key down and returns a promise. When the tick ends, the loader sends one
+query for every key it collected and fills in all the promises:
 
 <StepThrough
   title="A loader turns 50 customer lookups into one query"
@@ -280,52 +556,65 @@ within one tick. A loader exploits that:
     { id: 'db', label: 'Database', kind: 'store' },
   ]}
   steps={[
-    { from: 'res', to: 'ldr', label: 'load(42)', text: 'The resolver for order 17 asks for customer 42. The loader records the key and hands back a promise. Nothing is sent to the database yet.' },
-    { from: 'res', to: 'ldr', label: 'load(7) ×49', text: 'The other 49 resolvers ask in the same tick. Customer 42 is asked for again by order 30; the loader returns the same promise, so it is fetched once.', },
-    { from: 'ldr', to: 'ldr', label: 'tick ends', text: 'When everything ready in this tick has run, the dispatch the loader scheduled on the first load runs, with 40 distinct keys.', tone: 'warn' },
+    { from: 'res', to: 'ldr', label: 'load(42)', text: 'The resolver for order 17 asks for customer 42. The loader writes the key down and hands back a promise. Nothing is sent to the database yet.' },
+    { from: 'res', to: 'ldr', label: 'load(7) ×49', text: 'The other 49 resolvers ask in the same tick. Order 30 asks for customer 42 again; the loader returns the same promise, so customer 42 is fetched once.', },
+    { from: 'ldr', to: 'ldr', label: 'tick ends', text: 'When everything ready in this tick has run, the send that the loader scheduled on the first load runs, with 40 distinct keys.', tone: 'warn' },
     { from: 'ldr', to: 'db', label: 'IN (40 ids)', text: 'One query for all the keys, the same query as the batching fix.' },
     { from: 'db', to: 'ldr', label: '40 rows', text: 'The rows come back in whatever order the database likes.', tone: 'ok', dashed: true },
-    { from: 'ldr', to: 'res', label: 'resolve ×50', text: 'The loader matches rows to keys and resolves every promise. A key with no row resolves to null. The resolvers carry on to their next field, and their item loads form the next batch.', tone: 'ok', dashed: true },
+    { from: 'ldr', to: 'res', label: 'resolve ×50', text: 'The loader matches rows to keys and fills in every promise. A key with no row gets null. The resolvers carry on to their next field, and their item loads form the next batch.', tone: 'ok', dashed: true },
   ]}
-  summary="Code written one row at a time, batched without seeing the loop: one query per relationship per level of nesting. The loader's cache lives for one request, so it never shows one user another user's data."
+  summary="Code written one row at a time, batched without seeing the loop: one query per relationship per level of nesting. The loader's memory of keys lives for one request, so it never shows one user another user's data."
 />
 
-DataLoader (version 2.2.3, as of October 2026) schedules the dispatch after all pending promise
-callbacks have run, and requires the batch function to return one result per key, in the order of
-the keys ([graphql/dataloader](https://github.com/graphql/dataloader)). Our example builds the same
-thing in about 30 lines.
+The 50 customer lookups became one query, and the 50 item lookups become a second. With the page
+query, that is 3 queries, the same as batching by hand.
 
-ORMs have started doing the same for ordinary loops. Django 6.1 (August 2026) adds fetch modes:
-with `QuerySet.fetch_mode(models.FETCH_PEERS)`, the first time any book reads `book.author`, Django
-fetches the authors of every book that came from the same query, in one query. It covers foreign
-keys and one-to-one fields, not reverse collections such as `author.books`. Laravel 12.8 (April
-2025) added `Model::automaticallyEagerLoadRelationships()`, which does the same for Eloquent
-collections. Both turn N+1 into 2 queries without touching the loop, at the cost of loading for all
-peers whether the code needs them or not.
+DataLoader (version 2.2.3, as of October 2026) runs its batch after all pending promise callbacks
+have run, and requires the batch function to return one result per key, in the order of the keys
+([graphql/dataloader](https://github.com/graphql/dataloader)). Our example builds the same thing in
+about 30 lines.
+
+ORMs have started doing the same for ordinary loops. Django 6.1 (August 2026) adds fetch modes: with
+`QuerySet.fetch_mode(models.FETCH_PEERS)`, the first time any book reads `book.author`, Django
+fetches the authors of every book that came from the same query, in one query. It covers foreign keys
+(a column pointing at another table's row, like `customer_id`) and one-to-one fields, not reverse
+collections such as `author.books`. Laravel 12.8 (April 2025) added
+`Model::automaticallyEagerLoadRelationships()`, which does the same for Eloquent collections. Both
+turn N+1 into 2 queries (the list, then all its peers' related rows) without touching the loop, at
+the cost of loading for all peers whether the code needs them or not.
 
 ### Pipelining: the same queries, one round trip
 
-Sometimes the code cannot be restructured: a library loop, a migration script, a batch of writes.
-**Pipelining** keeps every query and removes the waiting between them. Normally the client sends a
-query and waits for its result before sending the next. In pipeline mode it sends many queries
-without reading the results, and the server runs them in order and streams the answers back.
-PostgreSQL's client library added pipeline mode in version 14 (2021); psycopg supports it from 3.1,
-and pgbench can script it with `\startpipeline`.
+Sometimes the code cannot be restructured: a library's loop, a **migration** script (one that changes the database's structure or data), a
+batch of writes.
 
-Our 101 queries pipelined took 6.8 ms at a 1 ms round trip and 10.7 ms at 5 ms, against 112 ms and
-524 ms one after another. What did not change: the server still ran 101 statements, so the CPU cost
-is the same as before, and the 33 KB of results is the same. And a pipeline only helps queries that
-do not need each other's answers. The lookups need the ids from the page query, so a real pipeline
-here takes two round trips: the page, then the 100 lookups together.
+**What it is.** **Pipelining** sends many queries one after another without waiting for each
+answer, and reads the answers as they stream back.
+
+**Why it exists.** It removes the waiting between queries without changing the queries. Normally the
+client sends a query and waits for its result before sending the next. In pipeline mode the server
+receives them all, runs them in order, and sends the answers back in the same order.
+
+**Example.** Our 101 queries pipelined took 6.8 ms at a 1 ms round trip and 10.7 ms at 5 ms, against
+112 ms and 524 ms one after another.
+
+**The precise version.** PostgreSQL's client library, libpq, added pipeline mode in version 14
+(2021); the Python driver psycopg supports it from version 3.1, and pgbench can script it with
+`\startpipeline`.
+
+What did not change: the server still ran 101 statements, so the CPU cost is the same as before, and
+the 33 KB of results is the same. And a pipeline only helps queries that do not need each other's
+answers. The lookups need the customer ids from the page query, so a real pipeline here takes two
+round trips: the page, then the 100 lookups together.
 
 ### Catching it before production
 
-N+1 comes back quietly, because adding one field to a serializer can add N queries. Three
-defences work, from cheapest to most thorough.
+N+1 comes back quietly, because adding one field to a serializer can add N queries. Three defences
+work, from cheapest to most thorough.
 
-**Make lazy loading loud in development and tests.** Most ORMs can turn a lazy load into an error:
-Rails' `strict_loading` (with `mode: :n_plus_one_only`, only loads that would cause N+1 raise),
-SQLAlchemy's `raiseload("*")`, Django 6.1's `FETCH_RAISE`, Laravel's
+**Make lazy loading loud in development and tests.** Most ORMs can turn a lazy load into an error,
+often called **strict loading**: Rails' `strict_loading` (with `mode: :n_plus_one_only`, only loads
+that would cause N+1 raise), SQLAlchemy's `raiseload("*")`, Django 6.1's `FETCH_RAISE`, Laravel's
 `Model::preventLazyLoading(! app()->isProduction())`. Run the test suite with it on; in production,
 log the violation instead of failing the request.
 
@@ -334,32 +623,37 @@ the number of queries changed. A fixed number such as "at most 5 queries" breaks
 adds a legitimate query; the comparison only breaks when the count grows with the data, which is the
 definition of N+1. GitLab's QueryRecorder tests work this way.
 
-**Measure queries per request in production.** Log the count per endpoint and alert on its tail.
-An APM tool that records each query as a span can spot the pattern itself: a run of similar queries
-one after another, all under one parent.
+**Measure queries per request in production.** Log the count per endpoint and alert when its
+slowest requests run far more queries than usual. An **APM** (application performance monitoring)
+tool records how long each step of a request took; each step it records is a **span**, and one span
+can contain others, so a request's span contains one span per query. Such a tool can spot the
+pattern itself: a run of similar query spans one after another, all inside one parent.
 
 ## Choosing between them
+
+The table compares the fixes on the page of 50 orders. "Queries" counts statements the database
+runs; "round trips" counts how many times the request waits for the network.
 
 | Fix | Queries for the page | Round trips | Data for 50 orders | Best for | Watch out for |
 |---|---|---|---|---|---|
 | None (lazy loading) | 2N + 1 | 2N + 1 | 33 KB | a page with one row | grows with N and with the network |
-| Batch with `IN` / `ANY` | 1 per relation | same | 19 KB | collections; the default | dedupe keys; chunk or use an array |
+| Batch with `IN` / `ANY` | 1 per relation | same | 19 KB | collections; the default | remove duplicate keys; chunk or use an array |
 | JOIN | 1 | 1 | 42 KB; 106 KB with two collections | many-to-one | rows multiply; `LIMIT` on the join |
 | JSON aggregate | 1 | 1 | 14 KB | nested JSON APIs on PostgreSQL | server CPU; harder SQL |
 | Loader | 1 per relation per level | same | like `IN` | GraphQL, nested serializers | one per request; clear after writes |
 | Pipelining | 2N + 1 | 2 | 33 KB | code you cannot restructure | the database does all the work |
 
-How to choose: JOIN to-one relations, batch collections with `IN` or `ANY`, and use a loader where
-resolvers or serializers hide the loop. Reach for a JSON aggregate when the endpoint returns nested
-JSON anyway and the database has CPU to spare, and for pipelining only when the queries cannot be
-merged. Whatever you pick, add the query-count test, because the fix is one new field away from
+How to choose: JOIN many-to-one relations, batch collections with `IN` or `ANY`, and use a loader
+where resolvers or serializers hide the loop. Reach for a JSON aggregate when the endpoint returns
+nested JSON anyway and the database has CPU to spare, and for pipelining only when the queries cannot
+be merged. Whatever you pick, add the query-count test, because the fix is one new field away from
 coming undone.
 
 ## Build it yourself
 
 Both examples use only the standard library: SQLite in memory stands in for the database, and every
-query waits 1 ms first, a round trip to another availability zone. The first excerpt is the loop an
-ORM runs for you, then the batched version.
+query waits 1 ms first, standing in for a round trip to another availability zone. The first excerpt
+is the loop an ORM runs for you, then the batched version.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -438,8 +732,14 @@ async function listOrdersBatched(db, limit) {
   </TabItem>
 </Tabs>
 
+Read it like this. The naive version is the loop from Part 1: one page query, then two queries inside
+the loop. `fetch_in` builds an `IN` list with one `?` placeholder per key, at most 500 keys
+(`MAX_IN_LIST`) per statement. The batched version collects the distinct customer ids, fetches them
+in one go into a map by id, groups the items into a map from order id to a list, and attaches both
+to each order: the four steps from "Batch by key".
+
 The loader is the production shape for code that resolves one row at a time. Each call to `load`
-records a key; the first one schedules a dispatch for after everything else that is ready has run.
+records a key; the first one schedules the batch for after everything else that is ready has run.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -538,7 +838,16 @@ async function listOrdersWithLoaders(db, limit) {
   </TabItem>
 </Tabs>
 
-The last piece is the test from the previous section: the same endpoint with 10 and 100 orders.
+Read it like this. `cache` remembers the promise for every key asked for in this request, so a key
+asked for twice is fetched once. `queue` holds the keys waiting for the next batch. The first `load`
+of a batch schedules `_dispatch` to run once the current tick is over (`call_soon` in Python,
+`setImmediate` in JavaScript). `_dispatch` takes the whole queue, runs one batch query, and fills in
+each key's promise; if the query fails, every promise in that batch fails with it. At the bottom,
+each order is resolved on its own, and `gather` / `Promise.all` starts all 50 at once, which is what
+lets their loads land in the same tick.
+
+The last piece is the test from "Catching it before production": the same endpoint with 10 and 100
+orders.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -579,42 +888,51 @@ Both languages print the same counts; the timings vary with how precisely your m
    loaders: 3 queries for 10 orders, 3 for 100: ok
 ```
 
+The naive counts follow the 2N + 1 rule: 2 × 10 + 1 = 21 queries and 2 × 100 + 1 = 201. The other
+two stay at 3.
+
 The PostgreSQL measurements on this page come from
 [`examples/n-plus-one-queries/postgres/run.sh`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/n-plus-one-queries/postgres),
-which starts a throwaway cluster, adds the network delay with a small proxy, and runs them all in
+which starts a throwaway database, adds the network delay with a small proxy, and runs them all in
 about 6 minutes.
 
 ## How real systems do it
 
-**GitLab** allows each controller, API endpoint and Sidekiq worker at most 100 SQL queries (as of
-October 2026), and its
-test environment raises an error above that; since GitLab 17.2, switching the check off for an old
-endpoint requires setting a new, higher threshold rather than none
+**GitLab** allows each controller (the code that handles one kind of web page), API endpoint and **Sidekiq** worker (a process that runs
+background jobs) at most 100 SQL queries (as of October 2026), and its test environment raises an
+error above that; since GitLab 17.2, switching the check off for an old endpoint requires setting a
+new, higher threshold rather than none
 ([GitLab docs](https://docs.gitlab.com/development/database/query_count_limits/)). Its QueryRecorder
-tests take a control count, create three more records, and expect the same number of queries, in
-both directions. In September 2026 GitLab started a triage of N+1 in its GraphQL API from production
-logs: for each operation it compares the 90th and 10th percentile of queries per request, since an
-operation whose busiest requests run far more queries than its cheapest ones probably grows with
-its data. The top entries ran hundreds of queries per request at the 95th percentile, and one,
-`GetProjectIssues`, 1,980
+tests take a control count, create three more records, and expect the same number of queries: the
+test fails if the count goes up, and also if it goes down.
+
+In September 2026 GitLab started a triage of N+1 in its GraphQL API: a list of the worst cases,
+ranked from production logs. For each operation (one named GraphQL query that clients send) it
+compares the 90th and the 10th percentile of queries per request: the count that 90% of
+requests stay under against the count that only 10% stay under. An operation whose busiest requests
+run far more queries than its cheapest ones probably grows with its data. The top entries ran
+hundreds of queries per request at the 95th percentile, and one, `GetProjectIssues`, 1,980
 ([GitLab epic, 2026](https://gitlab.com/groups/gitlab-org/-/epics/23614)).
 
 **Django 6.1** made the choice explicit with fetch modes: `FETCH_ONE` (the old behaviour),
-`FETCH_PEERS` (batch for all instances from the same query) and `FETCH_RAISE` (refuse), settable
-per queryset or as a model's default through a custom manager
+`FETCH_PEERS` (batch for all objects from the same query) and `FETCH_RAISE` (refuse), settable per
+query or as a model's default
 ([Django 6.1 release notes](https://docs.djangoproject.com/en/6.1/releases/6.1/)). For collections,
 `prefetch_related` remains the tool.
 
 **Rails** added `strict_loading` in 6.1, which raises `ActiveRecord::StrictLoadingViolationError` on
-a lazy load, per record, association, model or application. Its `:n_plus_one_only` mode raises only
-for lazy loads that would lead to N+1 queries, and
-`action_on_strict_loading_violation = :log` reports instead of failing
+a lazy load. It can be turned on per record, per association (Rails' word for a relation), per
+model or for the whole application. Its `:n_plus_one_only` mode raises only
+for lazy loads that would lead to N+1 queries, and `action_on_strict_loading_violation = :log`
+reports instead of failing
 ([Rails guides](https://guides.rubyonrails.org/active_record_querying.html#strict-loading)).
 
-**Sentry** detects N+1 from traces. As of October 2026, its detector looks for sequential,
-non-overlapping database spans with similar queries, together longer than 50 ms, usually more than five of them, after a
-"source" span; it groups issues by the parent span, the source span and the repeating query, which
-only works when queries are parameterized
+**Sentry**, an APM and error-tracking service, detects N+1 from its spans. As of October 2026, its
+detector looks for database spans that run one after another without overlapping, with similar
+queries, together longer than 50 ms, usually more than five of them, after a "source" span. It
+groups issues by the parent span, the source span and the repeating query, which only works when
+queries are **parameterized** (values sent as bind parameters, so every lookup has the same SQL
+text)
 ([Sentry docs](https://docs.sentry.io/product/issues/issue-details/performance-issues/n-one-queries/)).
 A second detector finds N+1 API calls from browsers and mobile apps.
 
@@ -629,24 +947,25 @@ or filter the loaded list in code.
 :::
 
 :::caution[Eager loading everything is over-fetching]
-The reaction to one N+1 incident is often `includes` on every association, or a default manager that
-joins five tables. Now every page loads relations it never shows, and list endpoints send megabytes.
-Load what the page uses. Rails' `:n_plus_one_only` mode, Django's `FETCH_PEERS` and Laravel's
-automatic eager loading are attractive here because they load only what the code actually touches.
+The reaction to one N+1 incident is often `includes` on every association, or a default that joins
+five tables. Now every page loads relations it never shows, and list endpoints send megabytes. Load
+what the page uses. Rails' `:n_plus_one_only` mode, Django's `FETCH_PEERS` and Laravel's automatic
+eager loading are attractive here because they load only what the code actually touches.
 :::
 
 :::danger[A loader cache shared between requests leaks data]
-A loader's cache is a per-request memo. Make the loader a module-level singleton and the second
-request reads the first request's customers: stale after any update, and, with row-level
-permissions, another tenant's data. Create loaders per request, and clear the affected keys after a
-write in the same request.
+A loader's cache is a memory for one request. Make the loader a single module-level object shared
+by every request, and the second request reads the first request's customers: out of date after any
+update, and, in an app that serves several companies from one database, possibly another company's
+data. Create loaders per request, and clear the affected keys after a write in the same request.
 :::
 
 :::caution[N+1 writes and N+1 calls]
 The same shape hides in writes: saving 500 imported rows one `INSERT` at a time is 500 round trips,
-where a multi-row `INSERT`, `COPY`, or psycopg's `executemany` (pipelined since 3.1) is a handful. And in services: a
-loop that calls `GET /users/{id}` for each item is N+1 over HTTP, with HTTP's larger round trip. The
-fix is the same, a batch endpoint such as `GET /users?ids=3,7,42`.
+where one `INSERT` with many rows, PostgreSQL's `COPY` (its bulk-load command), or psycopg's
+`executemany` (pipelined since 3.1) is a handful. And in services: a loop that calls
+`GET /users/{id}` for each item is N+1 over HTTP, with HTTP's longer round trip. The fix is the
+same, a batch endpoint such as `GET /users?ids=3,7,42`.
 :::
 
 :::caution[Long IN lists]
@@ -658,16 +977,16 @@ array with `= ANY($1)`, and paginate the parent query so N stays bounded.
 
 ## Trade-offs and when not to use it
 
-Batching is not free. It holds every related row in memory at once, adds code that maps rows back to
-parents, and for a detail page that shows one order, the lazy version runs 3 queries and the batched
-version runs 3 queries too. When N is small and bounded, lazy loading is fine. It is also the right
-default for a relation the page rarely touches, such as a details panel that opens on a click:
-eager loading it on every request costs every request.
+Batching is not free. It holds every related row in memory at once and adds code that maps rows back
+to parents. For a detail page that shows one order, N is 1: the lazy version runs 2 × 1 + 1 = 3
+queries and the batched version runs 3 queries too. When N is small and bounded, lazy loading is
+fine. It is also the right default for a relation the page rarely touches, such as a details panel
+that opens on a click: eager loading it on every request costs every request.
 
-The ORM sometimes saves you. Before a lazy load of a simple many-to-one, SQLAlchemy checks its
-**identity map** (the session's record of objects already loaded, by primary key), so 50 orders
-that share 3 customers run 3 lookups, not 50. Do not rely on that for collections, which always
-query.
+The ORM sometimes saves you. Before a lazy load of a many-to-one relation, SQLAlchemy checks its
+**identity map** (its record, for the current unit of work, of objects already loaded, by primary
+key), so 50 orders that
+share 3 customers run 3 lookups, not 50. Do not rely on that for collections, which always query.
 
 JOINs and JSON aggregates move work to the database; batching moves some of it to the application.
 Which is better depends on which side has spare capacity, and the measurements on this page are one
@@ -680,8 +999,8 @@ authors, orders with items), and in debugging questions about slow endpoints.
 
 - **"An endpoint is fast locally and slow in production, and the database is idle. What do you
   check?"** Queries per request, and the round trip between app and database. A count that grows
-  with the page size is N+1; latency of about count × round trip confirms it.
-- **"Posts with their author and comments: how do you load them?"** JOIN or `select_related` for
+  with the page size is N+1; a latency of about count × round trip confirms it.
+- **"Posts with their author and comments: how do you load them?"** A JOIN or `select_related` for
   the author (many-to-one), one `IN` query for the comments of all posts on the page, and a
   paginated parent query. Explain why joining the comments multiplies rows and breaks `LIMIT`.
 - **"A GraphQL query asks for users, their posts and each post's comments. How do you avoid
@@ -690,41 +1009,48 @@ authors, orders with items), and in debugging questions about slow endpoints.
 - **"How do you stop it from coming back?"** Strict loading in tests, a test that compares query
   counts for 10 and 100 rows, and queries per request as a production metric.
 
-Quantify once: "at a 1 ms round trip, 101 queries cost over 100 ms of waiting; 3 queries cost 3 ms".
+Put a number on it once: "at a 1 ms round trip, 101 queries cost over 100 ms of waiting; 3 queries
+cost 3 ms".
 
 ## Check yourself
 
 <details>
 <summary>1. A feed shows 20 posts, each with its author and its latest 3 comments, and each comment shows its author's name. How many queries does a naive lazy-loading version run, and how few can a batched version run?</summary>
 
-1 for the posts, 20 for post authors, 20 for comments, and 20 × 3 = 60 for comment authors: 101.
-Batched: posts, then one `IN` query for comments of all 20 posts, then one users query for every
-author id from both posts and comments: 3 queries (4 if post authors and comment authors are
-fetched separately).
+Naive, in four parts: 1 query for the posts, 20 for the post authors, 20 for the comments (one per
+post), and 20 × 3 = 60 for the comment authors. Added up: 1 + 20 + 20 + 60 = 101. Batched: the
+posts, then one `IN` query for the comments of all 20 posts, then one users query for every author
+id from both posts and comments: 3 queries (4 if post authors and comment authors are fetched
+separately).
 
 </details>
 
 <details>
 <summary>2. The database is 2 ms away and each query does 0.1 ms of work. Estimate one request's latency for 101 queries and for 3, and how many requests a second a pool of 10 can serve in each case.</summary>
 
-101 × 2.1 ms ≈ 212 ms, against 3 × 2.1 ms plus a little more work per batched query, about 7 ms. A
-pool of 10 serves at most 10 ÷ 0.212 ≈ 47 requests a second with N+1, and about 1,400 batched.
+Each query costs 2 ms of round trip + 0.1 ms of work = 2.1 ms. For 101 queries: 101 × 2.1 ms = about
+212 ms. For 3 queries: 3 × 2.1 ms = 6.3 ms, plus a little more work per batched query, about 7 ms.
+
+The pool: one connection held for 212 ms serves 1,000 ms ÷ 212 ms = about 4.7 requests a second, so
+10 connections serve about 47. Batched, one connection held for 7 ms serves 1,000 ÷ 7 = about 143
+a second, so 10 serve about 1,400.
 
 </details>
 
 <details>
 <summary>3. A developer fixes an N+1 with `SELECT ... FROM orders JOIN order_items ... ORDER BY orders.id LIMIT 50`. The page now shows 10 orders. Why, and what is the fix?</summary>
 
-`LIMIT` counts joined rows, and every order has 5 items, so 50 rows are 10 orders. Choose the 50
-orders in a subquery and join their items after it, or load the items with a second `IN` query.
+`LIMIT` counts joined rows, and every order has 5 items, so the 50 rows are 50 ÷ 5 = 10 orders.
+Choose the 50 orders in a subquery and join their items after it, or load the items with a second
+`IN` query.
 
 </details>
 
 <details>
 <summary>4. Customer lookups were moved to Redis. The database now sees 3 queries per request, but the endpoint is barely faster. What is happening?</summary>
 
-The loop still makes one round trip per order, now to Redis. 50 Redis round trips at a 1 ms network
-cost about as much as 50 database round trips. Read all the keys in one `MGET`, which is the
+The loop still makes one round trip per order, now to Redis. 50 Redis round trips at 1 ms each cost
+50 ms, about as much as 50 database round trips. Read all the keys in one `MGET`, which is the
 batching fix applied to the cache.
 
 </details>
@@ -745,10 +1071,10 @@ Pipelining fixed the waiting, not the work.
   local and 112 ms at a 1 ms round trip; 3 batched queries took 1.4 ms and 5 ms.
 - It also costs database CPU (337 against 3,462 requests a second on the same 4 cores) and pool
   capacity, because the connection is held for every round trip.
-- Batch collections with `IN` or `= ANY($1)`, chunked; JOIN to-one relations; watch for row
+- Batch collections with `IN` or `= ANY($1)`, chunked; JOIN many-to-one relations; watch for row
   multiplication and `LIMIT` on a JOIN.
-- Where code resolves one row at a time (GraphQL, serializers), use a per-request loader; Django 6.1's
-  `FETCH_PEERS` and Laravel's automatic eager loading apply the same idea to ORM loops.
+- Where code resolves one row at a time (GraphQL, serializers), use a per-request loader; Django
+  6.1's `FETCH_PEERS` and Laravel's automatic eager loading apply the same idea to ORM loops.
 - Keep it fixed: strict loading in tests, a test that compares query counts for 10 and 100 rows, and
   queries per request as a production metric.
 

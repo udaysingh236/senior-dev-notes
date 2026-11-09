@@ -119,3 +119,39 @@ and cover prevention.
 - Sentry docs: N+1 queries detector (living, Oct 2026)
 - GitLab docs: query count limits; QueryRecorder (living, Oct 2026)
 - GitLab epic 23614: GraphQL N+1 triage (2026)
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Restructured into Part 1 "Understand it" (the question, the idea in plain words with one page of 50
+orders in eight numbered steps, a new mental-model diagram `MentalModel.astro`, four building blocks:
+a round trip, an ORM and lazy loading, N and why the count grows, batching) and Part 2 (Going deeper
+with the sharp question, then the template's deep sections). Tagline and description rewritten as
+plain sentences.
+
+Fixed in the fresher read:
+- Terms now explained before use: round trip, driver, availability zone, ORM, lazy and eager
+  loading, batching, vCPU, proxy, slow query log, index, primary key, cache, Redis and `MGET`,
+  connection, serializer, parse/plan, prepared statement, pgbench, Unix socket, connection pool,
+  percentile and p99, failover, hash map, byte and KB, result header, bind parameter, protocol, bit
+  and the 16-bit limit, array parameter, `pg_stat_statements`, many-to-one, one-to-many, cartesian
+  product, subquery, `LEFT JOIN`, JSON array, `json_agg`, `LATERAL`, `CROSS JOIN`, GraphQL,
+  resolver, promise/future, event loop and tick, loader, foreign key, migration, pipelining (four
+  steps), strict loading, APM and span, controller, Sidekiq, GitLab "operation", parameterized
+  queries, association, identity map.
+- Working shown in words: 1 + 50 × 2 = 101; 101 × 1.06 ms ≈ 107 ms and 112 − 107 = 5 ms;
+  3 × 1.06 = 3.2 ms; 112 ÷ 5 = 22.4; the 5 ms row (101 × 5 = 505 ms; 3 × 5 = 15 ms); 2.4 ms per
+  order from (477.1 − 26.7) ÷ 190; prepared statements as savings and percentages; 3,462 ÷ 337 ≈ 10;
+  pool capacity as 1,000 ms ÷ 112 ms × 10 connections; 351 queries as four added parts; 750 = 50 × 15
+  and 450 = 50 + 250 + 150; 23 ÷ 106 ≈ a fifth; LIMIT 50 ÷ 5 = 10 orders; 904 ÷ 3,462 = 26%;
+  the regression-test counts 2 × 10 + 1 and 2 × 100 + 1; Check-yourself answers 1, 2 and 4.
+- Growth caption corrected from 2.3 to 2.4 ms per order (450.4 ms ÷ 190 orders = 2.37).
+- Every figure now has a sentence before it saying what to look at and one after saying what it
+  showed. "Read it like this" paragraphs added after the batching and loader snippets.
+- Removed an unexplained "custom manager" detail (Django) and "dedupe" (table).
+
+Three sentences a student could give after Part 1 alone: "N+1 is when code runs one query to get a
+list of N rows and then one more query per row to fetch something related, like each order's
+customer. Every query is a trip to the database and back, and the code waits for each one, so 101
+trips at 1 ms cost about 100 ms even though each query is tiny, which a laptop hides because its
+trips take a tenth of a millisecond. The fix is to batch: ask for all the related rows at once with
+WHERE id IN (...), so the page needs 3 queries whatever N is."

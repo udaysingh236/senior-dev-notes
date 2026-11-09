@@ -1,0 +1,72 @@
+---
+// Part 1 mental model: the same page of 50 orders, asked for in two ways. One question per order
+// means 101 trips to the database and back; one question per kind of data means 3 trips.
+// Numbers from examples/n-plus-one-queries/postgres/expected-output.txt (1 ms round trip).
+const ladder = [82, 94, 106, 118, 130];
+const batched = [
+  { y: 256, label: 'the 50 orders' },
+  { y: 286, label: 'their customers' },
+  { y: 316, label: 'their items' },
+];
+---
+
+<svg viewBox="0 0 400 406" width="100%" role="img" aria-labelledby="n1-mm-t n1-mm-d">
+  <title id="n1-mm-t">101 trips to the database or 3: the same page, two ways of asking</title>
+  <desc id="n1-mm-d">
+    Two ways for an app to load a page of 50 orders with each order's customer and items, from a
+    database about 1 millisecond away. Top: one question for the orders, then two questions per
+    order, 101 questions in all. Each is a trip to the database and back, made one after another,
+    so the page takes about 112 ms, nearly all of it waiting for the trips. Bottom: three
+    questions, one for the orders, one for all their customers, one for all their items. Three
+    trips, and the page takes about 5 ms. The database work is small in both; the number of trips
+    makes the difference.
+  </desc>
+  <defs>
+    <marker id="n1-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="16" style="fill: var(--viz-muted)">one page of 50 orders, database 1 ms away</text>
+
+  <!-- Top: one question per order -->
+  <text x="4" y="56" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one question per order</text>
+  <rect x="4" y="72" width="80" height="68" rx="10" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="44" y="111" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">app</text>
+
+  <ellipse cx="344" cy="78" rx="50" ry="8" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <path d="M294 78 L294 134 A50 8 0 0 0 394 134 L394 78" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="344" y="114" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">database</text>
+
+  {ladder.map((y) => (
+    <path d={`M90 ${y} L288 ${y}`} stroke-width="1.5" marker-start="url(#n1-mm-a)" marker-end="url(#n1-mm-a)" style="stroke: var(--viz-flow)" />
+  ))}
+  <rect x="122" y="92" width="134" height="28" rx="6" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-bad)" />
+  <text x="189" y="112" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">101 trips</text>
+
+  <text x="4" y="172" font-size="15" style="fill: var(--viz-muted)">one after another, about 1 ms each</text>
+  <text x="396" y="172" font-size="18" font-weight="700" text-anchor="end" style="fill: var(--viz-bad); font-family: var(--sl-font-mono)">112 ms</text>
+
+  <path d="M4 194 L396 194" stroke-width="1" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+
+  <!-- Bottom: one question per kind of data -->
+  <text x="4" y="224" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one question per kind of data</text>
+  <rect x="4" y="242" width="80" height="86" rx="10" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="44" y="291" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">app</text>
+
+  <ellipse cx="344" cy="250" rx="50" ry="8" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <path d="M294 250 L294 320 A50 8 0 0 0 394 320 L394 250" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="344" y="292" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">database</text>
+
+  {batched.map((b) => (
+    <g>
+      <text x="189" y={b.y - 6} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{b.label}</text>
+      <path d={`M90 ${b.y} L288 ${b.y}`} stroke-width="1.5" marker-start="url(#n1-mm-a)" marker-end="url(#n1-mm-a)" style="stroke: var(--viz-flow)" />
+    </g>
+  ))}
+
+  <text x="4" y="356" font-size="15" style="fill: var(--viz-muted)">3 trips, about 1 ms each</text>
+  <text x="396" y="356" font-size="18" font-weight="700" text-anchor="end" style="fill: var(--viz-ok); font-family: var(--sl-font-mono)">5 ms</text>
+
+  <text x="4" y="392" font-size="16" style="font-family: var(--note-font-display); font-style: italic; fill: var(--viz-muted)">each question is fast; the trips add up</text>
+</svg>
