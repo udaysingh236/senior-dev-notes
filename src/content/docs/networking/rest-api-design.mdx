@@ -411,7 +411,7 @@ How long to keep keys, how to recover after a crash, and how to handle operation
 are the subject of the [idempotency keys page](/messaging/idempotency-keys/).
 
 Now the whole thing under load. The sim below runs three clients side by side on the same network.
-A user makes one payment every 250 ms (4 a second). The two loss sliders set how often a request
+A user makes one payment every 250 ms (1,000 ÷ 250 = 4 a second). The two loss sliders set how often a request
 never reaches the server, and how often the server's response never reaches the client. One client
 never retries, one retries after a timeout with no key, and one retries with a key:
 
@@ -812,8 +812,8 @@ payment, written in the same transaction. Full code and run instructions:
 JSON itself has no size limit on numbers, but JavaScript stores every number in one format, called
 **floating point**, which holds whole numbers exactly only up to 2^53 − 1 = 9,007,199,254,740,991
 ([MDN](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Number/MAX_SAFE_INTEGER)).
-Database IDs are often stored in a `BIGINT` column, which goes up to about 9.2 × 10^18, about a
-thousand times higher. An ID above that limit arrives in a
+Database IDs are often stored in a `BIGINT` column, which goes up to about 9.2 × 10^18 (9.2 billion billion), about a
+thousand times higher (9.2 × 10^18 ÷ 9.0 × 10^15 ≈ 1,000). An ID above that limit arrives in a
 browser silently rounded to a neighbouring ID. Send IDs as strings.
 :::
 
