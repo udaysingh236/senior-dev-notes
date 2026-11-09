@@ -1,12 +1,12 @@
 ---
 title: Timeouts
-description: What connect, read and total timeouts each bound, measured in Python, Node.js and PostgreSQL. Why a 3-second timeout can wait 20 seconds, how hung calls eat a worker pool, choosing the number, passing deadlines between services, and why the server keeps working after the client gives up.
-tagline: A timeout turns "maybe never" into a failure you can see. Only if it bounds the right thing.
+description: How long your code should wait for another service before giving up, explained from zero with one service and one slow dependency, then in depth. How waiting calls use up a pool of workers, what connect, read and total timeouts each limit (measured in Python, Node.js and PostgreSQL), why a 3-second timeout can wait 20 seconds, choosing the number from percentiles, passing a deadline between services, and why the server keeps working after the caller gives up.
+tagline: How long your code should wait for another service before giving up, and why waiting too long can take your whole service down.
 difficulty: intermediate
 track: resilience
 prerequisites: [latency-vs-throughput, connection-pooling, proxy-lb-gateway]
 next: [retries-and-backoff, circuit-breakers, load-shedding]
-lastReviewed: 2026-11-06
+lastReviewed: 2026-11-09
 sidebar:
   order: 1
 ---
@@ -15,6 +15,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
 import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/timeouts/MentalModel.astro';
 import Overview from '../../../components/diagrams/timeouts/Overview.astro';
 import WorkerTime from '../../../components/diagrams/timeouts/WorkerTime.astro';
 import Cancel from '../../../components/diagrams/timeouts/Cancel.astro';
@@ -22,119 +23,314 @@ import BrownoutSim from '../../../components/sims/timeouts/BrownoutSim.astro';
 
 ## The question
 
-Your code calls a service with a 3-second timeout. The call returns after 20 seconds, with the
+Your shop's checkout service calls a payment service for every order. One day the payment service
+starts ignoring some calls: it does not answer them with an error, it does not answer them at all.
+95 of every 100 payments would still go through. Yet within a couple of seconds your checkout
+rejects every new order. How does a problem with a few calls take down the whole service? And how
+long should your code wait before it gives up on a call?
+
+The short answer: your server can only handle a fixed number of requests at once, and a request
+that is waiting for an answer still takes one of those places. Calls that never answer keep their
+places for ever, so the places run out. A **timeout** is a limit on how long your code waits:
+when it runs out, your code stops waiting, frees the place and reports an error. Choose the limit
+well and a sick payment service costs you 5 failed payments in 100; choose it badly, or not at
+all, and it costs you every payment.
+
+## The idea in plain words
+
+Follow one service through a bad day. The **Orders** service handles checkout. For every order it
+calls the **Payments** service and waits for the answer. Payments is a **dependency** of Orders: a
+service Orders needs before it can answer.
+
+1. **The setup.** Orders can work on 20 requests at the same time and no more. Each of those 20
+   places is called a **worker** (the building blocks below explain what a worker is inside a
+   server). A request keeps its worker from the moment it starts until it is finished, including
+   the time it spends waiting for Payments.
+2. **A normal day.** 200 orders arrive every second. Most calls to Payments answer in about 40 ms,
+   a few take a few hundred milliseconds, and on average a call takes 48 ms. So each second,
+   Orders needs 200 × 48 ms = 9,600 ms of worker time. That is 9.6 seconds of waiting packed into
+   every second, and since each worker can give one second of its time per second, about 9.6
+   workers are busy at any moment. Call it 10 of the 20. Plenty of room.
+3. **A bad day.** Payments gets into trouble, and 5 of every 100 calls never get an answer. At 200
+   calls a second, that is 200 × 5 ÷ 100 = 10 calls every second that hang. The other
+   200 − 10 = 190 calls answer as usual, and they keep 190 × 48 ms = 9,120 ms, about 9.1 workers,
+   busy.
+4. **With no limit on waiting.** A call that never answers holds its worker for ever. Every second,
+   10 more workers get stuck. After one second 10 are stuck, and the healthy calls need about 9
+   more: 10 + 9 = 19 of the 20. A fraction of a second later all 20 are taken. From then on every
+   new order waits for a worker that never comes free, and Orders has to reject it, even though
+   95 of every 100 of those orders would have gone through.
+5. **With a 2-second limit.** Now each hanging call holds its worker for 2 seconds and then gives
+   up. 10 new hanging calls arrive every second and each stays 2 seconds, so at any moment
+   10 × 2 = 20 workers are stuck on them. Add the 9.1 workers the healthy calls need:
+   20 + 9.1 = 29.1 workers wanted, and Orders has 20. Still down. A limit that is too long is
+   almost as bad as none.
+6. **With a 300 ms limit.** Each hanging call now holds a worker for 0.3 seconds. At any moment
+   10 × 0.3 = 3 workers are stuck. Add the 9.1 for the healthy calls: 3 + 9.1 = 12.1 workers
+   wanted, out of 20. Orders stays up. The 10 hanging payments a second fail after 300 ms with a
+   clear error, and the other 190 a second succeed.
+7. **Too short is wrong too.** Set the limit to 100 ms and Orders gives up on healthy calls that
+   happen to be slow: about 1 normal call in 100 takes 160 ms or more, and every one of those now
+   fails although Payments would have answered. So the limit has to sit a little above how long
+   healthy calls take, and the next section's building blocks show how to measure that.
+
+<Figure caption="Orders has 20 workers, and 5 of every 100 calls to Payments never answer. With no limit on waiting, every worker ends up stuck and new orders are rejected. With a 300 ms limit, the stuck calls give their workers back, and 8 of the 20 stay free.">
+  <MentalModel />
+</Figure>
+
+The picture shows the whole point: a waiting call costs a worker for as long as it waits. A limit
+on waiting turns "this call might never finish" into "this call fails after 300 ms", and a failure
+you can see and count is far cheaper than a worker you lose without noticing.
+
+Two more facts complete the idea, and Part 2 opens each of them up.
+
+8. **"Timeout" often does not mean what you think.** In most libraries, the timeout setting limits
+   one silence, not the whole call: the clock starts again every time a piece of the answer
+   arrives. A Payments service that sends its answer one character a second never trips a
+   3-second timeout, and the call can last 20 seconds. To limit the whole call you need a
+   **deadline**: one fixed moment after which nobody wants the answer, whatever is happening.
+9. **Giving up does not stop the other side.** When Orders stops waiting, Payments is not told. It
+   goes on working on an answer nobody will read, using up its own workers. So Orders sends along
+   how much time it has left, and Payments checks that before each slow step and stops when the
+   time is gone.
+
+An everyday picture: you phone a shop, and they put you on hold. A timeout is "I hang up after 3
+minutes of silence". If the hold music says "your call is important to us" every 2 minutes, the
+silence never reaches 3 minutes and you wait for ever. A deadline is "I hang up at 10:15, whatever
+I hear". The picture stops working in one place: when you hang up, the shop assistant hears the
+line go dead and stops looking for your order. A server usually does not notice, and keeps looking.
+
+## The building blocks
+
+Five ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A worker and a worker pool
+
+**What it is.** A **worker** is the part of a server that handles one request at a time. A
+**worker pool** is the fixed set of workers the server has.
+
+**Why it exists.** Every request in progress uses memory and other resources, so a server cannot
+take on unlimited requests at once. It sets a fixed number and makes the rest wait or turns them
+away.
+
+**Example.** Orders has a pool of 20 workers. Request number 21 arrives while all 20 are busy. It
+waits in a line, called a **queue**, until one of the 20 finishes. If the queue is full too, Orders
+rejects it at once, usually with `503 Service Unavailable`.
+
+**The precise version.** What counts as a worker depends on how the server is built: a **thread** (one line
+of work inside a program; a program can run many threads side by side), a **process** (one running
+copy of the program, as in a Python server that starts 20 of them), a connection taken from a pool of database
+connections, or a slot under a limit on how many requests an **async** server handles at once (an async
+server handles many requests on one thread, switching between them while they wait). In an async
+server a waiting request costs less memory than a thread, but if the server limits how many
+requests it handles at once, a waiting request still holds one of those slots. Either way the rule
+is the same: a request holds its worker until it finishes, and waiting counts. The
+[latency and throughput page](/foundations/latency-vs-throughput/) explains why the queue in front
+of a busy pool grows so fast.
+
+### How many workers a load keeps busy
+
+**What it is.** The number of workers busy at any moment, on average, is the number of requests
+per second times how many seconds each one holds its worker.
+
+**Why it exists.** It tells you whether a pool is big enough, and it shows why one slow
+dependency is so expensive: doubling how long each call holds a worker doubles the workers you
+need, at the same traffic.
+
+**Example.** 200 requests a second, each holding a worker for 48 ms. First turn the milliseconds
+into seconds: 48 ms is 0.048 s. Then multiply: 200 × 0.048 = 9.6. On average 9.6 workers are busy.
+If instead 10 requests a second each hold a worker for 2 s, that is 10 × 2 = 20 workers busy, a
+whole pool of 20, from only 10 requests a second.
+
+**The precise version.** This is **Little's law**: workers in use = arrival rate × time each is
+held, true on average whenever requests leave as fast as they arrive. Read the other way round, it
+gives the most a pool can serve: workers ÷ time held. For 20 workers and 48 ms per request, that is
+20 ÷ 0.048 s = 416.7, about 417 requests a second. Engineers often write the product as **worker-seconds per
+second**: 9.6 worker-seconds of work arriving every second needs 9.6 workers.
+
+### A timeout
+
+**What it is.** A **timeout** is a limit on how long one wait may last. When it runs out, the code
+stops waiting and gets an error instead of an answer.
+
+**Why it exists.** A call to another service can end three ways: an answer, an error, or never.
+"Never" is the dangerous one, because it produces nothing to see: no error in the logs, no failed
+request on a dashboard, only a worker that quietly stops being available. A timeout turns "never"
+into an error that the code can handle and the dashboards can count.
+
+**Example.** In Python, `requests.get(url, timeout=0.3)` raises an exception if Payments stays
+silent for 0.3 seconds. Orders catches it and tells the customer
+"payment is slow, please try again", and the worker is free for the next order.
+
+**The precise version.** Libraries put timeouts on individual waits inside a call: waiting to
+connect, waiting for the next piece of the answer, and so on. Most of them, as Part 2 shows, start
+the clock again every time a piece of data arrives. And most libraries have no timeout at all
+unless you set one.
+
+### A deadline
+
+**What it is.** A **deadline** is a fixed moment by which the whole job must be finished. After
+it, nobody wants the answer.
+
+**Why it exists.** A job often makes several waits in a row: connect, send, read, maybe a second
+call. Separate timeouts on each wait do not add up to a limit on the job, and they say nothing to
+the next service about how long the caller will wait. A deadline is one number that covers the
+whole job and can be handed on.
+
+**Example.** An order arrives at Orders at 10:00:00.000, and the mobile app that sent it will wait
+2 seconds. So the deadline is 10:00:02.000. Orders spends 300 ms checking stock. Now it is
+10:00:00.300 and the time left is 2,000 − 300 = 1,700 ms. So the call to Payments may wait at most
+1,700 ms, even if Payments' own timeout setting is 5 seconds.
+
+**The precise version.** A deadline is the start time plus a **budget** (the total time allowed).
+Before every wait, the code works out the time left (deadline minus now) and waits no longer than
+that. Part 2 shows why the clock used for this must be a special one, and how the time left travels
+from service to service.
+
+### Percentiles: p99 and p99.9
+
+**What it is.** The **99th percentile**, written **p99**, is the time within which 99 of every 100
+calls finish. The **p99.9** is the time within which 999 of every 1,000 finish.
+
+**Why it exists.** An average hides the slow few. The timeout must sit above nearly all healthy
+calls, slow ones included, or it will cut them off, so we need a number that describes the slow
+end.
+
+**Example.** Take 1,000 calls to Payments on a normal day and sort them from fastest to slowest.
+The average is 48 ms. The 990th call in the list took 160 ms, so 990 of the 1,000 took 160 ms or
+less: the p99 is 160 ms. The 999th call took 255 ms: the p99.9 is 255 ms. Only 1 call in 1,000 was
+slower than that.
+
+**The precise version.** The pN of a set of measurements is the value below which N percent of
+them fall. It is measured over a window of time (the last hour, the last day), and it changes when
+the dependency changes. A timeout a little above the dependency's p99.9 on a good day, here about
+300 ms, cuts off almost no healthy calls.
+
+:::tip[If you stop here]
+- Every request holds one of a server's few workers until it finishes, and waiting for another
+  service counts. A call that never answers holds its worker for ever.
+- Workers busy = calls per second × seconds each call holds a worker. 10 hanging calls a second
+  with no limit take every worker of a pool of 20 within about a second.
+- A **timeout** limits how long a call may wait. Too long (or none) and a few hanging calls take the
+  whole pool; too short and it cuts off healthy calls. Set it a little above how long healthy calls
+  take at the slow end (their p99.9).
+- Most timeout settings limit one silence, not the whole call. A **deadline** limits the whole job,
+  and the time left should be passed to the next service, because giving up does not stop the work
+  on the other side.
+:::
+
+## Going deeper
+
+Part 1 used one service, one dependency and round numbers. Real calls raise sharper questions.
+Your code calls a service with a 3-second timeout, and the call returns after 20 seconds, with the
 full answer and no error. We measured exactly that with Python's `urlopen(url, timeout=3)` and with
 Node's `http.get(url, { timeout: 3000 })`, and neither library has a bug. What does a timeout
-setting actually promise? And when your code does give up, what is the server still doing?
+setting actually promise? When your code does give up, what is the server, and the database
+behind it, still doing? And why do so many libraries ship with a default of minutes, or none?
 
-## Why this problem exists
-
-A call to another service can end three ways: it succeeds, it fails with an error, or it never
-ends. The third is the dangerous one. An error is fast and visible: it is logged, counted and
-alerted on. A call that never ends produces nothing at all, while it holds a thread, a connection,
-memory and often a database lock on the caller's side.
-
-A **timeout** is a limit on how long one step waits. It turns "maybe never" into an error the code
-can handle and the dashboards can see. The trouble is that nearly every library's default is
-"wait for a very long time" or "wait for ever". As of November 2026, from each project's
-documentation:
-
-| Client or proxy | Default | What it bounds |
-|---|---|---|
-| Python `requests`, `urllib` | none | — |
-| Python `httpx` | 5 s | each connect, read, write and pool wait |
-| Node.js `fetch` (undici) | 300 s, 300 s | headers; then each gap between body chunks |
-| Node.js `http.request` | none | the `timeout` option only emits an event |
-| Go `http.Client` | none | when set, the whole request including the body |
-| gRPC | no deadline | when set, the whole call |
-| nginx `proxy_read_timeout` | 60 s | each gap between two reads |
-| Envoy route timeout | 15 s | the whole response, from the end of the request |
-| Cloudflare to your origin | 125 s | waiting for the response (error 524) |
-| AWS SDKs, connect | 3.1 s (1.1 s in-region) | the TCP and TLS handshakes |
-| PostgreSQL `statement_timeout` | none | each statement on the server |
-
-Two things stand out. The defaults that exist are minutes, not milliseconds. And the right-hand
-column is not one thing: some bound a whole call, some bound one wait inside it. The rest of the
-page is about that column.
-
-A hang also hides from the tools built to catch failures. On 12 November 2024, one JavaScript file
-that Canva's editor needed took 20 minutes to download through its CDN, because of packet loss on
-one network path. More than 270,000 user requests waited on that one download. Canva's deployment
-canary watched the error rate, and saw nothing, because the requests did not fail; they did not
-finish. When the download completed, all of them resumed at once and sent 1.5 million requests a
-second to the API gateway, three times its usual peak, which took canva.com down for about 50
-minutes. Among the fixes Canva listed: timeouts on asset fetches
-([Canva, 2024](https://www.canva.dev/blog/engineering/canva-incident-report-api-gateway-outage/)).
+The rest of the page answers those: which wait each kind of timeout covers, how to pick the number
+and check it against a pool, how a deadline travels between services, how far giving up reaches,
+and the limits a server needs against its own slow callers.
 
 ## The obvious fix, and why it breaks
 
 **"Set `timeout=5` on every call."** Better than nothing, and wrong in three ways.
 
-First, in most clients the setting is not a limit on the call. Python's `requests` documentation
-says its read timeout is the time the client will wait *between* bytes, and that neither timeout is
-wall clock. A server, proxy or overloaded network that trickles bytes can keep such a call alive
-for ever. That is the 20 seconds in the opening question.
+First, in most clients that setting is not a limit on the call. Python's `requests` documentation
+says its read timeout is the time the client will wait *between* pieces of data from the server,
+and that neither of its timeouts is "wall clock" time, meaning the real time that passes from the
+start of the call to its end. A server that trickles data a little at a time can keep such a call
+alive for ever. That is the 20 seconds in the question above.
 
-Second, the number 5 is arbitrary. For a dependency that answers in 40 ms, 5 s means a hung call
-holds a worker more than 100 times longer than a normal one, and a few hung calls fill the pool.
-For a report that takes 8 s, 5 s fails every request.
+Second, the number 5 is arbitrary. For a dependency that answers in 40 ms, a 5 s timeout lets a
+hung call hold a worker 5,000 ÷ 40 = 125 times longer than a normal call, and Part 1 showed what a
+handful of those do to a pool. For a report that always takes 8 s, a 5 s timeout fails every
+request.
 
 Third, a timeout stops the caller from waiting; it does not stop the work. The server goes on
 computing, the database goes on running the query, and nobody reads the answer.
 
 **"Then set them long, to be safe."** A long timeout is safe for the dependency and dangerous for
-you: every second a call can hang is a second a worker cannot serve anyone else. The section on
-choosing the number shows the arithmetic.
+you: Part 1's 2-second limit still took the whole pool.
 
-Timeouts sit next to four ideas they get confused with. A **retry** decides what to do after a
-failure, a timeout included; the two must be designed together, because each retry needs time
-from the same budget (the next page, on retries and backoff). A **circuit breaker**
-stops calling a dependency that keeps failing, so that you stop paying even the timeout. **Load shedding** refuses work at the door when
-the server is full. And how timeouts must shrink from
-the outermost hop inward, and how retries at each hop multiply, is covered on the
-[reverse proxy, load balancer and gateway page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs).
-This page is about the single call: what to bound, by how much, and what happens after.
+Timeouts sit next to four ideas they are often confused with:
 
-## The core idea
+- A **retry** sends a failed call again. It decides what to do *after* a failure, a timeout
+  included, and the two must be designed together, because every retry needs time from the same
+  budget. The [retries and backoff page](/resilience/retries-and-backoff/) covers it.
+- A **circuit breaker** stops calling a dependency that keeps failing, for a while, so you stop
+  paying even the timeout on every call.
+- **Load shedding** refuses work at the door when your own server is full, before it takes a
+  worker.
+- How timeouts must shrink from the outermost service inward, and how retries at each hop
+  (each step from one service to the next) multiply, is on the [reverse proxy, load balancer and gateway page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs).
 
-Bound every wait, and bound the whole call with a **deadline**: one point in time, fixed when the
-work starts, after which nobody wants the answer. Every wait inside the call, the connect, each
-read, a retry, a database query, gets at most what is left until that deadline, and the remaining
-time travels with the request to every service it calls, so they can stop when the caller stops.
-
-The diagram shows the difference between a timeout on each wait and a deadline on the whole call,
-for the server in the opening question.
-
-<Figure caption="A read timeout restarts every time a byte arrives, so a server that sends one byte a second keeps a 3-second read timeout from ever firing. A deadline counts from the start of the call and stops it at 3 seconds.">
-  <Overview />
-</Figure>
+This page is about the single call: what to limit, by how much, and what happens after.
 
 ## How it works, piece by piece
 
-### What each timeout measures
+### Where a call waits
 
-An HTTP call waits in several places, and libraries name the limits on them differently. These are
-the ones that exist almost everywhere:
+Before we can say which timeout limits what, we need to see where an HTTP call actually waits. Four
+terms first, each in a sentence or two.
 
-- **Connect timeout**: how long to wait for the TCP handshake to complete. A host that does not
-  answer at all fails here. Without one, the operating system decides; the
-  [what happens when you type a URL page](/foundations/how-the-web-works/) measured 21 to 135 s.
-  `requests` applies it to each IP address in turn, so a name with an IPv4 and an IPv6 address can
-  take twice as long.
-- **TLS handshake timeout**: the same for the encryption handshake. AWS's SDKs set it separately,
-  to the same 3.1 s as connect.
+A **TCP connection** is the two-way channel two programs open before any HTTP data moves; TCP is
+the protocol that makes sure the data arrives complete and in order. It sends data in small pieces
+called **packets**, and resends any packet that gets lost on the way. Opening one takes a
+**handshake**: three small messages, "can we talk?", "yes, can we?", "yes". It exists so both sides
+know the other is there and listening. If the other machine never answers, nothing in TCP gives up
+quickly: the operating system resends the first message, waiting longer each time, and the
+[what happens when you type a URL page](/foundations/how-the-web-works/) measured 21 to 135 seconds
+before it gave up. The [TCP vs UDP page](/networking/tcp-vs-udp/) has the details.
+
+A **TLS handshake** comes next for `https://` addresses: a few more messages in which the two sides
+agree on encryption keys, the secret numbers used to scramble and unscramble the data. It is a second wait before any HTTP data moves
+([TLS page](/networking/tls/)).
+
+A **socket** is the program's handle on one connection: the object it reads from and writes to.
+Timeouts at the lowest level are set on a socket.
+
+A **byte** is the smallest piece of data a program sends or receives: 8 bits, enough to hold one
+character of plain English text, such as `a`. A 20-byte answer is an answer 20 characters long.
+Answers arrive as a stream of bytes, often in several pieces called **chunks**, and the wait for the
+next chunk is one of the waits below.
+
+With those, here are the waits inside one call, and the timeout that covers each. Libraries name
+them differently, but these exist almost everywhere:
+
+- **Connect timeout**: how long to wait for the TCP handshake to finish. A machine that does not
+  answer at all fails here. `requests` applies it to each address of the server in turn, so a name
+  with an IPv4 and an IPv6 address (the old and new forms of internet address) can take twice as
+  long.
+- **TLS handshake timeout**: the same, for the encryption handshake. AWS's SDKs, the client
+  libraries Amazon publishes for calling its cloud services, set it separately, to the same value as
+  connect.
 - **Read timeout**, also called socket timeout or idle timeout: how long to wait for the *next*
-  bytes. It restarts every time data arrives. In 99.9% of calls, the `requests` documentation notes,
-  that is the time before the first byte, which is why it is mistaken for a limit on the response.
-- **Write timeout**: how long a send may block, which matters when uploading to a slow reader.
-- **Total timeout** or **deadline**: a limit on the whole call, from start to the last byte of the
-  body. Go's `http.Client.Timeout` is one; most other clients do not have one built in.
+  bytes. It starts again every time data arrives. In 99.9% of calls, the `requests` documentation
+  notes, that wait is the one before the first byte, which is why it is mistaken for a limit on the
+  whole response.
+- **Write timeout**: how long sending may block, which matters when uploading to a server that
+  reads slowly.
+- **Total timeout**, or **deadline**: a limit on the whole call, from the start to the last byte of
+  the answer. Go's `http.Client.Timeout` is one; most other clients do not have one built in.
 
-Socket timeouts are built this way because that is what the operating system offers: Python's
-`settimeout` puts a limit on each blocking socket operation. A library that wants a total limit has
-to subtract the time already spent before every operation. The examples on this page measure what
-happens when it does not. Against a server that answered at once and then sent 20 bytes one second
-apart:
+Why are read timeouts built this way? Because it is what the operating system offers. Python's
+`socket.settimeout()` puts a limit on each socket operation that waits (a **blocking** operation),
+one read at a time. A library
+that wants a limit on the whole call has to subtract the time already spent before every read. Most
+do not.
+
+The figure shows what that means for the server in the question above, which answers at once and
+then sends its 20-byte answer one byte a second.
+
+<Figure caption="A read timeout starts again every time a byte arrives. When the server sends one byte a second, every silence is 1 second long, so a 3-second read timeout never fires and the call ends at 20 seconds. A 3-second deadline counts from the start of the call and stops it at 3 seconds.">
+  <Overview />
+</Figure>
+
+Twenty bytes at one a second take 20 × 1 = 20 seconds. The read timeout only ever sees a 1-second
+silence, which is under its 3 seconds, so it never fires. Any server that sends at least one byte
+every 2.9 seconds keeps it quiet for ever. The examples on this page run that server and print:
 
 ```text
 1. A server that sends 20 bytes, one every 1 s. Client timeout: 3 s
@@ -142,74 +338,106 @@ apart:
    [  3.0s] fetch_with_deadline(3 s): gave up at the deadline (timed out)
 ```
 
-Node's `http.get` with `{ timeout: 3000 }` also returned after 20.0 s. Its documentation is explicit
-about why: the `'timeout'` event "only notifies that the socket has been idle. The request must be
-destroyed manually." We made a server stay silent for 6 s, and a request whose `'timeout'` handler
-only logged, as many do, got the event at 3.0 s and its answer at 6.0 s. `fetch()` in Node has no
-overall timeout either; its defaults wait up to 300 s for the headers and up to 300 s between body
-chunks. What does bound the whole call is an abort signal: `fetch(url, { signal:
-AbortSignal.timeout(3000) })` stopped at 3.0 s, in the middle of reading the body.
+The first line is Python's standard `urlopen` with `timeout=3`: 20 seconds, no error. The second is
+our own function, shown in "Build it yourself", that keeps a deadline: it gave up at 3 seconds.
 
-Proxies behave like clients. nginx's `proxy_read_timeout` of 60 s applies between two successive
-reads, not to the whole response, while Envoy's route timeout of 15 s covers the whole response
-but starts only once the request has been fully received. Read the definition of every timeout you
-set, because "timeout" alone does not say which kind it is.
+Node.js is the same. Its `http.get` with `{ timeout: 3000 }` also returned after 20.0 s. Node's
+documentation is explicit about why: the `'timeout'` event "only notifies that the socket has been
+idle. The request must be destroyed manually." In other words, the option tells your code that 3
+seconds of silence passed, and leaves stopping the call to you. We made a server stay silent for
+6 s, and a request whose `'timeout'` handler only logged a message, as many do, got the event at
+3.0 s and its answer at 6.0 s.
+
+`fetch()` in Node has no overall timeout either: its defaults wait up to 300 s for the headers and
+then up to 300 s between chunks of the body. What does limit the whole call is an **abort signal**,
+an object you pass to `fetch` that can tell it to stop. `fetch(url, { signal:
+AbortSignal.timeout(3000) })` creates a signal that fires after 3,000 ms, and it stopped the call
+at 3.0 s, in the middle of reading the body.
+
+**Proxies behave like clients.** A **proxy** is a server that sits between a client and a service
+and passes requests through; nginx and Envoy are two widely used ones, and Cloudflare runs a large
+network of them in front of other companies' websites. Each proxy waits on the service behind it,
+so each has its own timeouts. nginx's `proxy_read_timeout` applies between two reads, like a
+client's read timeout. Envoy's route timeout covers the whole response, but starts only once the
+full request has been received.
+
+Here are the defaults, as of November 2026, from each project's documentation. Read the right-hand
+column carefully: "timeout" alone never says which wait it covers.
+
+| Client or proxy | Default | What it limits |
+|---|---|---|
+| Python `requests`, `urllib` | none | — |
+| Python `httpx` | 5 s | each connect, each read, each write, and the wait for a free connection |
+| Node.js `fetch` (built on a library called undici) | 300 s, 300 s | waiting for the headers; then each gap between body chunks |
+| Node.js `http.request` | none | the `timeout` option only emits an event |
+| Go `http.Client` | none | when set, the whole request including the body |
+| gRPC, a framework for calls between services | no deadline | when set, the whole call |
+| nginx `proxy_read_timeout` | 60 s | each gap between two reads |
+| Envoy route timeout | 15 s | the whole response, from the end of the request |
+| Cloudflare, waiting on your server | 125 s | waiting for the response (error 524) |
+| AWS SDKs (Amazon's client libraries), connect | 3.1 s (1.1 s in-region) | the TCP and TLS handshakes |
+| PostgreSQL `statement_timeout` | none | each SQL statement, on the database server |
+
+Two things stand out. The defaults that exist are minutes, not milliseconds: 300 s is 5 minutes,
+125 s is a little over 2. And the right-hand column is not one thing: some limit a whole call, some
+limit one wait inside it.
 
 :::caution[A slow trickle is not exotic]
-A response trickles when the server streams as it computes, when a proxy buffers and flushes in
-pieces, or when a congested path loses packets and TCP resends them one by one. In each case
-the read timeout keeps being reset, and only a deadline puts a limit on the total.
+A response trickles when the server sends its answer bit by bit as it computes it, when a proxy
+collects the answer and passes it on in pieces, or when a congested network path loses packets and
+TCP resends them one by one. In each case the read timeout keeps starting again, and only a
+deadline puts a limit on the total.
 :::
 
 ### Choosing the number
 
-Two building blocks first. A **percentile** says what share of calls finished within a time: if the
-p99 (99th percentile) is 160 ms, 99 of every 100 calls took 160 ms or less, and 1 took longer. And a
-**worker** is whatever serves one request at a time in your service: a thread, a process, a
-connection from a pool, or a slot in an async server's limit. A request holds its worker until it
-finishes, and a call that hangs holds it until the timeout fires.
+Part 1 worked out, for Orders, how many workers hanging calls take for each timeout. The figure
+puts the three cases side by side as a budget of worker time: the pool of 20 workers supplies 20
+worker-seconds every second, and each bar is what the traffic asks for.
 
-Now the arithmetic, the same Little's law as the [latency and throughput page](/foundations/latency-vs-throughput/):
-a pool of W workers, each held H seconds per request, serves at most W ÷ H requests a second. Take
-20 workers and a dependency whose calls take about 48 ms on average. The pool can serve about 416
-requests a second, and at 200 a second it is half used. Then the dependency gets into trouble and
-5% of calls never answer. Each of those holds a worker for the whole timeout:
-
-<Figure caption="At 200 requests a second, 5% of calls hanging for a 2-second timeout need 20 worker-seconds every second, more than the whole pool has. With a 300 ms timeout, the same hung calls need 3, and everything fits.">
+<Figure caption="Worker-seconds needed every second at 200 requests a second, against the 20 that a pool of 20 workers has. With 5% of calls hanging and a 2-second timeout, the hung calls alone need 20, so the total of 29.1 is past what the pool has. With a 300 ms timeout they need 3, and the total of 12.1 fits.">
   <WorkerTime />
 </Figure>
 
-With a 2 s timeout, the 10 hung calls a second need 20 worker-seconds every second; the healthy
-calls need another 9.1; the pool has 20. The queue fills, and the service starts rejecting
-requests, most of them requests whose dependency call would have succeeded. With a 300 ms timeout
-the hung calls need 3 worker-seconds, the total is 12.1, and the only failures are the 5% that were
-never going to answer. A long timeout let a partial failure of one dependency become a full outage
-of the service.
+The bottom two bars hold the same healthy traffic. Only the timeout changed, and it decided
+whether the service survived. When the pool is over budget, the queue in front of it fills and
+the service starts rejecting requests; most of those rejected requests were ones whose payment
+would have worked. That is how a partial failure of one dependency becomes a full outage of the
+service calling it.
 
-The simulation runs this pool. Start with the defaults, then move the timeout down and watch the
-amber cells.
+The arithmetic gives averages. The simulation runs the real thing with randomness: requests arrive
+at random moments, and healthy calls vary (most near 40 ms, the slowest 1 in 100 around 160 ms).
+Start with the defaults, then move the timeout down and watch the amber cells.
 
 <BrownoutSim />
 
-The sim shows both edges. Too long, and hung calls take the pool: about 70% of worker time went to
-calls that would never answer, and a quarter to half of all requests were rejected, depending on the
-moment. Too short, and the
-timeout cuts into healthy calls: at 100 ms, below the dependency's slow tail, about 89% were answered
-instead of 95%. With no hung calls at all, any timeout looks fine, which is why the number is so
-often wrong: it only matters on the bad day.
+The sim shows both edges. Too long, and hung calls take the pool: at the defaults, the sim's
+counters show about 70% of worker time going to calls that would never answer, and between a
+quarter and half of all requests rejected, depending on the moment. Too short, and the timeout cuts
+into healthy calls: at 100 ms, below the dependency's slow end, about 89 in 100 requests were
+answered instead of 95 in 100. With no hung calls at all, any timeout looks fine, which is why the
+number is so often wrong: it only matters on the bad day.
 
 So the number comes from two measurements, not from a habit:
 
-1. **The dependency's latency on a good day**, at a high percentile. Set the per-call timeout a
-   little above its p99.9, so healthy calls almost never hit it. For the dependency above, whose
-   p99.9 is about 255 ms, that means about 300 ms.
-2. **What the caller can afford**, which is its own deadline minus everything else it must do. If
-   that is less than the dependency's p99.9, no timeout fixes it; the design needs a cache, a
-   fallback or an asynchronous job instead.
+1. **How long the dependency takes on a good day**, at the slow end. Set the timeout a little above
+   its p99.9, so healthy calls almost never reach it. For the dependency in the sim, the p99.9 is
+   about 255 ms (measured from the sim's model of call times), so about 300 ms.
+2. **What the caller can afford**: its own deadline minus everything else it must do. If that is
+   less than the dependency's p99.9, no timeout fixes it, because healthy calls will not fit; the
+   design needs a cache (a saved copy of a recent answer), a fallback answer, or a background job
+   (work done later, outside the request, while the caller gets a quick reply) instead.
 
-Check the result against the pool: W ÷ (average hold, with the hung share held for the full
-timeout) must stay above peak traffic. Re-measure after the dependency changes, because a
-timeout set from last year's latency is a guess.
+Then check the result against the pool with Little's law from Part 1. Work out the average time a
+request holds a worker, counting the hanging share at the full timeout, and confirm that workers ÷
+that time stays above your peak traffic. For Orders on the bad day: 95 in 100 calls (a share of 0.95)
+hold a worker for 0.048 s, and 5 in 100 (a share of 0.05) hold it for 0.3 s. The average hold is 0.95 × 0.048 + 0.05 × 0.3 =
+0.0456 + 0.015 = 0.0606 s. The pool can then serve 20 ÷ 0.0606 ≈ 330 requests a second, above the
+200 that arrive. With the 2-second timeout the average hold would be 0.0456 + 0.05 × 2 = 0.1456 s,
+and the pool could serve only 20 ÷ 0.1456 ≈ 137 a second, below the 200 that arrive.
+
+Measure again after the dependency changes, because a timeout set from last year's latency is a
+guess.
 
 :::note[From the trenches]
 The first timeout to look at in an incident is not the one that fired; it is the one that did not.
@@ -219,20 +447,51 @@ or with the library's default of minutes, that nobody noticed while everything w
 
 ### Deadlines: passing the budget along
 
-A request that enters at the edge with a 2 s budget may call three services, each of which calls a
-database. If each hop sets its own fixed timeout, they do not add up to anything: the innermost
-service may happily spend 1.5 s on work for a caller that gave up a second ago. The fix is to pass
-the budget itself.
+A request that enters your system with a 2-second budget may call three services,
+each of which calls a database. If each hop sets its own fixed
+timeout, they do not add up to anything: the innermost service may spend 1.5 s on work for a caller that gave up a second ago. The
+fix is to pass the budget itself, as Part 1's step 9 described. Doing that well needs two more
+ideas.
 
-A deadline can travel in two forms. An **absolute deadline** is a timestamp ("finish by
-13:00:02.000"), which breaks when the two machines' clocks disagree by more than a few
-milliseconds, as they do more often than anyone expects. A **relative timeout** is the
-time left ("1,450 ms from now"). gRPC converts a deadline into the time remaining before sending it,
-in its `grpc-timeout` header, for exactly this reason, and each server turns it back into a
-deadline on its own clock when the request arrives
-([gRPC docs](https://grpc.io/docs/guides/deadlines/)). For HTTP there is no standard header; Envoy
-sends `x-envoy-expected-rq-timeout-ms` to its upstreams so they can exit early, and many teams
-define their own. Our examples use `x-request-timeout-ms`.
+**Clocks disagree.** Every machine keeps its own clock, and a time-sync service (usually NTP, the
+Network Time Protocol) nudges it towards the true time every so often. Two machines' clocks are
+close, but never exactly equal, and the gap is sometimes far larger than anyone expected.
+
+So a deadline can travel in two forms. An **absolute deadline** is a clock time: "finish by
+13:00:02.000". It breaks when the two clocks disagree. Example: the caller's clock runs 500 ms
+ahead of the receiver's. A 2-second deadline set by the caller at what its clock calls 13:00:00.000
+reads "13:00:02.000". The receiver gets it at that same instant, when its own clock says
+12:59:59.500, and works out 13:00:02.000 − 12:59:59.500 = 2.5 s left: half a second more than the
+caller will actually wait. A **relative timeout** is the time
+left: "1,450 ms from now". The receiver turns it into a deadline on its own clock the moment the
+request arrives, and the two clocks never need to agree.
+
+**gRPC** works exactly this way. gRPC is a framework, first built at Google, for one service to call
+a function on another over the network. It converts a deadline into the time remaining before
+sending it, in a header called `grpc-timeout`, and each server turns that back into a deadline on its
+own clock ([gRPC docs](https://grpc.io/docs/guides/deadlines/)). For plain HTTP there is no
+standard header. Envoy sends `x-envoy-expected-rq-timeout-ms` to the services behind it so they can
+stop early, and many teams define their own; our examples use `x-request-timeout-ms`.
+
+The second idea is which clock to measure "time left" on.
+
+**What a monotonic clock is.** A **monotonic clock** is a clock that only ever counts forward, like
+a stopwatch, and has nothing to do with the time of day.
+
+**Why it exists.** The ordinary clock, the **wall clock**, shows the time of day, and time sync can
+move it, even backwards. A deadline measured on it can fire early or late.
+
+**Example.** A request starts at 10:00:00.000 on the wall clock, with a 2-second deadline at
+10:00:02.000. At 10:00:00.500, time sync sets the clock back by 1 second, to 09:59:59.500. The code
+now thinks 2.5 s are left (10:00:02.000 minus 09:59:59.500), although only 1.5 s really are. A
+stopwatch started with the request reads 0.5 s whatever happens to the wall clock, so 2 − 0.5 =
+1.5 s left, correctly.
+
+**The precise version.** Use `time.monotonic()` in Python and `performance.now()` in JavaScript for
+any duration; `time.time()` and `Date.now()` follow the wall clock. A monotonic value means nothing
+on another machine, which is one more reason to send time remaining, not a timestamp.
+
+Here is one budget travelling through two hops:
 
 <StepThrough
   title="A 2-second budget, passed from hop to hop"
@@ -243,51 +502,70 @@ define their own. Our examples use `x-request-timeout-ms`.
   ]}
   steps={[
     { from: 'app', to: 'api', label: 'timeout 2000', text: 'The app will wait 2 s. It sends that as the time remaining, not as a clock time, so a wrong clock on either side does not matter.' },
-    { from: 'api', to: 'api', label: 'deadline set', text: 'The API turns 2,000 ms into a deadline on its own monotonic clock the moment the request arrives, minus a small margin for the trip back. It spends 300 ms in a queue and on its own work.', tone: 'warn' },
+    { from: 'api', to: 'api', label: 'deadline set', text: 'The API turns 2,000 ms into a deadline on its own monotonic clock the moment the request arrives. It spends 300 ms waiting for a worker and on its own work, which leaves 2,000 − 300 = 1,700 ms. It keeps 100 ms back for sending the answer home: 1,600 ms to spend.', tone: 'warn' },
     { from: 'api', to: 'pay', label: 'timeout 1600', text: 'It calls Payments with what is left: 1,600 ms. Not its own fixed 5 s, and not the original 2,000 ms.' },
-    { from: 'pay', to: 'pay', label: 'enough time?', text: 'Payments checks before starting: a charge takes about 400 ms at p99, and 1,600 ms is enough. It also caps its database query with the remaining time (SET LOCAL statement_timeout).', tone: 'ok' },
-    { from: 'pay', to: 'api', label: '200 OK', text: 'The answer comes back with 1,100 ms to spare.', tone: 'ok', dashed: true },
-    { from: 'api', to: 'app', label: '200 OK', text: 'Had the API spent 1,900 ms before calling Payments, it would have returned 504 at once instead of starting a charge it could not finish in time.', tone: 'ok', dashed: true },
+    { from: 'pay', to: 'pay', label: 'enough time?', text: 'Payments checks before starting: a charge takes about 400 ms at p99, and 1,600 ms is enough. It also limits its database query to the time left (SET LOCAL statement_timeout, explained below).', tone: 'ok' },
+    { from: 'pay', to: 'api', label: '200 OK', text: 'The charge took 400 ms, so the answer comes back with 1,600 − 400 = 1,200 ms to spare.', tone: 'ok', dashed: true },
+    { from: 'api', to: 'app', label: '200 OK', text: 'Had the API spent 1,900 ms before calling Payments, only 2,000 − 1,900 = 100 ms would have been left, before even keeping its margin: far below the 400 ms a charge needs. It would have returned 504 at once instead of starting a charge it could not finish in time.', tone: 'ok', dashed: true },
   ]}
   summary="One budget for the whole request, measured on each machine's own monotonic clock and passed as time remaining. Every hop spends from it, checks it before expensive work, and fails fast when it cannot finish in time."
 />
 
 Three details make it work. Subtract the time spent waiting in queues, not only the time spent
-working: a request that waited 400 ms for a worker has 400 ms less. Measure on the **monotonic
-clock** (`time.monotonic()` in Python, `performance.now()` in JavaScript), which never jumps, rather
-than the wall clock, which a time sync can move backwards. And keep a margin for the return trip,
-so the answer arrives before the caller's deadline rather than at it.
+working: a request that waited 400 ms for a worker has 400 ms less to spend. Measure on the
+monotonic clock. And keep a margin for the trip back, so the answer arrives before the caller's
+deadline rather than at it.
 
-gRPC propagates deadlines from an incoming call to outgoing ones automatically in Java and Go, and
-needs it enabled explicitly in C++. Everywhere else, the deadline is a value your code carries:
-a `context.Context` in Go, an `AbortSignal` in JavaScript, an object like our `Deadline` in Python.
+gRPC passes the deadline of an incoming call on to the calls it makes automatically in Java and Go,
+and needs it switched on in C++. Everywhere else, the deadline is a value your code carries from
+function to function: a `context.Context` in Go (its standard object for carrying a deadline and a "stop"
+signal), an `AbortSignal` in JavaScript, an object like our
+`Deadline` in Python.
 
 ### A timeout stops the waiting, not the work
 
-When a client gives up, it closes its socket or stops reading. The server is not told
-anything. It finds out, at best, when it tries to write the answer.
+When a client gives up, it closes its connection or stops reading. The server is not told
+anything. It finds out, at best, when it tries to send the answer and there is nobody left to
+receive it.
 
-We measured it with a handler that needs 2 s of work in ten 200 ms steps, called by a client with a
-0.5 s deadline:
+We measured it with a handler (the server function that answers one kind of request) that needs
+2 s of work, done in ten steps of 200 ms each, called by a client with a 0.5-second deadline. The
+figure compares two versions of the handler.
 
-<Figure caption="Without the deadline, the handler finishes its 2 s of work 1.5 s after the client left. With it, the handler checks the remaining time before each step and returns 504 at 0.4 s.">
+<Figure caption="Top: the handler ignores its caller and finishes its 2 s of work 1.5 s after the client left. Bottom: the client sends its remaining time in a header, and the handler checks it before each 200 ms step; at 0.4 s only about 0.1 s is left, less than a step, so it returns 504 and stops.">
   <Cancel />
 </Figure>
 
-The handler that ignored its caller ran all ten steps and then found nobody to send the answer to.
-Under load, that is how a slow service gets slower: it spends its capacity on answers nobody will
-read. The handler that read the caller's remaining time stopped after two steps.
+The handler that ignored its caller ran all ten steps, 10 × 200 ms = 2 s, and then found nobody to
+send the answer to: 2 − 0.5 = 1.5 s of work after the client had left. Under load, that is how a
+slow service gets slower: it spends its workers on answers nobody will read. The handler that read
+the caller's remaining time did two steps (2 × 200 ms = 0.4 s), saw that the roughly 0.1 s left was
+less than the 0.2 s the next step needs, and stopped.
 
-To **cancel** work means to stop it before it finishes, and how far that reaches depends on the
-layer. In Python's asyncio, cancelling a task raises `CancelledError` at its next `await`; a thread
-cannot be stopped from outside at all and has to check a flag or a deadline itself. In JavaScript,
-an `AbortSignal` passed to `fetch` and to your own functions carries the cancellation inward. In Go,
-every blocking call that takes a `context.Context` returns when the context is cancelled. gRPC
-cancels the call on the server when the deadline passes, but its documentation is clear that
-stopping the work the handler started is the application's job.
+To **cancel** work means to stop it before it finishes, from outside. How far that reaches depends
+on the layer:
 
-Databases are the place this hurts most, because a query holds locks and CPU. We killed a `psql`
-client 1 s into an 8-second query on PostgreSQL 16:
+- In Python's `asyncio` (its library for running many waiting tasks on one thread), cancelling a
+  task raises `CancelledError` inside it at its next `await`, the next point where it waits.
+- A Python thread cannot be stopped from outside at all; it has to check a flag or a deadline
+  itself, as our handler does.
+- In JavaScript, an `AbortSignal` passed to `fetch` and to your own functions carries the
+  cancellation inward.
+- In Go, every blocking call that takes a `context.Context` returns when that context is
+  cancelled.
+- gRPC cancels the call on the server when the deadline passes, but its documentation is clear that
+  stopping the work the handler already started is the application's job.
+
+**Databases are where this hurts most.** Two terms first. A **transaction** is a group of SQL
+statements that succeed or fail together. A **lock** is a database's mark on a row that says "a
+transaction is changing this; others must wait". Locks exist so two transactions cannot change the
+same row at once and lose one change. For example, while transaction A updates order 42, transaction
+B's `UPDATE` of order 42 waits until A finishes. So a query that keeps running holds its locks and
+its CPU, and every transaction that needs those rows waits behind it.
+
+We started an 8-second query on PostgreSQL 16, using `pg_sleep(8)`, a function that does nothing for
+8 seconds and stands in for a slow query. Then we stopped the client in three different ways, and
+checked whether the query was still running. `psql` is PostgreSQL's command-line client.
 
 ```text
 == 1. The client process dies 1 s into an 8 s query
@@ -300,20 +578,25 @@ client 1 s into an 8-second query on PostgreSQL 16:
    0.5 s later, the query is: gone
 ```
 
-With default settings the query ran to its end for a client that no longer existed.
-`client_connection_check_interval`, off by default, makes the server check during a query whether
-the client is still there. A **cancel request**, a separate message the client sends on a new
-connection, stops the query at once; whether your driver sends one when its own timeout fires is
-worth checking in its documentation, because many only close the socket. The surest bound is the
-server's own: `SET LOCAL statement_timeout` to the remaining budget at the start of the transaction.
+Read it like this. In case 1, with default settings, the query ran to its end, 8 seconds, for a
+client that no longer existed. In case 2, the setting `client_connection_check_interval`, off by
+default, made the server check every 500 ms during the query whether the client was still there, so
+the query was gone within a second. In case 3, the client sent a **cancel request**, a separate
+message on a new connection that asks the server to stop one query, and the query stopped at once.
+
+Whether your database driver sends a cancel request when its own timeout fires is worth checking in
+its documentation, because many only close the connection, which is case 1. The surest limit is the
+server's own: at the start of the transaction, `SET LOCAL statement_timeout` to the time left in
+the budget. `SET LOCAL` changes a setting only until the current transaction ends, so the next
+request on the same connection starts clean.
 
 ### Server-side timeouts: protecting the server from its callers
 
-Everything so far protects a caller. A server needs limits of its own, because some callers are
-slow on purpose or by accident. A client that sends its request headers one byte every few seconds
-holds a connection and a parser for as long as the server lets it; thousands of them, the attack
-known as Slowloris, exhaust the server without much traffic. The defences are limits on receiving
-the request:
+Everything so far protects a caller. A server needs limits of its own, because some callers are slow
+on purpose or by accident. A client that sends its request headers one byte every few seconds holds
+a connection, and the server's memory for reading it, for as long as the server lets it. Thousands of
+such clients, an attack known as **Slowloris**, can exhaust a server with very little traffic. The
+defence is a limit on how long receiving a request may take:
 
 | Layer | Setting | Default (as of November 2026) |
 |---|---|---|
@@ -323,43 +606,49 @@ the request:
 | PostgreSQL | `statement_timeout`, `lock_timeout` | none |
 | PostgreSQL | `idle_in_transaction_session_timeout`, `transaction_timeout` (17+) | none |
 
-The database rows deserve attention. `statement_timeout` limits one statement; `lock_timeout` limits
-waiting for a lock, which is often the real problem when a query is "slow"; in our run a second
-transaction trying to update a locked row failed after exactly 0.5 s with `lock_timeout = 500ms`.
-`idle_in_transaction_session_timeout` ends sessions that opened a transaction and then wandered off,
-holding locks, which the [connection pooling page](/databases/connection-pooling/) met as the
-"idle in transaction" problem. `transaction_timeout`, new in PostgreSQL 17, limits a whole
-transaction. Set these per role or per session rather than globally, since a migration and a web
+The database rows deserve attention:
+
+- `statement_timeout` limits how long one statement may run.
+- `lock_timeout` limits how long a statement may wait for a lock, which is often the real problem
+  when a query is "slow". In our run, a second transaction trying to update a locked row failed
+  after exactly 0.5 s with `lock_timeout = 500ms`.
+- `idle_in_transaction_session_timeout` ends sessions that opened a transaction and then stopped
+  sending anything while holding its locks, the "idle in transaction" problem from the
+  [connection pooling page](/databases/connection-pooling/).
+- `transaction_timeout`, new in PostgreSQL 17, limits a whole transaction.
+
+Set these per database user (a "role" in PostgreSQL) or per session rather than for the whole
+server, since a schema migration (a script that changes the structure of the tables) and a web
 request need very different limits.
 
-How idle keep-alive connections are timed out on each side of a load balancer, and why the
-balancer must close first, is covered on the
-[proxy page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs).
+One more server-side limit is the **keep-alive timeout**: how long an open connection may sit idle,
+waiting for the next request, before the server closes it. Why the load balancer in front (the proxy that
+spreads requests over several servers) must close first is covered on the [proxy page](/traffic/proxy-lb-gateway/#what-every-extra-hop-costs).
 
 ## Choosing between them
 
-| Limit | Bounds | Catches | Misses | Typical value |
+| Limit | Limits | Catches | Misses | Typical value |
 |---|---|---|---|---|
-| Connect | the TCP handshake | a host that does not answer | anything after connecting | 1–3 s; about 1 s inside a region |
-| Read (idle) | each gap between bytes | a server that stops sending | a slow trickle | above the dependency's p99.9 first byte |
+| Connect | the TCP handshake | a machine that does not answer | anything after connecting | 1–3 s; about 1 s inside one cloud region |
+| Read (idle) | each gap between bytes | a server that stops sending | a slow trickle | above the dependency's p99.9 wait for the first byte |
 | Total / deadline | the whole call | everything, slow trickle included | nothing on the client side | what the caller can afford |
-| Propagated deadline | the whole request, across services | work done for a caller that left | services that ignore it | the edge's budget, minus time spent |
+| Passed-on deadline | the whole request, across services | work done for a caller that left | services that ignore it | the first service's budget, minus time spent |
 | Server receive limits | reading a request from a client | slow or malicious clients | slow handlers | seconds for headers, more for bodies |
 | Database limits | a statement, a lock wait, a transaction | runaway queries, lock queues | work outside the database | per role: short for web, long for jobs |
 
 How to choose: every outgoing call gets a connect timeout and a total deadline, the deadline taken
 from the request's remaining budget. Long reads, such as streaming or large downloads, get a read
-timeout in place of a total and a separate limit on the whole stream. Every server sets receive
+timeout instead of a total, plus a separate limit on the whole stream. Every server sets receive
 limits, and every database role used by request handlers gets `statement_timeout` and
 `lock_timeout`.
 
 ## Build it yourself
 
-The naive version is the opening question: `urllib.request.urlopen(url, timeout=3)` or
-`http.get(url, { timeout: 3000 })`, both of which bound silence, not the call. The correct version
-bounds the whole call with a deadline; in Python that means shrinking the socket timeout to the
-remaining time before every read, in JavaScript an `AbortSignal`, combined with the caller's own
-signal so either one can end the call.
+The naive version is the question from "Going deeper": `urllib.request.urlopen(url, timeout=3)` or
+`http.get(url, { timeout: 3000 })`, both of which limit silence, not the call. The correct version
+limits the whole call with a deadline. In Python that means shrinking the socket's timeout to the
+time remaining before every read. In JavaScript it means an `AbortSignal`, combined with the
+caller's own signal so that either one can end the call.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -436,6 +725,17 @@ async function fetchWithDeadline(url, deadlineMs, { signal } = {}) {
   </TabItem>
 </Tabs>
 
+Read the Python version like this. `Deadline` remembers one moment on the monotonic clock and can
+say how much time is left. `fetch_with_deadline` sends the time left to the server in the
+`x-request-timeout-ms` header, then reads the answer in a loop. Before every read it sets the
+socket's timeout to the time left, so each read can wait only as long as the whole call still may.
+When the time runs out, the socket raises a timeout error, which the function turns into
+`DeadlineExceeded`.
+
+The JavaScript version does the same job with less code, because `fetch` accepts an abort signal.
+`AbortSignal.timeout(remaining)` fires when the time is up; `AbortSignal.any` combines it with the
+caller's own signal, so the call stops at whichever comes first.
+
 The production shape adds the server side: read the caller's remaining time, turn it into a
 deadline on the server's own clock, and check it before each expensive step.
 
@@ -484,92 +784,109 @@ Both files start their own small servers and print the same results:
    [  0.4s] client: /report-deadline: the server stopped: it would not finish in time
 ```
 
+Case 2 of the output is the Cancel figure above, measured: the handler that ignored its caller
+finished at 2.0 s and had nobody to answer; the one that read the header stopped at 0.4 s.
+
 The JavaScript version also runs the Node-specific cases from earlier on this page: `http.get` with
 the `timeout` option against the trickling and the silent server, and `fetch()` with no options. The
 PostgreSQL measurements come from
 [`examples/timeouts/postgres/run.sh`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/timeouts/postgres),
-which starts a throwaway cluster and takes about 40 seconds.
+which starts a throwaway database and takes about 40 seconds.
 
 ## How real systems do it
 
-**gRPC** puts the deadline in the protocol. A client sets one per call; it travels as the
-`grpc-timeout` header, converted to time remaining; when it passes, the client fails the call with
-`DEADLINE_EXCEEDED` and the server cancels it. Java and Go servers pass the remaining deadline on to the
-calls they make by default. The gRPC documentation's own warning is the default: no deadline, so a
-client can wait "effectively forever".
+**gRPC** puts the deadline into the protocol, as the deadlines section showed. When the deadline
+passes, the client fails the call with the status `DEADLINE_EXCEEDED`, and the server cancels it.
+The gRPC documentation's own warning is about the default: no deadline at all, so a client can wait
+"effectively forever".
 
-**Envoy** separates the limits that this page separates. The route `timeout` (15 s by default)
-covers the whole response but starts only when the full request has arrived, so it does not apply
-to streaming uploads; `per_try_timeout` bounds each retry within it; `per_try_idle_timeout` bounds
-gaps between bytes within a try; and `stream_idle_timeout` (5 minutes) closes streams with no
-activity at all. It tells each upstream its budget in `x-envoy-expected-rq-timeout-ms`
-([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/faq/configuration/timeouts)).
+**Envoy** separates the same limits this page separates
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/faq/configuration/timeouts)):
+
+- the route `timeout` (15 s by default) covers the whole response, but starts only when the full
+  request has arrived, so it does not apply to uploads that stream in slowly;
+- `per_try_timeout` limits each retry within that route timeout;
+- `per_try_idle_timeout` limits the gaps between bytes within one try;
+- `stream_idle_timeout` (5 minutes by default) closes streams with no activity at all.
+
+It also tells each service behind it how long it will wait, in `x-envoy-expected-rq-timeout-ms`.
 
 **AWS's SDKs** choose connect timeouts by where you call from. With "smart configuration defaults",
-the connect and TLS handshake timeouts are 3.1 s in `standard` mode and 1.1 s in `in-region` mode,
-where the service is a millisecond away, and 30 s in `mobile` mode
+the connect and TLS handshake timeouts are 3.1 s in `standard` mode, 1.1 s in `in-region` mode
+(where your code runs in the same cloud region as the service, meaning the same group of Amazon
+data centres, a millisecond away), and 30 s in `mobile` mode
 ([AWS docs](https://docs.aws.amazon.com/sdkref/latest/guide/feature-smart-config-defaults.html),
-values marked subject to change). Both values sit a little past the 1 s and 3 s at which Linux
-resends an unanswered handshake packet, so one lost packet does not fail the connect; the `requests`
-documentation gives the same advice, a connect timeout a little over a multiple of 3.
+values marked subject to change). Why such odd numbers? When a handshake message gets no answer,
+Linux resends it after 1 s, and again 2 s later, at 3 s from the start. A timeout of 1.1 s or 3.1 s
+sits a little past one of those resends, so a single lost message does not fail the connect. The
+`requests` documentation gives the same advice: a connect timeout a little over a multiple of 3.
 
-**Cloudflare** waits 125 s by default for an origin to start responding before returning error 524,
-and 30 s for a write to the origin, which cannot be changed. Enterprise customers can raise the read
-limit to 6,000 s
+**Cloudflare** waits 125 s by default for your server to start answering before it returns error
+524 to the visitor, and 30 s for sending to your server, which cannot be changed. Enterprise
+customers can raise the read limit to 6,000 s, which is 6,000 ÷ 60 = 100 minutes
 ([Cloudflare docs](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/)).
-Any endpoint that can take longer than that behind Cloudflare needs to become an asynchronous job,
-as the [REST API design page](/networking/rest-api-design/) describes with `202 Accepted`.
+Any endpoint that can take longer than that behind Cloudflare needs to become a background job:
+answer `202 Accepted` at once and let the client check back, as the
+[REST API design page](/networking/rest-api-design/) describes.
 
 ## Gotchas and war stories
 
 :::danger[A hang does not raise an error]
-In Canva's November 2024 outage, the deployment canary looked for errors, and hung requests made
-none. Alert on latency and on requests in progress, not only on error rates, and give every wait a
-limit so that a hang becomes an error the alerts can see. Canva added page-load completion as a
-canary signal and timeouts on asset fetches afterwards.
+On 12 November 2024, one JavaScript file that Canva's editor needed took 20 minutes to download
+through its **CDN** (content delivery network: servers around the world that keep copies of a site's
+files close to its users), because one network path was losing packets. More than 270,000 user
+requests waited on that one download. Canva's **canary**, the check that watches a new release on a
+small share of traffic before it goes everywhere, looked at the error rate and saw nothing, because
+the requests did not fail; they did not finish. When the download completed, all of them carried on
+at once and sent 1.5 million requests a second to Canva's API gateway (the front door all API calls
+pass through), three times its usual peak, and canva.com was down for about 50 minutes
+([Canva, 2024](https://www.canva.dev/blog/engineering/canva-incident-report-api-gateway-outage/)).
+Canva's fixes included timeouts on downloads of files like that one and using "did the page finish loading" as a
+canary signal. The lesson: alert on latency and on requests in progress, not only on error rates,
+and give every wait a limit so that a hang becomes an error the alerts can see.
 :::
 
 :::caution[A timeout handler that only logs]
-Node's `http` `'timeout'` event, Java's socket read timeouts caught and ignored, a `select` with a
-timeout that loops back to wait again: each looks like a timeout in code review and does not end
-anything. The test is to point the client at a server that never answers and check that the call
-fails, and when.
+Node's `http` `'timeout'` event, Java socket read timeouts caught and ignored, a `select` call (which
+waits on several sockets at once) with a timeout that loops back to wait again: each looks like a
+timeout in code review and does not end anything. The test is to point the client at a server that
+never answers and check that the call fails, and when.
 :::
 
 :::caution[Retries inside a timeout, or a timeout inside retries]
-Three attempts with a 2 s timeout each can take 6 s plus the backoff between them. Decide which
-number is the caller's real limit: give the whole operation a deadline, and let each attempt use
-what is left of it, as Envoy's `per_try_timeout` inside the route timeout does. The
-retries page, next in this track, covers the rest.
+Three attempts with a 2 s timeout each can take 3 × 2 = 6 s, plus the pauses between them. Decide
+which number is the caller's real limit: give the whole operation a deadline, and let each attempt
+use what is left of it, as Envoy's `per_try_timeout` inside the route timeout does. The
+[retries page](/resilience/retries-and-backoff/) covers the rest.
 :::
 
 :::caution[Streaming needs a different shape]
-A total deadline kills a long download or a WebSocket that is working fine. For streams, bound the
-gaps (an idle timeout), bound the time to the first byte, and put a separate, generous limit on the
-whole stream. Envoy's route timeout of 15 s is a common surprise for teams who add streaming
-behind it.
+A total deadline kills a long download or a WebSocket (a connection that stays open for messages in
+both directions) that is working fine. For streams, limit the gaps (an idle timeout), limit the time
+to the first byte, and put a separate, generous limit on the whole stream. Envoy's 15 s route
+timeout is a common surprise for teams who add streaming behind it.
 :::
 
 :::caution[Timeouts measured on the wall clock]
-`time.time()` and `Date.now()` follow the system clock, which a time sync can move by seconds in
-either direction. A deadline computed from them can fire early or never. Use `time.monotonic()` and
+`time.time()` and `Date.now()` follow the wall clock, which time sync can move by seconds in either
+direction. A deadline computed from them can fire early or never. Use `time.monotonic()` and
 `performance.now()` for anything that measures a duration.
 :::
 
 ## Trade-offs and when not to use it
 
-A timeout converts slowness into failure. That is the point, and also its cost: a request that
-would have succeeded in 400 ms fails at 300 ms, and the caller now has an error to handle where it
-had a slow answer. Set too short, timeouts create failures that would not otherwise exist, and with
-retries on top, extra load on the dependency that is already slow.
+A timeout turns slowness into failure. That is the point, and also its cost: a request that would
+have succeeded in 400 ms fails at 300 ms, and the caller now has an error to handle where it had a
+slow answer. Set too short, timeouts create failures that would not otherwise exist, and with
+retries on top, extra load on a dependency that is already slow.
 
 A timeout also does not make anything faster, and it does not protect the dependency. When a
 dependency is failing, the timeout limits what each call costs you, but you still pay it on every
-call; a circuit breaker stops making the calls. Work that is
-legitimately long, such as exports, reports and video processing, should not be squeezed under a
-request timeout at all; move it to a job and return `202`.
+call; a circuit breaker stops making the calls. Work that is legitimately long, such as exports,
+reports and video processing, should not be squeezed under a request timeout at all; move it to a
+background job and return `202`.
 
-Finally, deadlines need everyone to take part. A propagated deadline that one service in the middle
+Finally, deadlines need everyone to take part. A passed-on deadline that one service in the middle
 ignores stops at that service. Start with the services that do expensive work: the database, the
 payment provider, the search cluster.
 
@@ -578,66 +895,69 @@ payment provider, the search cluster.
 Timeouts come up in every design with service-to-service calls, and in debugging questions about
 outages that spread from one dependency.
 
-- **"A downstream service got slow and your whole service went down. Why, and what do you
+- **"A service you call got slow and your whole service went down. Why, and what do you
   change?"** Hung or slow calls held workers for the full timeout, the pool ran out, and healthy
-  requests were rejected. Do the arithmetic: W ÷ hold time. Lower the timeout to a little above the
-  dependency's p99.9, add a circuit breaker, and isolate the dependency's calls in their own pool.
+  requests were rejected. Do the arithmetic with Little's law. Lower the timeout to a little above
+  the dependency's p99.9, add a circuit breaker, and give the dependency's calls their own small
+  pool so they cannot take every worker.
 - **"What is the difference between a timeout and a deadline?"** A timeout is a duration for one
-  wait; a deadline is a point in time for the whole operation. Deadlines compose across retries and
-  hops; per-call timeouts do not.
+  wait; a deadline is a moment in time for the whole operation. Deadlines hold across retries and
+  hops; per-call timeouts do not add up.
 - **"How do you pass a deadline between services?"** As time remaining, not as a timestamp, because
-  clocks differ; convert to a deadline on the receiving machine's monotonic clock; subtract queue
-  time; fail fast when the remainder is too small. gRPC does this with `grpc-timeout`.
+  clocks differ; turn it into a deadline on the receiving machine's monotonic clock; subtract time
+  spent in queues; fail fast when too little is left. gRPC does this with `grpc-timeout`.
 - **"The client timed out. Is the server still working?"** Probably. Explain cancellation: the
-  server must check the deadline, the database needs `statement_timeout` or a cancel request.
-
-Quantify once: "5% of calls hanging for a 2 s timeout need 20 worker-seconds a second at 200
-requests a second; a 300 ms timeout needs 3".
+  server must check the deadline, and the database needs `statement_timeout` or a cancel request.
 
 ## Check yourself
 
 <details>
 <summary>1. A call uses requests.get(url, timeout=10). The server sends its headers at once, then one chunk every 8 seconds for 15 chunks. When does the call end?</summary>
 
-After about 120 seconds, successfully. The read timeout limits each gap between bytes, and every
-gap is 8 s, under 10. To limit the whole call, track a deadline and shrink the timeout before each
-read, or use a client with a total timeout.
+After about 120 seconds, successfully: 15 chunks, 8 seconds apart, take 15 × 8 = 120 seconds. The
+read timeout limits each gap between chunks, and every gap is 8 s, under 10, so it never fires. To
+limit the whole call, keep a deadline and shrink the timeout before each read, or use a client with
+a total timeout.
 
 </details>
 
 <details>
 <summary>2. A service has 50 workers and handles 400 requests a second. Each request calls a dependency that takes 30 ms. One day 2% of calls hang. With a 5 s timeout, what happens? What timeout would keep the service up?</summary>
 
-Healthy calls need 392 × 0.03 ≈ 11.8 worker-seconds a second; 8 hung calls a second × 5 s need 40
-more: 51.8, over the 50 available, so the pool fills and requests are rejected. With a 1 s timeout
-the hung calls need 8, the total is about 20, and the service stays up. The timeout must still sit
-above the dependency's p99.9 on a good day.
+Hanging calls: 2% of 400 is 400 × 2 ÷ 100 = 8 a second. Healthy calls: 400 − 8 = 392 a second,
+each holding a worker for 30 ms, which is 0.03 s, so 392 × 0.03 = 11.76, about 11.8 workers. Hanging calls with a 5 s timeout:
+8 × 5 = 40 workers. Total: 11.8 + 40 = 51.8 workers wanted, more than the 50 there are, so the pool
+fills and requests are rejected. With a 1 s timeout the hanging calls need 8 × 1 = 8 workers, the
+total is 11.8 + 8 = 19.8, and the service stays up. The timeout must still sit above the
+dependency's p99.9 on a good day.
 
 </details>
 
 <details>
-<summary>3. Service A has a 2 s deadline from its caller and spends 1.7 s before calling B, which takes 500 ms at p99. What should A do?</summary>
+<summary>3. Service A has a 2 s deadline from its caller and spends 1.7 s before calling B, whose calls take about 500 ms on average. What should A do?</summary>
 
-Fail fast with an error such as 504, without calling B. With 300 ms left, B almost certainly cannot
-answer in time, and calling it spends B's capacity on an answer nobody will read.
+Fail fast with an error such as 504, without calling B. Only 2 − 1.7 = 0.3 s, 300 ms, is left, and B
+takes 500 ms on an average call, so most calls could not finish in time. Calling it anyway spends
+B's capacity on an answer nobody will read.
 
 </details>
 
 <details>
 <summary>4. Why does gRPC send the time remaining instead of the deadline as a timestamp?</summary>
 
-Because the two machines' clocks may disagree. A timestamp from a machine whose clock runs 500 ms
-ahead arrives already half spent; time remaining, turned into a deadline on the receiver's own
-clock, does not depend on the two clocks agreeing.
+Because the two machines' clocks may disagree. If the caller's clock runs 500 ms
+ahead, the deadline it sends is 500 ms too late by the receiver's clock, so the receiver thinks it
+has 500 ms more than the caller will give it. Time remaining, turned into a deadline on the receiver's own clock,
+does not depend on the two clocks agreeing.
 
 </details>
 
 <details>
-<summary>5. Your web app's database driver has a 5 s query timeout. Under load you see queries in pg_stat_activity running for 40 seconds. How?</summary>
+<summary>5. Your web app's database driver has a 5 s query timeout. Under load you see queries running for 40 seconds in pg_stat_activity, PostgreSQL's list of running queries. How?</summary>
 
 The driver stops waiting after 5 s, but if it only closes the connection, PostgreSQL keeps running
-the query until it finishes or tries to send a result. Set `statement_timeout` for the web role,
-check whether the driver sends a cancel request on timeout, and consider
+the query until it finishes or tries to send a result. Set `statement_timeout` for the web app's
+database role, check whether the driver sends a cancel request on timeout, and consider
 `client_connection_check_interval`.
 
 </details>
@@ -646,12 +966,13 @@ check whether the driver sends a cancel request on timeout, and consider
 
 - A call can fail by never ending, and that is the expensive case: it holds a worker and raises no
   error. Most libraries default to no limit or to minutes.
-- Read timeouts bound silence between bytes, not the call: a 3 s timeout waited 20 s for a trickling
-  server. Bound every call with a total deadline.
-- Hung calls hold a worker for the full timeout. Capacity is workers ÷ hold time; set the timeout
-  a little above the dependency's p99.9, within what the caller can afford.
-- Pass the deadline as time remaining, convert it on each machine's monotonic clock, subtract queue
-  time, and fail fast when too little is left.
+- Workers busy = calls per second × time each holds a worker. Hung calls hold one for the full
+  timeout, so set the timeout a little above the dependency's p99.9, within what the caller can
+  afford, and check it against the pool.
+- Read timeouts limit silence between bytes, not the call: a 3 s timeout waited 20 s for a
+  trickling server. Limit every call with a total deadline.
+- Pass the deadline as time remaining, turn it into a deadline on each machine's monotonic clock,
+  subtract queue time, and fail fast when too little is left.
 - A timeout stops the waiting, not the work: check the deadline in handlers, and use
   `statement_timeout`, `lock_timeout` or a cancel request in the database.
 - Servers need their own limits on slow clients: header, body and request timeouts.
@@ -673,13 +994,13 @@ check whether the driver sends a cancel request on timeout, and consider
 - [Node.js: http](https://nodejs.org/api/http.html) and [AbortSignal](https://nodejs.org/api/globals.html#class-abortsignal) (living docs, checked November 2026) — the `'timeout'` event, server receive limits, `AbortSignal.timeout` and `AbortSignal.any`.
 - [undici: Client options](https://undici.nodejs.org/#/docs/api/Client) (living docs, checked November 2026) — `headersTimeout` and `bodyTimeout` behind Node's `fetch`.
 - [Go: net/http Client and Server](https://pkg.go.dev/net/http) (living docs, checked November 2026) — `Client.Timeout` and the server's read and write timeouts.
-- [gRPC: deadlines](https://grpc.io/docs/guides/deadlines/) and [cancellation](https://grpc.io/docs/guides/cancellation/) (living docs, checked November 2026) — deadlines on client and server, propagation, clock skew.
+- [gRPC: deadlines](https://grpc.io/docs/guides/deadlines/) and [cancellation](https://grpc.io/docs/guides/cancellation/) (living docs, checked November 2026) — deadlines on client and server, passing them on, clock differences.
 - [Envoy: how do I configure timeouts?](https://www.envoyproxy.io/docs/envoy/latest/faq/configuration/timeouts) (living docs, checked November 2026) — route, per-try, idle and stream timeouts and their defaults.
 - [nginx: proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html) and [core module](https://nginx.org/en/docs/http/ngx_http_core_module.html) (living docs, checked November 2026) — read and send timeouts between operations.
 - [PostgreSQL: client connection defaults](https://www.postgresql.org/docs/current/runtime-config-client.html) and [connection settings](https://www.postgresql.org/docs/current/runtime-config-connection.html) (living docs, checked November 2026) — statement, lock, idle and transaction timeouts, and `client_connection_check_interval`.
 - [AWS SDKs: smart configuration defaults](https://docs.aws.amazon.com/sdkref/latest/guide/feature-smart-config-defaults.html) (living docs, checked November 2026) — connect and TLS timeouts by defaults mode.
-- [Cloudflare: error 524](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/) (living docs, checked November 2026) — the proxy read and write timeouts to an origin.
+- [Cloudflare: error 524](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/) (living docs, checked November 2026) — the proxy read and write timeouts to an origin server.
 
 **Engineering writing**
 
-- [Canva: incident report, API Gateway outage](https://www.canva.dev/blog/engineering/canva-incident-report-api-gateway-outage/) (2024) — 270,000 requests waiting on one download, a canary that saw no errors, and the thundering herd when they all finished.
+- [Canva: incident report, API Gateway outage](https://www.canva.dev/blog/engineering/canva-incident-report-api-gateway-outage/) (2024) — 270,000 requests waiting on one download, a canary that saw no errors, and the flood of requests when they all finished.
