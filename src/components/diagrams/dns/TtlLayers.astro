@@ -5,7 +5,7 @@
 const ROWS = [
   { name: 'Authoritative server', note: 'publishes the record with TTL 300', value: '300 s', tone: 'store' },
   { name: 'Recursive resolver', note: 'hands out the time left; may cap it', value: '212 s', tone: 'server' },
-  { name: 'OS stub resolver', note: 'glibc keeps nothing; a local daemon may', value: '≤ 212 s', tone: 'server' },
+  { name: 'OS stub resolver', note: 'glibc keeps nothing; a local cache may', value: '≤ 212 s', tone: 'server' },
   { name: 'Language runtime', note: 'Java: 30 s · Chrome: 60 s · Node: none', value: '30 s', tone: 'client' },
   { name: 'Open connection', note: 'never asks DNS again until it closes', value: 'hours', tone: 'warn' },
 ];

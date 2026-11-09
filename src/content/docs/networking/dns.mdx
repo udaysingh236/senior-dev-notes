@@ -1,12 +1,12 @@
 ---
 title: DNS
-description: DNS as a set of leases you cannot recall. What each layer does to a TTL, why a TTL change must happen one old TTL before a migration, how negative and failure caching work, how outages spread as caches expire, how resolvers pick name servers, why DNS load balancing is lumpy, and what UDP size limits and DNSSEC really cost.
-tagline: Every answer is a lease you cannot call back. The numbers on the lease decide how you migrate, how you fail and how your load spreads.
+description: How a name becomes an address, explained from zero with one lookup and one cache, then in depth. Why every DNS answer is a lease nobody can recall, what each layer does to a TTL, how to move a record safely, how negative and failure caching work, how outages spread as caches expire, why DNS load balancing is lumpy, and what UDP size limits and DNSSEC cost.
+tagline: Your laptop almost never asks the owner of a name. It asks a copy, and nobody can call that copy back.
 difficulty: intermediate
 track: networking
 prerequisites: [how-the-web-works]
 next: [tcp-vs-udp, tls, cdn-and-edge-caching, load-balancing, service-discovery, caching-strategies]
-lastReviewed: 2026-10-23
+lastReviewed: 2026-11-07
 sidebar:
   order: 1
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/dns/MentalModel.astro';
 import TtlLayers from '../../../components/diagrams/dns/TtlLayers.astro';
 import Delegation from '../../../components/diagrams/dns/Delegation.astro';
 import GeoDns from '../../../components/diagrams/dns/GeoDns.astro';
@@ -25,46 +26,199 @@ import RoundRobinSim from '../../../components/sims/dns/RoundRobinSim.astro';
 
 ## The question
 
-Your DNS provider stops answering for an hour. Users of a name with a one-day TTL never notice.
-Users of a name with a five-minute TTL are all failing by minute five, unless their resolver serves
-stale answers. Now a different bug: the provider stays up but publishes the record with no
-addresses. The failure spreads at exactly the same speed, serve-stale does nothing, and after you
-fix the record, users keep failing for another quarter of an hour. Why do these outages behave so
-differently, and which numbers decide it?
+You type `shop.example.in` into a browser, and about 15 milliseconds later your laptop knows that
+the shop lives at the address 192.0.2.10. Nobody gave your laptop that number, and the shop's own
+server was not asked. Then the shop moves to a new server. The owner changes the address in one
+second, yet some users keep reaching the old server for an hour. Where did your laptop get the
+number, and why can't the owner take it back?
 
-The answer is that a DNS answer is a **lease**: a copy that a cache may keep for a fixed time, that
-you cannot revoke, and that every layer between you and the user may shorten, stretch or ignore.
-The next section sets out what a lease is made of, in one pass; the rest of the page is about what
-happens to those leases during migrations, outages and load balancing.
+The short answer: DNS, the Domain Name System, is the internet's directory of names. Your laptop
+asks one nearby server, a **resolver**, for the address. The first time anyone asks that resolver,
+it follows a chain of servers from the top of the name tree down to the server the shop's owner
+runs. That server answers with the address and a number of seconds the answer may be kept, its
+**TTL**. The resolver keeps the answer for that long and hands the copy to everyone who asks. That
+is why most lookups take milliseconds, and also why a change waits: thousands of copies are out
+there, each expiring on its own clock, and nobody can recall them.
 
-## Why this problem exists
+## The idea in plain words
 
-DNS data lives in **zones**. A zone is the part of the name tree that one operator runs from one set
-of servers: `example.in` and every name under it. Each piece of data in a zone is a **record**,
-written one per line with five fields:
+Follow one name through one lookup and one change. You run a small online shop at
+`shop.example.in`. Its server has the address 192.0.2.10, and you have told DNS that anyone may
+keep this answer for 300 seconds, five minutes. Ravi, in Bengaluru, opens the shop.
+
+1. **Ravi's browser needs a number.** Computers on the internet find each other by numeric
+   addresses, not names. Before it can send its first HTTP request, the browser must turn
+   `shop.example.in` into an address.
+2. **It asks the operating system, which asks a resolver.** Ravi's laptop is set up, usually
+   automatically by his Wi-Fi router, to send DNS questions to one resolver: his internet
+   provider's, or a public one such as Cloudflare's `1.1.1.1`. The question is one small message:
+   "what is the address of `shop.example.in`?"
+3. **The resolver has never heard of the name, so it starts at the top.** Names form a tree, read
+   from the right: `in` sits under the root of the tree, `example.in` under `in`, and
+   `shop.example.in` under that. The resolver ships with the addresses of the root servers. It
+   asks one, and the root replies: "not mine; the `.in` servers know. Here they are."
+4. **It asks a `.in` server**, run by the registry, the organisation in charge of all names ending
+   in `.in`. Reply: "not mine;
+   `example.in` is served by `ns1.example.in`, at 192.0.2.53."
+5. **It asks `ns1.example.in`**, the server you run, or a **DNS provider** (a company that runs
+   such servers for you) runs on your behalf. This server holds your
+   records, so it answers: "`shop.example.in` is 192.0.2.10; keep this for 300 seconds."
+6. **The resolver saves the answer and hands it to Ravi's laptop.** It stores the address in its
+   memory with an expiry time five minutes away. The whole walk took about 120 ms: on our test
+   network, lookups that had to make this walk took 105–141 ms. The browser now connects to
+   192.0.2.10.
+7. **Two minutes later, Ravi's flatmate opens the shop** through the same resolver. The resolver
+   finds the saved copy, sees 180 of its 300 seconds left, and answers at once, in about 15 ms
+   (12–20 ms on our network). It hands on the time left, 180 seconds, not the full 300.
+   `ns1.example.in` never hears about the flatmate, or about the next ten thousand people who ask
+   that resolver within those five minutes.
+8. **At 300 seconds the copy expires.** The next person who asks sends the resolver back to
+   `ns1.example.in` for a fresh answer. It skips the root and `.in` this time, because their
+   replies came with much longer keep-times of their own and are still saved.
+9. **Now you move the shop.** 200 seconds after the first lookup, you point `shop.example.in` at a
+   new server, 198.51.100.20. Your `ns1` hands out the new address from that moment. But Ravi's
+   resolver still holds its copy of the old one, with 100 seconds left, and keeps giving it out
+   until it expires. You have no way to tell it to throw the copy away.
+
+The picture below is that lookup. Look at where the questions stop: the first one walks down the
+tree, and every question in the next 300 seconds stops at the resolver.
+
+<Figure caption="The first lookup walks from the resolver to the root, then to the .in servers, then to the owner's server, and takes about 120 ms. The resolver keeps the answer for its TTL of 300 seconds, and every user who asks in that time gets the copy in about 15 ms.">
+  <MentalModel />
+</Figure>
+
+So the first lookup is the expensive one, and everything after it is a copy. Now multiply that by
+the internet. There is not one resolver but a great many: every internet provider runs some,
+and so does every company network and every public DNS service. Each one fetched its copy of your
+record at a different moment, so each copy expires at a different moment.
+
+When you change the record, nothing is sent to those resolvers. Each one carries on with its old
+copy until that copy's time runs out, and then fetches the new one the next time someone asks.
+People call this "DNS propagation", but nothing travels: it is many separate countdowns reaching
+zero.
+
+So the keep-time is a trade-off you choose for each name. A long one, say a day, means few
+questions reach your server, and users keep working even if your DNS server is down for an hour,
+but a change takes up to a day to reach everyone. A short one, say a minute, means a change
+reaches everyone within a minute, at the price of many more questions and much less protection
+when your DNS servers fail.
+
+An everyday picture: you change your phone number and tell your friends. Friends who saved the old
+number keep calling it until they next check with you, and you cannot reach into their phones to
+fix it. DNS adds one rule: every saved number comes with a time after which it must be checked
+again. The picture stops working in one place: a friend checks whenever they remember, while a
+resolver checks only when its copy has run out and someone asks it for the name again.
+
+## The building blocks
+
+Seven ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### Names and addresses
+
+**What it is.** An **IP address** is the number that identifies a machine on the internet; a
+**domain name** is the human-readable label that points to it.
+
+**Why it exists.** Networks deliver data to numbers. People remember names, and a name also lets
+the owner move to a different machine without telling every user a new number.
+
+**Example.** `shop.example.in` points to 192.0.2.10. (The addresses on this page come from ranges
+reserved for documentation, so none of them belongs to a real machine.)
+
+**The technical version.** An IPv4 address is four numbers from 0 to 255; IPv6, the newer version,
+uses longer addresses written like `2001:db8::10`. A domain name is a list of **labels** separated
+by dots, read from right to left, starting at the top: the root (which has an empty label), then
+`in`, `example`, `shop`. A name written with a dot at the end, `shop.example.in.`, is a complete
+name that ends at the root. Without that dot, some software first tries adding endings of its own,
+which matters in Kubernetes (Part 2).
+
+### DNS records
+
+**What it is.** A **record** is one fact about a name, stored on a DNS server: "`shop.example.in`
+has the address 192.0.2.10".
+
+**Why it exists.** DNS stores more than addresses: where to deliver email for a domain, which
+servers are in charge of a part of the tree, free-text notes. Each fact needs a label saying what
+kind of fact it is, and a keep-time.
+
+**Example.** Records are often written one per line, in a format called a zone file:
 
 ```text title="one record, in zone-file form"
 shop.example.in.   300   IN      A      192.0.2.10
 ; name             TTL   class   type   value
 ```
 
-The type says what the value means: `A` is an IPv4 address, `AAAA` an IPv6 one, `CNAME` says "this
-name is an alias, ask for that other name instead", `NS` names the servers that run a zone, `SOA`
-holds the zone's own settings and `TXT` is free text. The class is always `IN`. All records with the
-same name and type, say three `A` records for `shop`, form one set that is fetched, cached and
-expired as a unit. The **TTL** (time to live) is how many seconds anyone who receives that set may
-keep using it without asking again.
+**The technical version.** Every record has those five fields. The class is always `IN`
+(internet). The type says what the value means: `A` is an IPv4 address, `AAAA` an IPv6 one,
+`CNAME` says "this name is an alias, ask for that other name instead", `NS` names the servers that
+run a part of the tree, `SOA` holds the settings of that part, and `TXT` is free text. All records
+with the same name and type, say three `A` records for `shop`, form one **record set**, which is
+fetched, cached and expired as a unit.
 
-Two kinds of server handle records. An **authoritative server** holds a zone's records and answers
-only for its own zones; it never asks anyone else. A **recursive resolver** holds no zones: it is
-the server your machine is configured to ask (your ISP's, `1.1.1.1`, `8.8.8.8`, CoreDNS in a
-cluster), and it finds answers by asking authoritative servers and caching what it learns. Your
-program talks to neither directly. It calls the operating system's `getaddrinfo()`, a small library
-(the *stub resolver*) that sends the question to the resolver listed in `/etc/resolv.conf` and
-returns the addresses.
+### A cache
 
-A resolver with an empty cache, asked for `shop.example.in`, starts at the root, whose server
-addresses it ships with, and follows **referrals**: replies that say "not mine, ask these servers".
+**What it is.** A **cache** is a saved copy of an answer, kept close to whoever needs it, so that
+the next identical question is answered without asking the source again.
+
+**Why it exists.** Asking the source is slow and puts load on it, and most questions repeat:
+thousands of people ask for the same popular names every minute.
+
+**Example.** The resolver's walk down the tree took about 120 ms; answering from its saved copy
+took about 15 ms. If 10,000 people ask that resolver for `shop.example.in` within five minutes,
+your server answers once, not 10,000 times.
+
+**The technical version.** A DNS cache stores each record set under its name and type, with an
+expiry time: the moment it was fetched plus the record's keep-time. A cache may drop an entry
+earlier, for example when it runs out of memory (called **eviction**), but it is never supposed to
+use one later. Caches exist at several layers: the resolver, sometimes the operating system, the
+browser, the language your program runs in. Part 2 shows what each one does.
+
+### The TTL
+
+**What it is.** The **TTL** (time to live) is the number of seconds that anyone who receives a
+record may keep using it without asking again.
+
+**Why it exists.** Every cache needs to know when its copy is too old. Only the owner knows how
+often a record changes, so the owner sets the TTL, record by record.
+
+**Example.** A resolver fetches `shop.example.in` with TTL 300 at 10:00:00, so its copy expires
+at 10:05:00. At 10:02:00 it hands the copy to a laptop with TTL 180, so the laptop's own cache
+also expires at 10:05:00, not at 10:07:00.
+
+**The technical version.** The TTL travels with every record as a whole number of seconds.
+Caches count it down and hand on only the time left. It is an upper limit for a cache that
+follows the rules, not a promise: Part 2 shows layers that shorten it, stretch it or ignore it.
+And because nobody can cancel a copy before its time runs out, Part 2 calls each answer a
+**lease**: permission to use an answer for a set time, which cannot be taken back.
+
+### Resolvers and authoritative servers
+
+**What it is.** An **authoritative server** holds the records for a part of the name tree and
+answers only about them. A **recursive resolver** holds no records of its own: it finds answers by
+asking authoritative servers, and caches what it learns.
+
+**Why it exists.** Splitting the two jobs lets each owner run servers only for their own names,
+and lets one resolver near the users serve millions of people from its cache.
+
+**Example.** `ns1.example.in` is authoritative for `example.in`. `1.1.1.1` (Cloudflare),
+`8.8.8.8` (Google), your internet provider's resolver and your company network's resolver are
+all recursive resolvers. "Recursive" because it keeps asking until it has the final answer.
+
+**The technical version.** Your program talks to neither directly. It calls the operating
+system's `getaddrinfo()` function, part of a small library called the **stub resolver**. The stub
+sends the question to the resolver listed in the machine's settings (`/etc/resolv.conf` on Linux)
+and returns the addresses to your program.
+
+### Zones and referrals
+
+**What it is.** A **zone** is the part of the name tree that one operator runs from one set of
+authoritative servers. A **referral** is a reply that says "not mine, ask these servers".
+
+**Why it exists.** No single server could hold every name on the internet or keep up with every
+change. The tree lets each owner run their own part, and referrals connect the parts.
+
+**Example.** `example.in`, with every name under it, is your zone. A resolver with an empty cache
+finds `shop.example.in` in three questions:
 
 | Step | Resolver asks | Reply |
 |---|---|---|
@@ -72,44 +226,81 @@ addresses it ships with, and follows **referrals**: replies that say "not mine, 
 | 2 | a `.in` server | a referral: "ask `ns1.example.in`, at 192.0.2.53" |
 | 3 | `ns1.example.in` | the answer: `192.0.2.10`, TTL 300 |
 
-Referrals are cached too, for their own TTLs (the root hands out its referrals with 172,800 s, two
-days), so the next lookup for any `.in` name starts at step 2. A second user who asks the same
-resolver for `shop.example.in` 120 seconds later gets the answer from memory, with a TTL of 180: a
-resolver hands on only the time its copy has left. That user waits only for the round trip to the
-resolver (12–20 ms from our test network to `1.1.1.1`, against 105–141 ms for a miss), and `ns1`
-never hears about them, or about the next ten thousand, until the 300 seconds run out. That cache is
-the whole reason DNS scales, and it means the authoritative server only ever sees cache misses.
+**The technical version.** The `.in` zone does not hold your records. For `example.in` it holds
+only `NS` records naming your servers, the zone's **name servers** (another word for its
+authoritative servers). This hand-over is called a **delegation**. Referrals are
+cached for their own TTLs. The root hands out its referrals with a TTL of 172,800 seconds, two
+days, so for two days the resolver's next lookup for any `.in` name starts at step 2. Part 2
+opens delegations up.
 
-So one number sets the load on your name servers. Each cache asks at most once per TTL, so a
-popular name costs about *number of caches ÷ TTL* queries. With 5,000 resolver caches asking for
-your API's name:
+:::tip[If you stop here]
+- DNS turns a name into an address. Your computer asks a **resolver**; on a cache miss the
+  resolver asks a root server, then the `.in` (or `.com`) servers, then the owner's server.
+- Every answer carries a **TTL**: how many seconds anyone may keep it. Resolvers keep answers for
+  that long, so most lookups take about 15 ms and the owner's server sees only the misses.
+- A change is not sent anywhere. Each saved copy keeps the old answer until its TTL runs out, and
+  nobody can recall it early.
+- So a short TTL means fast changes and many queries; a long TTL means few queries, slow changes
+  and survival when your DNS servers are down.
+:::
+
+## Going deeper
+
+Part 1 had one resolver and one change. Real systems raise harder questions. Your DNS provider
+stops answering for an hour. Users of a name with a one-day TTL never notice; users of a name with
+a five-minute TTL are all failing by minute five, unless their resolver keeps handing out expired
+copies. Now a different bug: the provider stays up but publishes the record with no addresses.
+The failure spreads at exactly the same speed, handing out expired copies does nothing, and after
+you fix the record users keep failing for another quarter of an hour. Why do these outages behave
+so differently, and which numbers decide it?
+
+The answer is in the lease from Part 1, once you add one more fact: every layer between you and
+the user may shorten, stretch or ignore it. The rest of the page follows those leases through
+migrations, outages and load balancing.
+
+First, the load. Each cache asks at most once per TTL, so a popular name costs about *number of
+caches ÷ TTL* queries at your authoritative servers. Take 5,000 resolver caches asking for your
+API's name (an illustrative number):
 
 | TTL | Queries reaching your name servers |
 |---|---|
-| 86,400 s (1 day) | about 3.5 per minute |
-| 300 s | about 1,000 per minute, 17 per second |
-| 60 s | about 83 per second |
+| 86,400 s (1 day) | 5,000 ÷ 86,400 × 60 ≈ 3.5 per minute |
+| 300 s | 5,000 ÷ 300 ≈ 17 per second, 1,000 per minute |
+| 60 s | 5,000 ÷ 60 ≈ 83 per second |
 
-The same number also sets two other things. It is the upper bound on how long a change takes to
-reach well-behaved caches, and it is how long users survive when your name servers are
+The same number sets two other things. It is the upper limit on how long a change takes to reach
+caches that follow the rules. And it is how long users survive when your name servers are
 unreachable, because cached copies are then all that keeps the name alive. A short TTL buys fast
-changes and pays for them in query volume (often billed per million) and in a shorter survival
-time. There is no TTL that is good at all three; you pick per record.
+changes and pays in query volume (DNS providers often bill per million queries) and in a
+shorter survival time. No TTL is good at all three, so you pick one per record.
 
-"5,000 caches" also hides something. A public resolver address is **anycast**: one address served
-from many cities, and behind each city many independent cache machines. They fetch at different
-moments, so the same name shows a different remaining TTL depending on which one you hit. When we
-asked three public resolvers for `example.com` at the same moment in October 2026, they reported
-264, 81 and 300 seconds left. Caches also evict early and are split by user location: a
-measurement study by Moura and colleagues found that for about 30% of clients the cache gave no
-protection at all during an outage ([IMC 2018](https://ant.isi.edu/~johnh/PAPERS/Moura18b.pdf)).
+"5,000 caches" also hides something, which shows up as soon as you look at real resolvers.
+
+**What anycast is.** **Anycast** means announcing one IP address from many places at once, so
+each user's questions reach the nearest machine that answers to it.
+
+**Why it exists.** A public resolver wants one address that everyone can type into their settings,
+served from many cities, both for speed and so that one city failing does not take it down.
+
+**Example.** A user in Mumbai and a user in Frankfurt both send questions to `1.1.1.1`, and two
+different machines, thousands of kilometres apart, answer them.
+
+**The technical version.** Behind each city there are many independent cache machines, and they
+fetch at different moments, so the same name shows a different remaining TTL depending on which
+one you reach. When we asked three public resolvers for `example.com` at the same moment in
+October 2026, they reported 264, 81 and 300 seconds left. So "one resolver" is really many
+caches, each with its own countdown.
 
 ## The obvious model, and why it breaks
 
 The model most engineers carry is: *the TTL is how long a change takes to reach users.* Lower the
 TTL when you change a record and the change arrives quickly. Code written with that model either
-resolves once at startup or resolves on every request. Both clients below talk to a small
-authoritative server we wrote for this page, serving the made-up zone `shop.example.test`:
+resolves the name once at startup or resolves it on every request.
+
+To see both fail, we wrote a small authoritative server for this page. It runs on your own
+machine, serves a made-up zone, `shop.example.test`, and lets a script play the operator who
+changes records while clients run. In the code below, `resolve(API)` sends one question straight
+to that server and returns the first address and its TTL:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -166,8 +357,8 @@ class ResolveEveryTimeClient {
   </TabItem>
 </Tabs>
 
-The record has a 2-second TTL. At 0.9 s it moves to a new server; at 3.6 s, well past one TTL, the
-old server is switched off:
+The demo gives the record a 2-second TTL so it runs in seconds. At 0.9 s the operator moves the
+record to a new server; at 3.6 s, well past one TTL, the old server is switched off:
 
 ```text title="python naive_client.py (output, trimmed)"
 t=0.0s  [ once] startup: api.shop.example.test. -> 203.0.113.10 (TTL 2 s, ignored)
@@ -179,27 +370,35 @@ t=3.6s  [every] request  9 -> 198.51.100.20  200 OK
 resolve-every-time made 10 DNS lookups for 10 requests; the server answered 11 queries in total.
 ```
 
-Resolve-once fails for ever, and its log says "connection refused", which sends people to debug
-the network. Resolve-every-time is correct and puts a DNS round trip in front of every request. But
-the model behind both is wrong in four more ways, and the rest of the page is about them:
+Resolve-once fails for ever. Its error, "connection refused", is what the operating system reports
+when nothing is listening at an address, so it sends people off to debug the network instead of
+DNS. Resolve-every-time is correct, and puts a DNS round trip (a question out, its answer back) in
+front of every request. But the
+model behind both is wrong in four more ways, and the rest of the page is about them:
 
 1. **The TTL that matters is the one already cached.** Lowering it in the same edit as the change
    does nothing for copies fetched before the edit.
-2. **Layers rewrite the TTL.** Resolvers cap it, runtimes replace it with their own number.
-3. **Connections outlive DNS.** A pooled or HTTP/2 connection never asks DNS again until it closes.
+2. **Layers rewrite the TTL.** Resolvers cap it, and language runtimes replace it with their own
+   number.
+3. **Connections outlive DNS.** A connection that is already open never asks DNS again until it
+   closes.
 4. **"No" is cached too, and so are failures.** A name looked up before it existed, or during a
    bad publish, stays broken after the fix.
 
-## The core idea
+## How it works, piece by piece
 
-Every DNS answer is a lease with a countdown. Whoever receives it may hand it on with less time
-left, cut the time short, stretch it, or ignore the countdown entirely, and nobody can call it
-back early. So the useful question is never "what is my TTL?" but **"what is the longest any
-holder of this answer might keep it?"** Plan migrations, failovers and outages around that
-number.
+### What each layer does to a TTL
 
-Follow one answer from the source to your code. The number on the right is how long that layer
-will keep using it:
+Part 1 had one cache, the resolver. In a real request there can be four more holders of the answer
+between the authoritative server and your code, and each has its own rule. So the useful question
+is never "what is my TTL?" but **"what is the longest any holder of this answer might keep it?"**
+Plan migrations, failovers and outages around that number.
+
+Two of those holders need a word first. A **language runtime** is the part of Java, Node or a
+browser that runs your code and gives it network functions; several of them keep a DNS cache of
+their own. An **open connection** is a network connection to a server that a program set up once
+and reuses for many requests. The figure follows one answer from the source down to your code;
+the number on the right is how long each layer will keep using it:
 
 <Figure caption="One answer with a 300-second TTL. The resolver passes on only the time it has left, the runtime applies its own rule, and an open connection keeps the address until it closes. The last two rows usually decide how long the old address stays in use.">
   <TtlLayers />
@@ -207,16 +406,13 @@ will keep using it:
 
 The authoritative server's TTL is only the first row. The rows below it are set by software you
 may not control, and the bottom row is not DNS at all. That is why "we lowered the TTL to 60
-seconds" so often ends with traffic on the old server an hour later.
+seconds" so often ends with traffic on the old server an hour later. Here is each row in turn.
 
-## How it works, piece by piece
-
-### What each layer does to a TTL
-
-**Resolvers cap TTLs, in both directions.** Resolver software clamps positive and negative TTLs to
-configured limits. A *negative* TTL is how long a resolver keeps a "no such name" answer, and
-*serve-stale* means answering from an expired copy when the authoritative servers cannot be reached;
-each has its own section below. Defaults, as of October 2026:
+**Resolvers cap TTLs, in both directions.** Resolver software clamps the TTLs it receives to
+configured limits. Two of those limits belong to features with their own sections below: a
+*negative* TTL is how long a resolver keeps a "no such name" answer, and *serve-stale* means
+answering from an expired copy when the authoritative servers cannot be reached. BIND and Unbound
+are two widely run open-source resolvers. Their defaults, as of October 2026:
 
 | Resolver | Longest positive TTL kept | Longest negative TTL kept | Serve-stale |
 |---|---|---|---|
@@ -226,48 +422,60 @@ each has its own section below. Defaults, as of October 2026:
 Sources: the [BIND 9 reference](https://bind9.readthedocs.io/en/stable/reference.html) and the
 [`unbound.conf` manual](https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html).
 Both also have a *minimum* TTL option (`min-cache-ttl`, `cache-min-ttl`), off by default, which
-some operators turn on to cut load. A resolver with a 300-second minimum turns your careful 60-second
-TTL into 300 seconds, and you will never see it in your own tests.
+some operators turn on to cut load. A resolver with a 300-second minimum turns your careful
+60-second TTL into 300 seconds, and you will never see it in your own tests.
 
 **Runtimes replace the TTL with their own number.** The standard `getaddrinfo()` call returns
-addresses and no TTL at all, so anything built on it has to invent one:
+addresses and no TTL at all, so anything built on it has to invent a keep-time:
 
-- **Java** caches successful lookups for 30 seconds and failed ones for 10, whatever the record
-  says (`networkaddress.cache.ttl` and `networkaddress.cache.negative.ttl`); older versions running
-  a security manager cached for ever
-  ([`InetAddressCachePolicy`](https://code.yawk.at/java/8/sun/net/InetAddressCachePolicy.java)).
-- **Chrome** keeps an answer from the OS resolver for 60 seconds, because the OS never told it the
-  TTL; with its built-in resolver it uses the TTL, with a 60-second floor
+- **Java** keeps successful lookups for 30 seconds and failed ones for 10, whatever the record
+  says (`networkaddress.cache.ttl` and `networkaddress.cache.negative.ttl`); older versions, with
+  some security settings turned on, kept them for ever
+  ([OpenJDK `InetAddressCachePolicy`](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/sun/net/InetAddressCachePolicy.java)).
+- **Chrome** keeps an answer from the operating system for 60 seconds, because the operating
+  system never told it the TTL. Chrome can also send DNS questions itself, with its built-in
+  resolver, and then it uses the TTL, with a 60-second floor
   ([Eric Lawrence, 2022](https://textslashplain.com/2022/03/31/chromiums-dns-cache/)).
-- **Node**'s `dns.lookup()`, which `fetch` and `http` use, keeps nothing and runs `getaddrinfo()` on
-  libuv's four-thread pool, so slow DNS can stall unrelated file and crypto work. `dns.resolve4()`
-  with `{ ttl: true }` asks the network and returns real TTLs ([Node docs](https://nodejs.org/api/dns.html)).
-- **glibc** keeps nothing either; a machine caches only if it runs a local daemon such as
-  `systemd-resolved` or `nscd`.
+- **Node**'s `dns.lookup()`, which `fetch` and `http` use, keeps nothing. It runs
+  `getaddrinfo()` on a pool of four background **threads** (separate lines of work that run
+  alongside your code; this pool is called libuv's pool). Node also uses those four threads for
+  file and crypto work, so slow DNS can stall unrelated work. `dns.resolve4()` with `{ ttl: true }`
+  asks the network itself and returns real TTLs ([Node docs](https://nodejs.org/api/dns.html)).
+- **glibc**, the C library behind most Linux programs, keeps nothing either. A Linux machine
+  caches lookups only if it runs a local caching **daemon** (a program that runs in the
+  background) such as `systemd-resolved` or `nscd`.
 
-**Connections ignore DNS completely.** A database pool, an HTTP keep-alive connection, an HTTP/2
-or gRPC channel resolves once when it connects and then never again. A service with a pool of 20
-connections that live for hours keeps talking to the old address for hours, even if every cache
-above it switched within a minute. In a migration, the old server must close its connections (an
-HTTP/2 `GOAWAY`, a pool's maximum lifetime, a restart) before the clients will look the name up
-again. Watch the old server's open connections, not the clock.
+**Connections ignore DNS completely.** Setting up a connection costs round trips, so programs keep
+connections open and reuse them. A **connection pool** is a set of open connections that a
+program, typically to a database, hands out request by request. HTTP keep-alive does the same for
+HTTP/1.1, and an HTTP/2 connection, or a gRPC channel (gRPC is a common way for services to call
+each other), carries many requests over one connection. All of them look
+the name up once, when they connect, and never again.
+
+So a service with a pool of 20 connections that live for hours keeps talking to the old address
+for hours, even if every cache above it switched within a minute. In a migration, the old server
+must close its connections before clients will look the name up again. It can do that with an
+HTTP/2 `GOAWAY` message (the server telling the client "finish what you are doing, then
+reconnect"), with a maximum lifetime on the client's pool, or with a restart. Watch the old
+server's open connections, not the clock.
 
 ### Changing a record: the old TTL decides
 
-When you change a record, nothing is pushed anywhere. Each cache keeps serving its copy until that
-copy expires, then fetches the new value at the next lookup. The copies were fetched at random
-moments within one TTL, so their expiries are spread evenly over the next full TTL. "Propagation"
-is that spread of independent timers.
+Part 1 showed that a change is not sent anywhere; each copy runs out on its own. One more fact
+turns that into arithmetic: the copies were fetched at random moments within the last TTL, so their
+expiries are spread evenly over the next full TTL.
 
-That gives the arithmetic. With a TTL of 3,600 s, if you switch the old server off 10 minutes after
-the change, about 50 of every 60 minutes of cache lifetime are still ahead: roughly five caches in
-six still point at the old server. Lowering the TTL in the same edit changes nothing, because the
-copies already out there carry the old TTL. The only thing that helps is lowering it **at least one
-old TTL before** the change, so that by the moment of the change every copy in the world is a
-short one.
+Take a TTL of 3,600 s, one hour, and switch the old server off 10
+minutes after the change. The copies expire evenly over the hour after the change, so by minute
+10 only 10 of 60 minutes' worth have expired: roughly five caches in six still point at the old
+server. Lowering the TTL in the same edit changes nothing, because the copies already out there
+carry the old TTL. The only thing that helps is lowering it **at least one old TTL before** the
+change, so that by the moment of the change every copy in the world is a short one.
 
-Try both in the simulation. The defaults lower the TTL in the same edit as the address change;
-then slide the lead time up.
+The simulation below is 200 resolver caches holding one record. You choose the TTL before the move,
+how early the TTL was lowered to 60 seconds (the **lead time**), when the old server goes off, and
+the share of clients that, like the resolve-once client above, never look the name up again
+(**pinned** clients). The defaults lower the TTL in the same edit as the address change; then slide the lead time up.
 
 <MigrationSim />
 
@@ -278,55 +486,71 @@ holds a 60-second copy by the time of the change, the last one switches within a
 and the only failures come from the 2% of clients that never resolve again. A lead of 30 minutes
 is half a fix: 68 caches still on the old address, 6% of lookups failing.
 
-The price is in the query counter: with 60-second copies, the same caches send about fifty times
-as many queries. That is why the TTL goes back up once the move is done. The full plan:
+The price is in the query counter. With 60-second copies instead of one-hour ones, each cache asks
+up to 60 times as often, and the sim counts about fifty times as many queries. That is why the TTL
+goes back up once the move is done.
+
+The full plan uses **`dig`**, a command-line tool that sends one DNS question to the server you
+name after `@` and prints the whole reply:
 
 1. One old TTL ahead (plus margin for resolvers that impose a minimum), lower the TTL to 60 s.
 2. Change the address. Keep the old server running.
 3. Ask your authoritative server directly (`dig @ns1.your-provider.example api.example.in`) to
-   confirm the change, and at least two public resolvers to see what users get.
+   confirm the change, and ask at least two public resolvers to see what users get.
 4. Make the old server close idle connections, then wait until its traffic is near zero. The tail
    is pinned clients: find them in its access log.
 5. Switch it off and raise the TTL again.
 
-**Changing name servers is slower still.** Look inside the referral from step 2 above. A parent
-zone does not store your records. Where `example.in` begins, the `.in` zone stores only a
-**delegation**: NS records naming the servers that run the child zone. When those servers have
-names inside the child zone, there is a loop: to find the address of `ns1.example.in` you must ask
-the `example.in` servers, which means `ns1`. So the parent also hands out their addresses, called
-**glue**. (A zone hosted at a DNS provider names the provider's servers, which live in the
-provider's own zone, so it needs no glue.) The delegation therefore lives in two places: the parent
-zone holds NS records that point to your servers, and your own zone holds its own copy:
+**Changing name servers is slower still.** Look inside the referral from step 2 of Part 1's table.
+The `.in` zone holds only the delegation for `example.in`: `NS` records naming the servers that run
+the child zone. When those servers have names inside the child zone, there is a loop: to find the
+address of `ns1.example.in` you must ask the `example.in` servers, which means `ns1`. So the parent
+also hands out their addresses, called **glue**. (A zone hosted at a DNS provider names the
+provider's servers, which live in the provider's own zone, so it needs no glue.)
+
+The delegation therefore lives in two places: the parent zone holds `NS` records that point to
+your servers, and your own zone holds its own copy. The top box below is the parent, the bottom
+box is your zone:
 
 <Figure caption="The parent zone holds only the delegation: NS records and the glue address of a name server inside the child zone. The child zone holds the real records, including its own copy of the NS records. The two copies have separate TTLs and can disagree.">
   <Delegation />
 </Figure>
 
-The `.com` servers hand out delegations with a TTL of 172,800 seconds, two days, so a resolver
+The `.com` servers hand out delegations with a TTL of 172,800 seconds, two days. So a resolver
 that learned the old delegation an hour before your switch can keep asking the old provider for 47
-more hours. Most resolvers then prefer the child zone's own NS records once they have asked it
-(they are **child-centric**, as Moura and colleagues measured in
-[*Cache Me If You Can*, IMC 2019](https://ant.isi.edu/bib/Moura19b.html)), so the old provider's
-copy of your NS records can extend that further. Keep the old provider serving an identical zone
-for at least two days, and update the NS records in both zones.
+more hours. The DNS standards are published as numbered documents called **RFCs** (requests for comments),
+and one of them, [RFC 2181](https://www.rfc-editor.org/rfc/rfc2181) (section 5.4.1), ranks the
+child zone's own answer above the parent's referral. So a resolver that has asked
+your old provider may keep the old provider's copy of your `NS` records instead. Keep the old
+provider serving an identical zone for at least two days, and update the `NS` records in both
+zones.
 
 ### Negative caching: "no" is cached, and so is "I could not find out"
 
-Every DNS reply starts with a header carrying a **result code**, the way an HTTP response carries a
-status, followed by sections, among them the *answer* (records for the question) and the
-*authority* (records about who is responsible). Three codes matter here: NOERROR (0), SERVFAIL (2, "I could not get an
-answer") and NXDOMAIN (3, "no such name"). A resolver that asks for a name that does not exist gets
-one of two negative answers:
+To see where a "no" gets its keep-time, we need to look inside a DNS reply. Every reply starts with
+a header carrying a **result code**, the way an HTTP response carries a status. After the header
+come sections: the *answer* (records for the question) and the *authority* (records about who is
+responsible for the zone), among others. Three result codes matter here: NOERROR (0), SERVFAIL (2,
+"I could not get an answer") and NXDOMAIN (3, "no such name").
+
+A resolver that asks about a name that has no records gets one of two negative answers:
 
 - **NXDOMAIN** (result code 3): the name does not exist, for any type.
 - **NODATA**: the name exists but has no records of the type asked for. There is no code for it:
   the answer is NOERROR with an empty answer section.
 
 Caching "no" exists because most of these questions repeat: typos, scanners, retries, and the
-search-suffix lookups covered under Kubernetes below would otherwise all be cache misses. A "no"
-has no record to carry a TTL, so it borrows one from the zone's **SOA** (start of authority)
-record. Every zone has exactly one SOA, at its top, holding the zone's settings, and the
-authoritative server puts it in the authority section of every negative answer:
+extra lookups Kubernetes adds (covered under "How real systems do it") would otherwise all reach
+the authoritative servers. But a "no" has no record to carry a TTL, so it borrows one from the
+zone's SOA record.
+
+**What the SOA is.** The **SOA** (start of authority) record holds a zone's own settings. Every
+zone has exactly one, at its top.
+
+**Why it matters here.** The authoritative server puts the SOA in the authority section of every
+negative answer, and its last field says how long the "no" may be kept.
+
+**Example.** Here is a negative answer, printed in `dig`'s format:
 
 ```text title="a negative answer for beta.example.in (illustrative, in dig's format)"
 ;; ->>HEADER<<- status: NXDOMAIN
@@ -336,13 +560,16 @@ example.in.  3600  IN  SOA  ns1.example.in. hostmaster.example.in. 2026102301 72
 ; SOA TTL 3600, then: primary server, contact, serial, refresh, retry, expire, minimum (300)
 ```
 
-Serial, refresh, retry and expire tell secondary servers when to copy the zone. The last field is
-the *minimum*, and the resolver caches the "no" for the smaller of the SOA record's TTL and that
-minimum ([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308)): here min(3,600, 300) = 300 seconds,
-capped by its own limit from the table above. Many real zones use far longer values: in October
-2026, `example.com` allowed a negative answer to be cached for 1,800 s and `wikipedia.org` for
-3,600 s. Our toy zone uses 5 seconds; the demo asks for a name a moment before the operator
-creates it:
+**The technical version.** Serial, refresh, retry and expire are for **secondary servers**: extra
+authoritative servers that hold copies of the zone and use these numbers to decide when to fetch
+updates from the primary. The last field is the *minimum*. A resolver caches the "no" for the
+smaller of the SOA record's own TTL and that minimum
+([RFC 2308](https://www.rfc-editor.org/rfc/rfc2308)): here min(3,600, 300) = 300 seconds, further
+capped by the resolver's own limit from the table above.
+
+Many real zones use far longer values: in October 2026, `example.com` allowed a negative answer to
+be cached for 1,800 s and `wikipedia.org` for 3,600 s. Our toy zone uses 5 seconds. The demo asks
+for a name a moment before the operator creates it:
 
 ```text title="python ttl_cache.py (output, part 2)"
 t=4.1s  lookup beta.shop.example.test.: NXDOMAIN, cached for 5.0 s more
@@ -353,35 +580,25 @@ t=8.6s  lookup beta.shop.example.test.: still NXDOMAIN, cached for 0.5 s more
 t=10.1s  lookup beta.shop.example.test.: 198.51.100.30
 ```
 
-Two less known rules make negative answers reach further than the name you asked for:
+The name existed from 4.1 s, and the cache kept saying "no such name" until its 5 seconds ran out.
 
-- **An NXDOMAIN covers everything below it.** If `beta.example.in` does not exist, nothing under it
-  can, so a resolver may answer NXDOMAIN for `api.beta.example.in` from that one cached answer
-  ([RFC 8020](https://www.rfc-editor.org/rfc/rfc8020)).
-- **In a signed zone, one "no" covers a range of names.** DNSSEC, covered at the end of this
-  section, signs records so a resolver can check they came from the zone's owner. A signature can
-  only cover data that exists, so to sign a "no" the zone sorts its names and signs the gaps
-  between them as **NSEC** records. A zone holding `alpha`, `gamma` and `zulu` publishes `alpha
-  NSEC gamma` ("there is nothing between `alpha` and `gamma`") and `gamma NSEC zulu`, and a
-  question about `beta` gets the first one as its proof. Resolvers that use those proofs
-  aggressively ([RFC 8198](https://www.rfc-editor.org/rfc/rfc8198); on by default since BIND 9.12,
-  per [APNIC](https://blog.apnic.net/2018/02/06/aggressive-nsec-caching-bind-9-12/)) answer
-  NXDOMAIN for *any* name in that range without asking: `beta`, `delta` and `fox` all come from
-  that one cached record. Create `beta` and a resolver that cached the `alpha`–`gamma` proof can
-  deny it to users who never asked for it before.
+One less known rule makes a negative answer reach further than the name you asked about. **An
+NXDOMAIN covers everything below it**: if `beta.example.in` does not exist, nothing under it can,
+so a resolver may answer NXDOMAIN for `api.beta.example.in` from that one cached answer
+([RFC 8020](https://www.rfc-editor.org/rfc/rfc8020)). Signed zones have a second rule of this
+kind, which the DNSSEC section covers.
 
-Failures are cached as well. When a resolver cannot get an answer at all (timeouts, SERVFAIL, a
-DNSSEC validation failure), [RFC 9520](https://www.rfc-editor.org/rfc/rfc9520.html) (December
-2023) now requires it to remember the failure for at least 1 second and at most 5 minutes, and not
-to ask again meanwhile. The reason is load: without it, every user lookup turns into fresh queries
-to servers that are already down. The IMC 2018 study above saw retries raise traffic to the
-authoritative servers up to eight times during an attack, and Cloudflare
-reported about 30 times the usual queries for Facebook's names on its 1.1.1.1 resolver while they
-were gone in October 2021
-([Cloudflare, 2021](https://blog.cloudflare.com/october-2021-facebook-outage/)).
+**Failures are cached as well.** When a resolver cannot get an answer at all (the servers time
+out, return SERVFAIL, or send data that fails a DNSSEC check), it now has to remember the failure
+for at least 1 second and at most 5 minutes, and not ask again meanwhile
+([RFC 9520](https://www.rfc-editor.org/rfc/rfc9520.html), December 2023). The reason is load:
+without it, every user lookup turns into fresh queries to servers that are already struggling.
+When Facebook's name servers disappeared from the internet in October 2021, Cloudflare saw about 30
+times the usual queries for Facebook's names on its 1.1.1.1 resolver, as clients and resolvers
+retried ([Cloudflare, 2021](https://blog.cloudflare.com/october-2021-facebook-outage/)).
 
 :::caution[Never test a name before it exists]
-Opening a link, running a health check or letting a deploy pipeline poll a hostname before you
+Opening a link, pointing a monitoring probe at it or letting a deploy pipeline poll a hostname before you
 create the record caches a "no" for the negative TTL, in every resolver that was asked. Create the
 record first, then test it. Keep the SOA minimum at 60–300 s so a mistake heals quickly.
 :::
@@ -389,20 +606,30 @@ record first, then test it. Keep the SOA minimum at 60–300 s so a mistake heal
 ### When the authoritative side fails
 
 When your name servers stop answering, nothing breaks at first. Each cache keeps answering from
-its copy, and fails only when that copy expires and it cannot fetch a new one. Without serve-stale,
-the share of users failing grows roughly as *time since the outage ÷ TTL*: all of them after one
-TTL.
+its copy, and fails only when that copy expires and it cannot fetch a new one. The copies expire
+evenly over one TTL, so without help the share of users failing grows roughly as *time since the
+outage ÷ TTL*: all of them after one TTL.
 
-**Serve-stale** ([RFC 8767](https://www.rfc-editor.org/rfc/rfc8767)) changes that: when the
-authoritative servers cannot be reached, the resolver hands out the expired copy instead of an
-error, and keeps trying to refresh in the background. In numbers: a resolver fetched
-`api.example.in` (TTL 300) at 10:00:00, and your name servers went down at 10:03. At 10:06 a user
-asks; the copy expired at 10:05 and the refresh times out. Without serve-stale the user gets
-SERVFAIL. With it, the user gets the old address with a TTL of 30 seconds, so the client asks again
-at 10:06:30, and the same thing repeats until a refresh succeeds or the stale window runs out; the
-RFC suggests keeping expired data for one to three days. It is off by default in BIND and Unbound
-(the table above); large public resolvers use some form of it, which is part of why outages look
+**What serve-stale is.** **Serve-stale** means that when the authoritative servers cannot be
+reached, the resolver hands out its expired copy instead of an error.
+
+**Why it exists.** When the DNS servers are down, the web servers behind the name are usually
+fine, and the old address is almost always still right. An old answer beats no answer.
+
+**Example.** A resolver fetched `api.example.in` (TTL 300) at 10:00:00, and your name servers went
+down at 10:03. At 10:06 a user asks. The copy expired at 10:05 and the refresh times out. Without
+serve-stale the user gets SERVFAIL. With it, the user gets the old address with a TTL of 30
+seconds, so the client asks again at 10:06:30, and the same thing repeats until a refresh succeeds
+or the resolver's stale window runs out.
+
+**The technical version.** [RFC 8767](https://www.rfc-editor.org/rfc/rfc8767) (2020) defines it:
+the resolver keeps trying to refresh in the background, hands out stale answers with a 30-second
+TTL, and keeps expired data for one to three days. It is off by default in BIND and Unbound (the
+table above); large public resolvers use some form of it, which is part of why outages look
 different from different networks.
+
+The simulation runs 200 resolver caches for one popular name through an outage of your name
+servers. You set the record's TTL, the outage length and the share of resolvers that serve stale:
 
 <OutageSim kind="unreachable" />
 
@@ -412,16 +639,19 @@ The TTL sets how fast the failure spreads; serve-stale sets how much of it users
 the resolvers halves the failure, and on all of them hides it completely. And the moment the
 servers come back, every failing cache recovers on its next lookup.
 
-**Now publish bad data instead.** On 19–20 October 2025, a race between two of DynamoDB's DNS
-automation workers left the record for `dynamodb.us-east-1.amazonaws.com` with no addresses: a
-slow worker applied a stale plan at the moment a faster one's clean-up deleted that plan. From 11:48 PM
-PDT nothing could resolve the endpoint, including AWS services that depend on DynamoDB. The record
-was restored by 2:25 AM, and clients recovered as their cached answers expired, by 2:40 AM
+**Now publish bad data instead.** AWS keeps the DNS records for its DynamoDB database service up to
+date with automation: one program writes plans (the list of addresses each name should have), and
+several worker programs apply them. On 19–20 October 2025, a **race** between two of those workers (two programs
+working at the same time, where the result depends on which finishes first) left the record for `dynamodb.us-east-1.amazonaws.com` with no addresses: a slow worker applied an
+old plan at the moment a faster one's clean-up deleted that plan. From 11:48 PM PDT nothing could
+resolve the endpoint, including AWS services that depend on DynamoDB. The record was restored by
+2:25 AM, and clients recovered as their cached answers expired, by 2:40 AM
 ([AWS post-event summary](https://aws.amazon.com/message/101925/)).
 
-An empty answer is a valid answer. Serve-stale only applies when the authoritative servers cannot
-be reached, so it never kicks in, and the "no addresses" answer is cached as a negative answer for
-the negative TTL, which outlives the fix:
+An empty answer is a valid answer. Serve-stale applies only when the authoritative servers cannot
+be reached, so it never kicks in. The "no addresses" answer is cached as a negative answer for the
+negative TTL, which outlives the fix. The second sim keeps the servers up and publishes the empty
+record instead; the slider sets the negative TTL:
 
 <OutageSim kind="empty" />
 
@@ -434,118 +664,181 @@ known-good record back by hand.
 
 ### How resolvers choose a name server
 
-Every zone lists several name servers, and the resolver picks one per query. How it picks decides
-what a slow or dead name server costs you.
+Every zone lists several name servers, and the resolver picks one for each query. How it picks
+decides what a slow or dead name server costs you.
 
-Resolvers keep a running round-trip time for each server address and mostly prefer fast ones, but
-not exclusively. Unbound picks at random among all servers within 400 ms of the fastest, assumes
-376 ms for a server it knows nothing about, and remembers what it learned for 15 minutes
+Resolvers keep a running **round-trip time** (RTT) for each server address: how long a question to
+that server took to get its reply, averaged over recent queries. They mostly prefer fast servers,
+but not only fast ones, because a server measured as slow once may have recovered.
+
+Unbound's rule shows how this works. It picks at random among all servers within 400 ms of the
+fastest, assumes 376 ms for a server it knows nothing about, and remembers what it learned for 15
+minutes
 ([Unbound docs](https://unbound.docs.nlnetlabs.nl/en/latest/reference/history/info-timeout-server-selection.html)).
-With three name servers measured at 20, 90 and 600 ms, the band runs up to 420 ms: queries are
-spread at random over the first two, and the 600 ms server gets none until Unbound forgets its
-measurement and tries it again. Measured across the internet, most resolvers send some queries to
-every listed name server over time, and only about half show a preference for the faster ones
-([Müller et al., IMC 2017](https://ant.isi.edu/~johnh/PAPERS/Mueller17b.pdf)).
+With three name servers measured at 20, 90 and 600 ms, the band runs from 20 to 20 + 400 = 420
+ms. Queries are spread at random over the first two, and the 600 ms server gets none until Unbound
+forgets its measurement and tries it again.
 
 Three consequences:
 
 - **Every name server must be equally strong.** A far-away or small server you added "as a backup"
-  gets a real share of production queries. The study's advice is anycast behind every listed name
-  server address.
+  is inside the band whenever it is within 400 ms of the fastest, so it gets a real share of
+  production queries. Put anycast behind every listed name server address.
 - **A dead name server costs latency, not answers.** A resolver that tries it waits for a timeout
-  (a few hundred milliseconds) and then tries another; until its RTT data marks the server bad, a
-  share of cold lookups pay that wait. Our resilient resolver below shows the same cost: a dead
-  first upstream added about 400 ms.
-- **Two providers survive what one cannot.** On 21 October 2016 the Mirai botnet flooded Dyn, a
-  large DNS provider, and names that used only Dyn became unreachable for many users for hours
-  ([APNIC](https://blog.apnic.net/2016/10/26/quick-look-attack-dyn/)). Because resolvers already
-  spread queries across all listed name servers and fail over between them, listing name servers
-  from two independent providers, both serving identical records, turns a provider outage into
-  extra latency. The cost is keeping two providers in sync, which gets harder with DNSSEC (both must
-  sign with keys the parent vouches for; see [RFC 8901](https://www.rfc-editor.org/rfc/rfc8901)).
+  (a few hundred milliseconds) and then tries another. Until its RTT data marks the server bad, a
+  share of lookups that find nothing cached pay that wait. Our resilient resolver below shows the
+  same cost: a dead first server added about 400 ms.
+- **Two providers survive what one cannot.** When your DNS provider has a bad day (a flood of
+  attack traffic, a broken release), every name it serves goes down with it. Because resolvers already spread queries
+  across all listed name servers and fail over between them, listing name servers from two
+  independent providers, both serving identical records, turns a provider outage into extra
+  latency. The cost is keeping two providers in sync, which gets harder with DNSSEC, covered below:
+  both must sign with keys the parent vouches for
+  ([RFC 8901](https://www.rfc-editor.org/rfc/rfc8901)).
 
 ### DNS as a load balancer, and why it is lumpy
 
-Returning several addresses for one name, or different addresses to different askers, is the
-cheapest global load balancing there is. Its unit of balancing is the problem: the authoritative
-server decides once per **resolver cache** per TTL, and every user behind that cache gets the same
-answer until it expires.
+**What it is.** **DNS load balancing** spreads users over several servers by returning several
+addresses for one name (rotating their order each time, called **round robin**) or different
+addresses to different askers.
 
-Two facts make that worse than it sounds. Resolver populations are lopsided: a few large ISP and
-public resolvers carry most users. And clients often do not choose at random from the list: glibc's
-`getaddrinfo()` sorts addresses by RFC 6724 rules, which can put the same address first for every
-client in a network regardless of the order DNS sent
-([CERN](https://cern.ch/twiki/bin/view/LinuxSupport/GlibcDnsLoadBalancing),
-[glibc bug 24282](https://sourceware.org/bugzilla/show_bug.cgi?id=24282)), and many clients
-connect only to the first. Here are four servers behind one name, with resolvers whose sizes fall
-off the way real ones do:
+**Why it exists.** It is the cheapest global load balancing there is. A **load balancer** is a
+machine that sits in front of servers and spreads requests over them; DNS load balancing needs no
+such machine in the path of the traffic, and it works for users anywhere.
+
+**Example.** `shop.example.in` returns four addresses. If every user picked one at random, each
+server would get a quarter of the traffic.
+
+**The technical version.** Its unit of balancing is the problem. The authoritative server decides
+once per **resolver cache** per TTL, and every user behind that cache gets the same answer until it
+expires.
+
+Two facts make that worse than it sounds. Resolver populations are lopsided: a few large
+internet-provider and public resolvers carry most users. And clients often do not choose at random from the list.
+glibc's `getaddrinfo()` re-sorts the addresses by a set of preference rules
+([RFC 6724](https://www.rfc-editor.org/rfc/rfc6724), configurable in
+[`gai.conf`](https://man7.org/linux/man-pages/man5/gai.conf.5.html)), so the order DNS sent is not
+always the order clients see, and many clients connect only to the first address.
+
+The sim below puts four servers behind one name. Users sit behind resolvers whose sizes fall off
+the way real ones do: one large, a few medium, many small. You set the number of resolvers, the
+share of clients that take the first address, and the TTL:
 
 <RoundRobinSim />
 
-Three things to take away. The imbalance at any moment is set by how big the largest resolvers are
-and how many clients take the first address, not by the TTL: with ten resolvers the busiest server
-peaks at about 3.5 times its share, and some server is always above 1.5 times. The TTL sets only
-how long one server stays hot: up to 10 minutes at 300 s, under 2 minutes at 30 s, most of an hour
-at 1,800 s. And averages lie: over two hours the busiest server looks only 1.19 times busier than
-fair, so dashboards built on averages miss the overload that matters. Size servers behind DNS
-balancing for the peak, and put a real load balancer behind each address.
+Three things to take away. First, the imbalance at any moment is set by how big the largest
+resolvers are and how many clients take the first address, not by the TTL: with ten resolvers the
+busiest server peaks at about 3.5 times its share, and some server is always above 1.5 times.
+Second, the TTL sets only how long one server stays hot: up to 10 minutes at 300 s, under 2
+minutes at 30 s, most of an hour at 1,800 s. Third, averages lie: over two hours the busiest
+server looks only 1.19 times busier than fair, so dashboards built on averages miss the overload
+that matters. Size servers behind DNS balancing for the peak, and put a real load balancer behind
+each address.
 
-**Failover through DNS is slow by construction.** A health-checked record is only as fast as its
-chain: Route 53 checks every 30 seconds and needs 3 failures by default, about 90 seconds (10-second
-checks are an option), and AWS recommends a 60-second TTL on such records
-([AWS](https://aws.amazon.com/blogs/aws/route-53-health-check-improvements-faster-interval-and-configurable-failover/),
-as of October 2026). Add Java's 30 seconds or Chrome's 60, and open connections that never move,
-and two to three minutes is the realistic best case.
+**Failover through DNS is slow by construction.** A **health check** is a probe that a DNS
+provider sends to your server every few seconds; when enough probes fail, the provider stops
+handing out that server's address. Its speed is the sum of a chain. Route 53, Amazon's managed
+DNS, checks every 30 seconds by default (10 seconds is an option) and needs 3 failures in a row,
+so 3 × 30 = about 90 seconds to notice
+([Route 53 docs](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-determining-health-of-endpoints.html)).
+AWS recommends a TTL of 60 seconds or less on records tied to a health check
+([Route 53 docs](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values-latency.html),
+as of November 2026). Add 60 seconds of TTL, then Java's 30 seconds or Chrome's 60, and open
+connections that never move: two to three minutes is the realistic best case.
 
 **Geographic answers see the resolver, not the user.** An authoritative server that answers by
-location sees where the *question* came from:
+location (often called **GeoDNS**) sees where the *question* came from, and the question comes from
+the resolver. In the figure, two users in different cities ask through two different resolvers:
 
 <Figure caption="Two resolvers ask for the same name and get the site nearest to each of them. The authoritative server sees the resolver's address, which is close to the user only when the user's resolver is.">
   <GeoDns />
 </Figure>
 
-A user in Chennai whose public resolver reaches you from Singapore is sent to Singapore. **EDNS
-Client Subnet** (ECS, [RFC 7871](https://www.rfc-editor.org/rfc/rfc7871)), one of the optional
-extras a query can carry (EDNS, explained in the next section), lets the resolver pass on the first
-24 bits of the user's IPv4 address: for a user at 198.51.100.86 it sends `198.51.100.0/24`. That
-fixes the answer and splits the cache: each answer is now valid only for one subnet, so a resolver
-serving users from 1,000 subnets may hold 1,000 copies of one name. One CDN's measurements found
-the cache needed for ECS answers grew by up to an order of magnitude, with hit rates under half of the normal ones
-([Al-Dalky, Rabinovich and Schomp, 2019](https://akamai.com/site/en/documents/research-paper/a-look-at-the-ecs-behavior-of-dns-resolvers.pdf)).
-Use DNS to pick a region; let a load balancer pick the server.
+So a user in Chennai whose public resolver reaches you from Singapore is sent to Singapore. One
+extension tries to fix this.
+
+**What ECS is.** **EDNS Client Subnet** (ECS) lets a resolver pass on part of the user's address
+with the question, so the authoritative server can answer for the user's location.
+
+**Why it exists.** It fixes the Chennai user's answer without the resolver having to move.
+
+**Example.** For a user at 198.51.100.86, the resolver sends `198.51.100.0/24`: the first three of
+the four numbers, with the last one hidden. That names a **subnet**, a block of 256 neighbouring
+addresses (198.51.100.0 to 198.51.100.255). A **bit** is a single 0 or 1, and each of the four
+numbers is 8 bits, so "/24" means "the first 24 bits", the first three numbers.
+
+**The technical version.** ECS is one of the optional extras a query can carry, through a
+mechanism called EDNS that the next section explains
+([RFC 7871](https://www.rfc-editor.org/rfc/rfc7871)). It splits the cache: each answer is now
+valid only for one subnet, so a resolver serving users from 1,000 subnets may hold 1,000 copies of
+one name, each fetched separately, and its **hit rate** for that name (the share of questions
+answered from the cache) falls accordingly. Use DNS to pick a region; let a load balancer pick the
+server.
 
 ### Size limits: UDP, truncation and TCP
 
-DNS answers travel over UDP on port 53 by default: one packet for the question, one for the
-answer, no connection. The original standard capped UDP answers at 512 bytes, which is plenty for
-addresses: an answer with one A record measured 72 bytes in our tests. **EDNS(0)**
-([RFC 6891](https://www.rfc-editor.org/rfc/rfc6891)) is the extension mechanism added later. The
-client appends a small pseudo-record, OPT, to its query, and one of its fields says how large a UDP
-answer the client can accept; `dig` prints it as `; EDNS: version: 0, flags: do; udp: 1232`, where
-`do` asks for DNSSEC signatures and `udp: 1232` is the buffer size. ECS above travels in the same
-OPT record.
+This section is about how big a DNS message may be, so first the units and the two ways DNS
+messages travel.
 
-A bigger buffer has a catch. A packet larger than a link can carry (1,500 bytes on Ethernet, less
-over tunnels and VPNs) is split into IP **fragments** that travel separately and are put back
-together at the end. Lose one fragment and the whole answer is lost. Only the first fragment
-carries the UDP ports, so many firewalls drop the rest, and an attacker who times it right can
-substitute a forged later fragment. Since [DNS Flag Day 2020](https://www.dnsflagday.net/2020/)
-major resolvers advertise 1,232 bytes, a size that never needs fragmenting: IPv6 guarantees that
-every link carries 1,280-byte packets, minus 40 bytes of IPv6 header and 8 of UDP header.
+A **byte** is the unit computers measure data in: enough to hold one letter of plain text, so a
+512-byte message is about as big as 512 characters. A **packet** is one chunk of data sent across
+the network on its own, with a small header in front saying where it goes.
+
+DNS can travel over two protocols. **UDP** sends one packet and does nothing more: no connection,
+no confirmation, no resending. **TCP** first sets up a connection with a handshake (at least one
+extra round trip), then delivers any amount of data reliably and in order. DNS starts with UDP
+because one question and one answer usually fit in one packet each, so it costs a single round
+trip. Both use **port** 53: the number that tells the receiving machine which program a packet is
+for. (The [TCP vs UDP](/networking/tcp-vs-udp/) page goes deeper.)
+
+The original standard capped UDP answers at 512 bytes, which is plenty for addresses: an answer
+with one A record measured 72 bytes in our tests. But signed answers and long text records need
+more, so an extension was added.
+
+**What EDNS(0) is.** **EDNS(0)** ([RFC 6891](https://www.rfc-editor.org/rfc/rfc6891)) is the
+mechanism that lets a DNS query carry extra options, the most important being "I can accept a
+bigger UDP answer".
+
+**Why it exists.** The 512-byte limit was fixed in the original message format, and there was no
+field to change it.
+
+**Example.** `dig` prints a query's options as `; EDNS: version: 0, flags: do; udp: 1232`. Here
+`udp: 1232` says the client accepts UDP answers up to 1,232 bytes, and `do` asks for DNSSEC
+signatures (next section).
+
+**The technical version.** The client appends a small pseudo-record, called OPT, to its query.
+It is not a real record and is never cached; it carries the buffer size, the flags and options
+such as ECS from the previous section.
+
+A bigger buffer has a catch. Every network link has a largest packet it can carry: 1,500 bytes on
+Ethernet, less over tunnels and VPNs. A larger packet is split into IP **fragments** that travel
+separately and are put back together at the end. Lose one fragment and the whole answer is lost.
+Only the first fragment carries the UDP port numbers, so many firewalls drop the rest, and an
+attacker who times it right can slip in a forged later fragment.
+
+Since [DNS Flag Day 2020](https://www.dnsflagday.net/2020/), a change that the makers of the major
+DNS software agreed to ship together, resolvers advertise 1,232 bytes, a size that never needs fragmenting. The number comes from IPv6: every IPv6 link must carry
+packets of 1,280 bytes, and 1,280 minus 40 bytes of IPv6 header minus 8 bytes of UDP header is
+1,232.
 
 An answer that does not fit is not sent in part. The server replies with only the header and the
-**TC** (truncated) flag, and the client asks again over TCP, which costs at least one more round
-trip for the TCP handshake. What pushes answers past the line is mostly DNSSEC, the next section:
-a zone's public keys (its DNSKEY set) are large with RSA keys, and while a key is being replaced the
-old and new keys are published together.
+**TC** (truncated) flag set, and the client asks again over TCP, which costs at least one more
+round trip for the TCP handshake. What pushes answers past the line is mostly DNSSEC, the next
+section, which adds signatures and keys to answers. Its key records (called DNSKEY) are large when
+they use RSA keys rather than the smaller ECDSA kind, and while a key is being replaced the old
+and new keys are published together.
+
+The figure is a ruler of answer sizes in bytes, with the two UDP limits drawn on it. For now, read
+only the sizes; the next section explains the key names:
 
 <Figure caption="Answer sizes against the two UDP limits. Plain address records are tiny; signed key sets with RSA keys cross 1,232 bytes, especially during a key rollover when two keys are published; long TXT records cross it by far. Everything right of the red line needs TCP.">
   <SizeBudget />
 </Figure>
 
-The A record and the toy TXT record are our own measurements; the DNSKEY sizes are APNIC's
+The A record and the toy TXT record are our own measurements; the key-set sizes are from APNIC,
+the internet address registry for the Asia-Pacific region
 ([Huston, 2021](https://labs.apnic.net/presentations/store/2021-11-25-rsa4096.pdf)). Our resilient
-resolver hits the TXT case against the toy server:
+resolver, built later on this page, hits the TXT case against the toy server:
 
 ```text title="python resilient_resolver.py (output, step 2)"
 t=0.4s  2. an answer too big for UDP
@@ -554,24 +847,43 @@ t=0.4s  2. an answer too big for UDP
          got 12 TXT strings, 2388 characters
 ```
 
-TCP is not optional: [RFC 9210](https://www.rfc-editor.org/rfc/rfc9210) (2022) requires every
-resolver and server to support it and every network to allow it. A firewall that blocks TCP port 53
-breaks only the big answers, typically DNSSEC-signed ones and domains with many verification TXT
-records, which makes it one of the more confusing partial outages. Keep hot names small: a handful
-of addresses, no long TXT records on the name your API clients look up.
+The UDP reply was 39 bytes of header and question with TC set; the same answer over TCP was 2,835
+bytes. TCP is not optional: [RFC 9210](https://www.rfc-editor.org/rfc/rfc9210) (2022) requires
+every resolver and server to support it and every network to allow it. A firewall that blocks TCP
+port 53 breaks only the big answers, typically DNSSEC-signed ones and domains with many long TXT
+records, which makes it one of the more confusing partial outages. Keep hot names small: a handful of addresses, no long TXT records on the name your API clients look up.
 
 ### DNSSEC: what it buys and what it costs
 
-Without signatures, a resolver accepts any answer whose 16-bit ID, source port and question match
-its query. An attacker who knows a resolver is about to ask can flood it with forged replies, each
-guessing a different ID and port out of 65,536 IDs times tens of thousands of ports. One hit
-poisons that cache for every user of it, for the whole TTL.
+Start with the attack DNSSEC exists for. A resolver accepts a reply if it matches its question in
+three ways: the same question, sent back to the same **source port** the resolver asked from, and
+the same **query ID**, a random number from 0 to 65,535 (16 bits give 2<sup>16</sup> = 65,536
+values) that the resolver put in the question. Nothing else in a plain reply proves where it came
+from.
 
-**DNSSEC** ([RFC 4033](https://www.rfc-editor.org/rfc/rfc4033)) adds public-key signatures. A zone
-has a key pair: the private key stays with whoever signs the zone, and the public key is published
-in the zone as a **DNSKEY** record. Each record set gets a signature, an **RRSIG** record, computed
-over the set with the private key; anyone holding the public key can check that the set is exactly
-what the owner signed. A signed answer arrives as the set plus its signature:
+So an attacker who knows a resolver is about to ask can flood it with forged replies, each
+guessing a different ID and port: 65,536 IDs times tens of thousands of ports. That is a lot of
+guesses, but they are cheap to send. One hit **poisons** that cache: every user of the resolver
+gets the attacker's address for the whole TTL.
+
+**What DNSSEC is.** **DNSSEC** ([RFC 4033](https://www.rfc-editor.org/rfc/rfc4033)) adds
+signatures to DNS records, so a resolver can check that a record came from the zone's owner,
+unchanged.
+
+**Why it exists.** Guessing the ID and port is the only protection plain DNS has. A signature
+cannot be guessed.
+
+**Example.** The idea uses a **key pair**: two linked keys. The **private key** stays with the
+zone's owner and is used to make a signature over some data; the **public key** is published, and
+anyone holding it can check the signature. Say the owner signs `shop.example.in A 192.0.2.10` and
+gets a 64-byte signature. An attacker who swaps the address for 203.0.113.66 keeps the signature,
+but the check with the public key now fails, so the resolver throws the answer away. Making a new
+signature that passes needs the private key, which the attacker does not have.
+
+**The technical version.** The zone's public key is published in the zone as a **DNSKEY** record.
+Each record set gets a signature, an **RRSIG** record, computed over the set with the private key.
+A signed answer arrives as the set plus its signature. Here is one, printed by `dig`, with the
+fields of the signature labelled underneath:
 
 ```text title="a signed answer (illustrative, in dig's format, signature shortened)"
 shop.example.in.  300  IN  A      192.0.2.10
@@ -580,11 +892,13 @@ shop.example.in.  300  IN  RRSIG  A 13 3 300 20261106000000 20261023000000 41520
 ;                                   valid 23 Oct to 6 Nov 2026, made with key 41520 of example.in
 ```
 
-That leaves one question: why trust the DNSKEY? Whoever can forge the A record can forge a key too.
-So the parent vouches for it. The `.in` zone publishes a **DS** record holding a hash of
-`example.in`'s key and signs it with its own key; `.in`'s key is vouched for by a DS in the root;
-and the root's key is built into every validating resolver. Checking a name means walking that
-chain:
+That leaves one question: why trust the DNSKEY? Whoever can forge the A record can forge a key
+too. So the parent vouches for it, using a **hash**: a short fingerprint of some data, which
+changes completely if the data changes by a single bit and cannot be turned back into the data.
+The `.in` zone publishes a **DS** record holding a hash of `example.in`'s key, and signs that DS
+with its own key. `.in`'s key is vouched for by a DS in the root, and the root's key is built into
+every resolver that checks signatures (a **validating** resolver). Checking a name means walking
+that chain from the top:
 
 <Figure caption="Each parent publishes a hash of its child's key, and each zone signs its own records. A validating resolver checks every link from the root down; if any link fails, it answers SERVFAIL rather than an answer it cannot verify.">
   <DnssecChain />
@@ -593,46 +907,76 @@ chain:
 Keys are replaced from time to time, a **key rollover**: publish the new DNSKEY next to the old
 one, wait at least one DNSKEY TTL so every cache holds both, sign with the new key, and remove the
 old one later. Most zones run two keys. The key-signing key (**KSK**) signs only the zone's DNSKEY
-set and is the one the parent's DS points to, so replacing it means changing the DS at the parent;
-the zone-signing key signs everything else and can be replaced without the parent.
+set and is the one the parent's DS points to, so replacing it means changing the DS at the parent.
+The zone-signing key signs everything else and can be replaced without the parent.
 
-It protects only users whose resolver validates: in 2025 about 36% of users sat behind
-validating resolvers, while only about 7% of domains had a signed delegation
+**Signing a "no" makes one answer cover a range of names.** A signature can only cover data that
+exists, and a name that does not exist has no data. So a signed zone sorts its names and signs the
+gaps between them, as **NSEC** records. A zone holding `alpha`, `gamma` and `zulu` publishes
+`alpha NSEC gamma` ("there is nothing between `alpha` and `gamma`") and `gamma NSEC zulu`, and a
+question about `beta` gets the first one as its proof of NXDOMAIN.
+
+A resolver may reuse a cached proof for any name it covers
+([RFC 8198](https://www.rfc-editor.org/rfc/rfc8198); BIND and Unbound both support it). It then
+answers NXDOMAIN for `beta`, `delta` and `fox` from that one cached `alpha NSEC gamma` record,
+without asking. Create `beta`, and a resolver holding that proof can deny it, until the proof
+expires, even to users who never asked for it before.
+
+DNSSEC protects only users whose resolver validates: in 2025 about 36% of users sat behind
+validating resolvers, while only about 7% of domains were signed, with a DS record at their parent
 ([CircleID, citing APNIC, February 2026](https://circleid.com/posts/dnssec-doesnt-need-a-better-story-it-needs-a-better-tuesday)).
 What it costs:
 
-- **Bigger answers.** Every answer carries signatures: 256 bytes per RRSIG with RSA-2048, 64 with
-  ECDSA P-256. With RSA keys, key-set answers cross the 1,232-byte line above and need TCP.
-- **More lookups on a cold cache.** The resolver must also fetch DNSKEY and DS records for every
-  zone on the way down. They cache well, so the cost lands on cold caches and rarely used zones.
+- **Bigger answers.** Every answer carries signatures. RSA and ECDSA are two families of signature
+  maths; ECDSA's signatures are much smaller for the same strength. An RSA-2048 signature is
+  2,048 bits, 256 bytes; an ECDSA P-256 signature is 64 bytes. With RSA keys, key-set answers
+  cross the 1,232-byte line above and need TCP.
+- **More lookups on a cold cache** (one that has nothing saved yet). The resolver must also fetch
+  DNSKEY and DS records for every zone on the way down. They cache well, so the cost lands on cold caches and rarely used zones.
 - **It fails closed.** A wrong signature anywhere in the chain makes the name disappear for every
   validating resolver's users, while every server is up. On 5 May 2026 DENIC, the `.de` registry,
-  rolled its signing key with a new system that generated a different key on each of three
-  hardware security modules but published only one. Validating resolvers returned SERVFAIL for
-  `.de` names, including unsigned domains (for those, `.de` serves a signed proof that no DS record
-  exists, an NSEC-style "no" like the ones above, and those signatures failed too), and the
-  failure grew for about three hours as cached answers expired, until operators such as Cloudflare
-  switched validation off for `.de` ([DENIC](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/),
+  rolled its signing key with a new system. That system generated a different key on each of three
+  **hardware security modules** (locked devices that hold private keys and sign without letting
+  them out) but published only one of the keys. Validating resolvers returned SERVFAIL for `.de`
+  names, including unsigned domains: for those, `.de` serves a signed proof that no DS record
+  exists, an NSEC-style "no" like the one above, and those signatures failed too. The failure grew
+  for about three hours as cached answers expired, until operators such as Cloudflare switched
+  validation off for `.de` ([DENIC](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/),
   [Cloudflare](https://blog.cloudflare.com/de-tld-outage-dnssec/)).
-- **Validation itself can be attacked.** KeyTrap (CVE-2023-50387, patched in February 2024) was a
-  flaw in the specification: a zone with many keys and signatures made the validator try every
-  combination, and one crafted packet could stall BIND for up to 16 hours
+- **Validation itself can be attacked.** KeyTrap (CVE-2023-50387; a CVE number is the public ID of
+  a security flaw) was a flaw in the specification, patched in February 2024. A zone with many keys
+  and signatures made the validator try every combination of key and signature, and one crafted
+  packet could stall BIND for up to 16 hours
   ([ISC advisory](https://kb.isc.org/docs/cve-2023-50387),
   [research paper](https://arxiv.org/pdf/2406.03133)).
 
-The root's own KSK was replaced this month: as of October 2026, KSK-2024 signs the root's key set
-from 11 October 2026 ([ICANN](https://www.icann.org/resources/pages/ksk-rollover-en)).
+The root's own KSK was replaced in October 2026: KSK-2024 signs the root's key set from 11 October
+2026 ([ICANN](https://www.icann.org/resources/pages/ksk-rollover-en)).
 
 :::note[From the trenches]
 If you sign, sign through a DNS provider that automates key rollovers, use ECDSA P-256 (algorithm
-13) to keep answers small, and treat every DS change at the registrar as a migration with a TTL:
-the parent's DS TTL, often a day, is how long a mistake lives. A half-managed DNSSEC setup is
+13) to keep answers small, and treat every DS change at the registrar (the company you bought the domain from, which
+passes it on to the registry) as a migration with a TTL: the parent's DS TTL, often a day, is how
+long a mistake lives. A half-managed DNSSEC setup is
 worse than none.
 :::
 
 ## Choosing TTLs
 
-Almost every DNS decision an application team makes is a TTL. Where I would start:
+Almost every DNS decision an application team makes is a TTL. The table uses a few terms not met
+yet:
+
+- the **apex** is the zone's own name, `example.in` itself;
+- a **CDN** is a network of servers near users that serves your content (its own page is linked
+  at the end);
+- **weighted** records send a chosen share of users to each address, for example 10% to a new
+  version;
+- `MX` records say where email for the domain goes;
+- `CAA` records say which certificate authorities (the companies that issue the certificates
+  browsers trust for HTTPS) may issue certificates for the name;
+- verification records are `TXT` records that prove to an outside service that you own the domain.
+
+Where I would start:
 
 | Record | TTL | Why |
 |---|---|---|
@@ -649,9 +993,10 @@ of a change is the one you set one old TTL earlier.
 
 ## Build it yourself
 
-Two pieces, each closer to production than the naive clients. Everything is standard library only,
-with a shared `dnswire` module for the binary messages, and runs against the toy server on your
-own machine.
+Two pieces, each closer to production than the naive clients. Everything is standard library only
+and runs against the toy server on your own machine. DNS messages are binary: fixed-size fields of
+bytes, not lines of text like an HTTP/1.1 request. So a small shared module, `dnswire`, builds
+questions and parses replies; the snippets call it as `w`.
 
 **A cache that honours TTLs, including negative ones.** The interesting part is where the expiry
 comes from: the shortest TTL in a CNAME chain for a positive answer, the SOA rule for a negative
@@ -700,6 +1045,14 @@ one.
   </TabItem>
 </Tabs>
 
+Read it like this. The method sends one question and notes the time on a **monotonic clock**, a
+clock that only moves forward, so a change to the system time cannot make entries expire early or
+late. If the answer holds addresses, the entry expires after the shortest TTL among the records
+used, including any CNAME aliases followed on the way. Otherwise it is a "no", and the entry
+expires after the smaller of the SOA's TTL and its minimum field, exactly the rule from the
+negative-caching section. The rest of the class (not shown) checks the cache before calling this
+method.
+
 Run against the same move as the naive clients:
 
 ```text title="python ttl_cache.py (output, part 1, trimmed)"
@@ -712,12 +1065,13 @@ t=3.6s  operator: waited longer than the TTL, switching off the old server 203.0
 ```
 
 Two lookups instead of ten, and the switch happened on its own when the copy expired, 1.4 seconds
-after the change and before the old server went away. Part 2 of the same run is the negative-caching
-output shown earlier.
+after the change and before the old server went away. Part 2 of the same run is the
+negative-caching output shown earlier.
 
-**A resolver that survives bad days.** The production-shaped version tries several upstreams with a
-short timeout each, checks that the reply matches the question, retries over TCP on truncation,
-clamps silly TTLs between a floor and a ceiling, and serves stale when everything is down:
+**A resolver that survives bad days.** The production-shaped version forwards questions to several
+**upstreams** (the resolvers or servers it asks) with a short timeout each, checks that the reply
+matches the question, retries over TCP on truncation, clamps silly TTLs between a floor and a
+ceiling, and serves stale when everything is down:
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -768,6 +1122,13 @@ clamps silly TTLs between a floor and a ceiling, and serves stale when everythin
   </TabItem>
 </Tabs>
 
+Read it like this. A fresh cache entry is returned at once. Otherwise the resolver asks its
+upstreams (the full file tries each in turn with a 400 ms timeout and retries over TCP on TC). If
+every upstream fails and the expired entry is younger than `MAX_STALE` (3,600 s in the example),
+it hands that entry out again for `STALE_TTL` (30 s, the RFC 8767 value) before trying again. A
+successful answer has its TTL clamped between `MIN_TTL` and `MAX_TTL` (1 and 300 s) and is stored
+with both its expiry and its stale limit.
+
 The demo's first upstream is a port where nothing listens, and later the toy server stops
 answering altogether:
 
@@ -787,18 +1148,26 @@ can only replay answers it has already seen. Full code, the toy server and run i
 
 ## How real systems do it
 
-**Kubernetes multiplies every external lookup.** Each pod's `/etc/resolv.conf` lists search
-suffixes such as `my-namespace.svc.cluster.local` and sets `options ndots:5`
+**Kubernetes multiplies every external lookup.** Kubernetes, a widely used system for running
+programs across a cluster of machines, runs each program in a **pod** (one or more processes
+sharing a network address). The cluster's own resolver is usually CoreDNS. To let a pod reach a
+service by a short name such as `payments`, each pod's `/etc/resolv.conf` lists **search
+suffixes**, endings the stub resolver tries adding to a name, such as
+`my-namespace.svc.cluster.local`. It also sets `options ndots:5`
 ([Kubernetes docs](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/)): a
-name with fewer than five dots is first tried with every suffix. A lookup of `api.stripe.com` is
-tried as `api.stripe.com.my-namespace.svc.cluster.local` and two more suffixes, each an NXDOMAIN,
-before the real name; with A and AAAA asked separately, one lookup becomes eight queries to
-CoreDNS. Write external names with a trailing dot (`api.stripe.com.`), or lower `ndots` for the pod
-with `dnsConfig`.
+name with fewer than five dots is first tried with every suffix.
 
-**nginx resolves upstream names once, unless told otherwise.** A hostname written directly in
-`proxy_pass` is resolved at startup and kept: resolve-once, in a config file. As of October 2026,
-open-source nginx can re-resolve upstream servers since 1.27.3
+So a lookup of `api.stripe.com` (two dots) is tried as
+`api.stripe.com.my-namespace.svc.cluster.local` and with two more suffixes, each an NXDOMAIN,
+before the real name. That is 3 + 1 = 4 names, and with A and AAAA asked separately, one lookup
+becomes 8 queries to CoreDNS. Write external names with a trailing dot (`api.stripe.com.`), which
+marks them complete, or lower `ndots` in the pod's DNS settings (`dnsConfig`).
+
+**nginx resolves upstream names once, unless told otherwise.** nginx is a web server often placed
+in front of applications to forward requests to them; those applications are its **upstreams**.
+A hostname written directly in its
+`proxy_pass` setting (where to forward) is resolved at startup and kept: resolve-once, in a config
+file. As of October 2026, open-source nginx can re-resolve upstream servers since version 1.27.3
 ([nginx docs](https://nginx.org/en/docs/http/ngx_http_upstream_module.html)):
 
 ```nginx title="nginx: follow DNS changes for an upstream"
@@ -808,6 +1177,9 @@ upstream payments {
     server api.partner-bank.example resolve;
 }
 ```
+
+nginx runs several worker processes, copies of itself that share the incoming work. The `zone`
+line gives the addresses a place in memory that all of them share, so one lookup updates them all.
 
 **Managed DNS sells the lease as a product.** Route 53's routing policies (weighted, latency,
 geolocation, failover, multivalue with up to eight healthy addresses) are all ways of choosing
@@ -819,8 +1191,8 @@ Every one of them inherits the limits above: decisions per resolver, delivered o
 
 **"It works on my laptop."** Your `dig` asks one resolver, which may have fetched a fresh copy a
 second ago. After a change, ask the authoritative server directly for the truth, then two or three
-public resolvers for what users see. `dig +norecurse @8.8.8.8 name` shows only what that resolver
-already has cached.
+public resolvers for what users see. `dig +norecurse @8.8.8.8 name` tells that resolver not to go
+looking, so it shows only what it already has cached.
 
 **A TTL change that never happened.** Some DNS dashboards apply the TTL to new records only, or
 round it up to a plan minimum. Before a migration, check the TTL your authoritative server actually
@@ -829,8 +1201,8 @@ serves, not the one in the form.
 :::danger[Dangling records are a security hole]
 A CNAME that points at a cloud resource you deleted, say `promo.example.in` pointing at an app
 name on a hosting platform, is a **dangling record**. Anyone who can claim that resource name on
-the platform now serves content, and can get certificates, for your subdomain: a **subdomain
-takeover** ([Microsoft's guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover)).
+the platform now serves content for your subdomain, and can get HTTPS certificates for it: a
+**subdomain takeover** ([Microsoft's guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover)).
 Put "remove the DNS record" on every decommissioning checklist, and audit CNAMEs that point outside
 your own zones.
 :::
@@ -848,12 +1220,13 @@ what their TTLs give you when they fail.
   per connection or request and reacts in seconds. Use DNS to choose a region.
 - **DNSSEC trades availability for authenticity.** It stops forged answers for validating users and
   turns any signing mistake into a total outage for them.
-- **Encrypted DNS moves trust.** DNS over HTTPS or TLS hides lookups from the network and shows
-  them all to one resolver operator. It does not prove the answer is genuine; DNSSEC does that.
+- **Encrypted DNS moves trust.** DNS over HTTPS or over TLS encrypts the questions between you and
+  the resolver. That hides your lookups from the network and shows them all to one resolver
+  operator. It does not prove the answer is genuine; DNSSEC does that.
 
 When should you not lean on DNS? Where endpoints change every few seconds, such as autoscaling
-pods, every layer's caching works against you: use a service registry or a load balancer with
-health checks. And DNS cannot make per-request decisions; it never sees requests.
+pods, every layer's caching works against you: use a service registry (a live list of which
+servers are up, which clients query directly) or a load balancer with health checks. And DNS cannot make per-request decisions; it never sees requests.
 
 ## Interview corner
 
@@ -867,8 +1240,8 @@ health checks. And DNS cannot make per-request decisions; it never sees requests
 3. **"How would you do global failover with DNS?"** Health-checked short-TTL records, and the honest
    numbers: about 90 s detection plus a TTL plus runtime caches, with pinned clients never moving.
    Pair it with load balancers in each region.
-4. **"Is DNS UDP or TCP?"** Both: UDP first, TCP for truncated answers above 1,232 bytes and for zone
-   transfers, and TCP support is mandatory.
+4. **"Is DNS UDP or TCP?"** Both: UDP first, TCP for truncated answers above 1,232 bytes and for
+   copying whole zones to secondary servers, and TCP support is mandatory.
 5. **"Should we turn on DNSSEC?"** What it protects (forged answers, for validating users), what it
    costs (size, cold-cache lookups, fail-closed outages), and how to do it safely (automated
    rollovers, ECDSA).
@@ -932,7 +1305,7 @@ behind each address.
   1 s to 5 min. NXDOMAIN covers the subtree, and NSEC proofs cover ranges.
 - In an outage, failures grow with **time ÷ TTL**; serve-stale hides an unreachable server but never
   an empty record, which also lingers for the negative TTL after the fix.
-- Resolvers spread queries over **all** name servers: make each equally strong, and use two
+- Resolvers spread queries over the name servers they list: make each equally strong, and use two
   providers for critical names. DNS balancing is per resolver and lumpy; failover takes minutes.
 - Answers above **1,232 bytes** go to TCP; DNSSEC adds size, lookups and a fail-closed mode.
 
@@ -949,38 +1322,36 @@ behind each address.
 
 ## Further reading
 
+Standards are listed with the year of the version still in force; documentation pages are living
+documents, read in October and November 2026.
+
 **Specs & official docs**
 
-- [RFC 1034](https://www.rfc-editor.org/rfc/rfc1034) and [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) — the original design and message format.
-- [RFC 2308, negative caching](https://www.rfc-editor.org/rfc/rfc2308) and [RFC 9520, caching resolution failures](https://www.rfc-editor.org/rfc/rfc9520.html) — how "no" and "could not find out" are cached.
-- [RFC 8020, NXDOMAIN cut](https://www.rfc-editor.org/rfc/rfc8020) and [RFC 8198, aggressive use of the validated cache](https://www.rfc-editor.org/rfc/rfc8198) — why one negative answer covers more names.
-- [RFC 8767, serve-stale](https://www.rfc-editor.org/rfc/rfc8767) — answering from an expired cache.
-- [RFC 6891, EDNS(0)](https://www.rfc-editor.org/rfc/rfc6891), [DNS Flag Day 2020](https://www.dnsflagday.net/2020/) and [RFC 9210, DNS over TCP](https://www.rfc-editor.org/rfc/rfc9210) — size limits, 1,232 bytes and mandatory TCP.
-- [RFC 4033, DNSSEC](https://www.rfc-editor.org/rfc/rfc4033) and [RFC 8901, multi-signer DNSSEC](https://www.rfc-editor.org/rfc/rfc8901) — the chain of trust, and signing with two providers.
-- [RFC 7871, EDNS Client Subnet](https://www.rfc-editor.org/rfc/rfc7871) — passing part of the user's address for location-based answers.
-- [BIND 9 configuration reference](https://bind9.readthedocs.io/en/stable/reference.html) and [`unbound.conf`](https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html) — TTL caps and serve-stale defaults.
-- [Unbound: timeout and server selection](https://unbound.docs.nlnetlabs.nl/en/latest/reference/history/info-timeout-server-selection.html) — the 400 ms band.
-- [ICANN: root KSK rollover](https://www.icann.org/resources/pages/ksk-rollover-en) — the October 2026 change of the root key.
-- [Kubernetes: DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/), [Node.js `dns`](https://nodejs.org/api/dns.html), [OpenJDK `InetAddressCachePolicy`](https://code.yawk.at/java/8/sun/net/InetAddressCachePolicy.java) and [nginx upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) — what platforms do with names and TTLs.
-- [Route 53 routing policies](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html) and [health check intervals](https://aws.amazon.com/blogs/aws/route-53-health-check-improvements-faster-interval-and-configurable-failover/) — managed DNS steering and failover timing.
-- [Microsoft: prevent dangling DNS and subdomain takeover](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover) — the attack and the checklist.
+- [RFC 1034](https://www.rfc-editor.org/rfc/rfc1034) and [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) (1987, still the core standard) — the original design and message format.
+- [RFC 2181, clarifications to the DNS specification](https://www.rfc-editor.org/rfc/rfc2181) (1997) — section 5.4.1 ranks the child zone's own data above the parent's referral.
+- [RFC 2308, negative caching](https://www.rfc-editor.org/rfc/rfc2308) (1998) and [RFC 9520, caching resolution failures](https://www.rfc-editor.org/rfc/rfc9520.html) (2023) — how "no" and "could not find out" are cached.
+- [RFC 8020, NXDOMAIN cut](https://www.rfc-editor.org/rfc/rfc8020) (2016) and [RFC 8198, aggressive use of the validated cache](https://www.rfc-editor.org/rfc/rfc8198) (2017) — why one negative answer covers more names.
+- [RFC 8767, serve-stale](https://www.rfc-editor.org/rfc/rfc8767) (2020) — answering from an expired cache.
+- [RFC 6891, EDNS(0)](https://www.rfc-editor.org/rfc/rfc6891) (2013), [DNS Flag Day 2020](https://www.dnsflagday.net/2020/) (2020) and [RFC 9210, DNS over TCP](https://www.rfc-editor.org/rfc/rfc9210) (2022) — size limits, 1,232 bytes and mandatory TCP.
+- [RFC 4033, DNSSEC](https://www.rfc-editor.org/rfc/rfc4033) (2005) and [RFC 8901, multi-signer DNSSEC](https://www.rfc-editor.org/rfc/rfc8901) (2020) — the chain of trust, and signing with two providers.
+- [RFC 7871, EDNS Client Subnet](https://www.rfc-editor.org/rfc/rfc7871) (2016) — passing part of the user's address for location-based answers.
+- [RFC 6724, default address selection](https://www.rfc-editor.org/rfc/rfc6724) (2012) and [`gai.conf(5)`](https://man7.org/linux/man-pages/man5/gai.conf.5.html) (current man page) — the rules `getaddrinfo()` uses to re-sort addresses.
+- [BIND 9 configuration reference](https://bind9.readthedocs.io/en/stable/reference.html) and [`unbound.conf`](https://unbound.docs.nlnetlabs.nl/en/latest/manpages/unbound.conf.html) (current docs) — TTL caps and serve-stale defaults.
+- [Unbound: timeout and server selection](https://unbound.docs.nlnetlabs.nl/en/latest/reference/history/info-timeout-server-selection.html) (current docs) — the 400 ms band.
+- [ICANN: root KSK rollover](https://www.icann.org/resources/pages/ksk-rollover-en) (2026) — the October 2026 change of the root key.
+- [Kubernetes: DNS for Services and Pods](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/), [Node.js `dns`](https://nodejs.org/api/dns.html), [OpenJDK `InetAddressCachePolicy`](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/sun/net/InetAddressCachePolicy.java) and [nginx upstream module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html) (current docs and source) — what platforms do with names and TTLs.
+- [Route 53 routing policies](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html), [how health checks decide](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-determining-health-of-endpoints.html) and [TTLs on health-checked records](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values-latency.html) (current docs) — managed DNS steering and failover timing.
+- [Microsoft: prevent dangling DNS and subdomain takeover](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover) (current docs) — the attack and the checklist.
 
 **Research & engineering**
 
-- [Moura et al., When the Dike Breaks (IMC 2018)](https://ant.isi.edu/~johnh/PAPERS/Moura18b.pdf) — what caches and retries do during a DDoS on authoritative servers.
-- [Moura et al., Cache Me If You Can (IMC 2019)](https://ant.isi.edu/bib/Moura19b.html) — how TTLs really behave, and child-centric resolvers.
-- [Müller et al., Recursives in the Wild (IMC 2017)](https://ant.isi.edu/~johnh/PAPERS/Mueller17b.pdf) — how resolvers choose among name servers.
-- [Al-Dalky, Rabinovich and Schomp, ECS behaviour of resolvers (2019)](https://akamai.com/site/en/documents/research-paper/a-look-at-the-ecs-behavior-of-dns-resolvers.pdf) — what ECS does to cache size and hit rate.
-- [CERN: glibc and DNS load balancing](https://cern.ch/twiki/bin/view/LinuxSupport/GlibcDnsLoadBalancing) and [glibc bug 24282](https://sourceware.org/bugzilla/show_bug.cgi?id=24282) — how address sorting defeats round robin.
 - [Eric Lawrence: Chromium's DNS cache (2022)](https://textslashplain.com/2022/03/31/chromiums-dns-cache/) — the browser's own TTL rules.
 - [APNIC: RSA-4096 and DNSSEC response sizes (2021)](https://labs.apnic.net/presentations/store/2021-11-25-rsa4096.pdf) and [CircleID on DNSSEC deployment (2026)](https://circleid.com/posts/dnssec-doesnt-need-a-better-story-it-needs-a-better-tuesday) — what DNSSEC costs and who uses it.
-- [ISC: KeyTrap, CVE-2023-50387](https://kb.isc.org/docs/cve-2023-50387) and [the KeyTrap paper](https://arxiv.org/pdf/2406.03133) — validation as an attack surface.
+- [ISC: KeyTrap, CVE-2023-50387 (2024)](https://kb.isc.org/docs/cve-2023-50387) and [the KeyTrap paper (2024)](https://arxiv.org/pdf/2406.03133) — validation as an attack surface.
 - [AWS: DynamoDB disruption in us-east-1 (October 2025)](https://aws.amazon.com/message/101925/) — an empty record published by DNS automation.
-- [DENIC: the .de outage of 5 May 2026](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/) and [Cloudflare's view of it](https://blog.cloudflare.com/de-tld-outage-dnssec/) — a DNSSEC signing failure at a TLD.
-- [APNIC: the attack on Dyn (2016)](https://blog.apnic.net/2016/10/26/quick-look-attack-dyn/) — why one DNS provider is one point of failure.
-- [APNIC: aggressive NSEC caching in BIND 9.12 (2018)](https://blog.apnic.net/2018/02/06/aggressive-nsec-caching-bind-9-12/) — RFC 8198 switched on by default.
+- [DENIC: the .de outage of 5 May 2026](https://blog.denic.de/en/analysis-of-the-dns-outage-on-5-may-2026/) and [Cloudflare's view of it (2026)](https://blog.cloudflare.com/de-tld-outage-dnssec/) — a DNSSEC signing failure at a top-level domain.
+- [Cloudflare: the October 2021 Facebook outage (2021)](https://blog.cloudflare.com/october-2021-facebook-outage/) — how a withdrawn route became a DNS failure, and the resolver load that followed.
 
 **Explainers**
 
-- [Julia Evans: How updating DNS works](https://jvns.ca/blog/how-updating-dns-works/) — `dig` experiments showing propagation as caches expiring.
-- [Cloudflare: the October 2021 Facebook outage](https://blog.cloudflare.com/october-2021-facebook-outage/) — how a withdrawn route became a DNS failure, and the resolver load that followed.
+- [Julia Evans: How updating DNS works (2020)](https://jvns.ca/blog/how-updating-dns-works/) — `dig` experiments showing propagation as caches expiring.
