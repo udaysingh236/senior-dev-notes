@@ -154,7 +154,8 @@ work by mixing the data with a random-looking stream of bytes made from the key.
 encrypted bytes, and the same bit flips in the decrypted message. Without a tag, the bank would
 decrypt the changed message and never know.
 
-**Example.** The characters `1` and `9` differ in exactly one bit (they are bytes 49 and 57). If
+**Example.** The characters `1` and `9` differ in exactly one bit: they are the bytes 49 and 57,
+which in bits are `00110001` and `00111001`. If
 Mallory knows where the amount sits in your request, she can flip that one bit in the encrypted
 bytes, and `100` decrypts as `900`. With a tag, the bank recomputes the 16-byte tag over what
 arrived, gets a different value from the one attached, and drops the block. Mallory cannot compute
@@ -196,10 +197,12 @@ prove something to a stranger who holds only its public key, without sharing any
 **Example.** Toy numbers, with RSA, the oldest common signature scheme. The public key is n = 33 and
 e = 3; the private key is d = 7. Write `x mod n` for the remainder after dividing x by n:
 16,384 mod 33 = 16, because 16,384 = 33 × 496 + 16. To sign a message whose hash is 4, the bank
-computes 4<sup>7</sup> mod 33 = 16,384 mod 33 = 16, and sends 16 with the message. You compute
-16<sup>3</sup> mod 33 = 4,096 mod 33 = 4, hash the message you received yourself, and accept only
+computes 4<sup>7</sup> mod 33: 4<sup>7</sup> is 16,384, and 16,384 mod 33 = 16, so it sends 16 with
+the message. You compute 16<sup>3</sup> mod 33: 16<sup>3</sup> is 4,096, and 4,096 = 33 × 124 + 4,
+so the remainder is 4, hash the message you received yourself, and accept only
 if both give 4. If Mallory changes the message so its hash becomes 5, the signature 16 still opens
-to 4 and the check fails. The signature that opens to 5 is 14, and finding it needs d.
+to 4 and the check fails. The signature that opens to 5 is 14 (14<sup>3</sup> = 2,744 = 33 × 83 + 5), and finding it
+without trying every number needs d.
 
 **The technical version.** Real signatures use RSA keys with 2,048-bit numbers, or elliptic-curve
 keys (a different kind of arithmetic that gives the same strength with much smaller numbers), where
@@ -242,7 +245,8 @@ this name", signed by a **certificate authority** (CA).
 still needs to know that the public key is the bank's and not Mallory's. Someone your browser
 already trusts has to vouch for that.
 
-**Example.** The bank's certificate says: name `bank.example.in`; the bank's public key; valid from 1 October to 17 November 2026, which is 47 days; issued by a CA; and the CA's signature
+**Example.** The bank's certificate says: name `bank.example.in`; the bank's public key; valid from 1 October to 17 November 2026, which is 47 days (30 days to the end of October,
+plus 17); issued by a CA; and the CA's signature
 over all of that. Mallory can copy the certificate and send it, but the public key in it is the
 bank's, so only the bank can sign with the matching private key. If she edits the name or puts her
 own public key in, the CA's signature no longer matches.
@@ -836,7 +840,8 @@ chains with the clients you actually ship, not with a browser.
 
 If a private key leaks, the CA can **revoke** the certificate: declare it cancelled before its
 expiry date. Say the bank finds out on 3 October that its key leaked, and its certificate is valid
-until 17 November. For those six weeks, every client must learn that the certificate is no longer
+until 17 November. For those 45 days (28 left in October, plus 17), about six weeks, every client
+must learn that the certificate is no longer
 good. Both ways of asking have failed in practice:
 
 - A **CRL** (certificate revocation list) is a signed list of revoked serial numbers. Lists get large,
@@ -880,8 +885,8 @@ Your back-end code is in a worse position: Python's `ssl`, Node's `tls` and most
 no revocation at all by default.
 
 So for most clients, the only revocation that always works is **expiry**. A stolen key is usable for
-the rest of the certificate's life. With 398-day certificates that was up to 13 months; with 47-day
-certificates it is under 7 weeks. That is the main reason lifetimes are being cut.
+the rest of the certificate's life. With 398-day certificates that was up to 13 months (398 ÷ 30.4 days a
+month ≈ 13); with 47-day certificates it is under 7 weeks (47 ÷ 7 ≈ 6.7). That is the main reason lifetimes are being cut.
 
 ### Lifetimes falling to 47 days, and what breaks
 
@@ -909,7 +914,7 @@ Information) endpoint, an address the client can ask "when should I renew?", say
 It also stopped sending expiry reminder emails in June 2025.
 
 Renewing at two-thirds means a third of the lifetime is left when renewal starts: for a 47-day
-certificate, renewal starts after about 31 days, with about 16 days left. That third is not spare
+certificate, renewal starts after about 47 × 2 ÷ 3 ≈ 31 days, with 47 − 31 = 16 days left. That third is not spare
 time for the automation. It is **the time humans have to notice and fix broken automation**.
 Automation breaks for dull reasons: a firewall change blocks the challenge, a DNS API token
 expires, a server is rebuilt without the renewal job, the proxy is never reloaded. Here are six
@@ -1295,8 +1300,11 @@ verification off accepts the impostor too.
 <summary>4. You run 12 servers with a ClientHello replay cache in each, and accept POST in 0-RTT. An attacker sends 3 copies of a captured transfer. Roughly how many run?</summary>
 
 The original plus three copies land on random servers. A copy is rejected only if it lands on a
-server that already saw that ClientHello. With 12 servers, most copies land somewhere new: four
-random picks reach about 3.5 distinct servers, so about 2.5 of the 3 copies run. The fix is a shared cache or, better, no POST in early data.
+server that already saw that ClientHello. With 12 servers, most copies land somewhere new. Work
+it out as in the sim section: a given server is missed by one random pick with chance 11/12, and by
+all four picks (the original plus three copies) with chance (11/12)<sup>4</sup> ≈ 0.71. So the four
+picks reach on average 12 × (1 − 0.71) ≈ 3.5 different servers. One of those ran the original, so
+about 3.5 − 1 = 2.5 of the 3 copies run. The fix is a shared cache or, better, no POST in early data.
 
 </details>
 
