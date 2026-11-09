@@ -1,0 +1,82 @@
+---
+// Part 1 mental model: one request from a phone reaches one box in front of the servers. The box
+// does three jobs in turn (take the request in and forward it, check the caller and pick the
+// service, pick a healthy copy), then the request lands on one copy of one service.
+const jobs = [
+  { y: 128, name: 'reverse proxy', job: 'takes the request in, passes it on' },
+  { y: 180, name: 'API gateway', job: 'checks who is calling, picks the service' },
+  { y: 232, name: 'load balancer', job: 'picks one healthy copy' },
+];
+const backends = [
+  { x: 4, label: 'orders 1', chosen: false },
+  { x: 104, label: 'orders 2', chosen: true },
+  { x: 204, label: 'orders 3', chosen: false },
+  { x: 304, label: 'users', chosen: false },
+];
+---
+
+<svg viewBox="0 0 400 410" width="100%" role="img" aria-labelledby="plg-mm-t plg-mm-d">
+  <title id="plg-mm-t">One box in front of the servers, doing three jobs</title>
+  <desc id="plg-mm-d">
+    Asha's phone sends one request, GET /orders/42, to a single box in front of the shop's servers.
+    Inside the box are three jobs, done in order. As a reverse proxy it takes the request in and
+    passes it on. As an API gateway it checks who is calling and picks the service, here orders.
+    As a load balancer it picks one healthy copy of that service, here orders 2. Behind the box are
+    three identical copies of the orders service and one different service, users.
+  </desc>
+  <defs>
+    <marker id="plg-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="110" y="4" width="160" height="46" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="190" y="33" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Asha's phone</text>
+
+  <line x1="190" y1="52" x2="190" y2="88" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#plg-mm-a)" />
+  <text x="202" y="76" font-size="15" style="fill: var(--viz-flow); font-family: var(--sl-font-mono)">GET /orders/42</text>
+
+  <rect x="4" y="92" width="392" height="186" rx="8" stroke-width="2.5" style="fill: var(--viz-surface); stroke: var(--viz-server)" />
+  <text x="16" y="116" font-size="16" font-weight="700" style="fill: var(--viz-ink)">one box in front (for example nginx)</text>
+
+  {
+    jobs.map((j, i) => (
+      <g>
+        <rect x="14" y={j.y} width="372" height="44" rx="6" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+        <text x="26" y={j.y + 19} font-size="16" font-weight="700" style="fill: var(--viz-ink)">{`${i + 1}. ${j.name}`}</text>
+        <text x="26" y={j.y + 38} font-size="15" style="fill: var(--viz-muted)">{j.job}</text>
+      </g>
+    ))
+  }
+
+  {
+    backends.map((b) => (
+      <line
+        x1={b.x + 46}
+        y1="280"
+        x2={b.x + 46}
+        y2="314"
+        stroke-width="2"
+        stroke-dasharray={b.chosen ? undefined : '4 4'}
+        style={b.chosen ? 'stroke: var(--viz-flow)' : 'stroke: var(--viz-muted)'}
+        marker-end={b.chosen ? 'url(#plg-mm-a)' : undefined}
+      />
+    ))
+  }
+
+  {
+    backends.map((b) => (
+      <g>
+        <rect x={b.x} y="318" width="92" height="44" rx="5" stroke-width={b.chosen ? 2.5 : 2}
+          style={b.chosen ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-server-soft); stroke: var(--viz-server)'} />
+        <text x={b.x + 46} y="346" font-size="16" font-weight="600" text-anchor="middle" style="fill: var(--viz-ink)">{b.label}</text>
+      </g>
+    ))
+  }
+
+  <path d="M8 374 h284" stroke-width="1.5" style="stroke: var(--viz-muted)" />
+  <path d="M8 368 v6 M292 368 v6" stroke-width="1.5" style="stroke: var(--viz-muted)" />
+  <text x="150" y="396" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">3 copies of one service</text>
+  <text x="350" y="388" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">a different</text>
+  <text x="350" y="405" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">service</text>
+</svg>

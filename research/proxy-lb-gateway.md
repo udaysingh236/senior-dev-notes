@@ -114,3 +114,53 @@ See the page's Further reading section; every URL above is listed there.
   p95 ~1.9 s vs ~32 ms at L7; backend 1 3× slower: round robin p95 ~1.5 s vs ~45 ms least
   outstanding. Timeouts 1.2 s service / 1 s gateway / 1.5 s client with 2 retries per hop: ~6 service
   calls per click, >90% of service work wasted, ~half of clicks fail.
+
+## Sources changed in the November 2026 rewrite
+
+- Removed (pre-2020, not famous history): Kubernetes blog "gRPC load balancing without tears" (2018),
+  Netflix Zuul 2 (2016), Google SRE book chapter (2016), ThoughtWorks Radar "overambitious API
+  gateways" (2015–2018), Sam Newman BFF article (2015), microservices.io API gateway page (undated).
+- Replaced with: Kubernetes docs "Virtual IPs and service proxies" (current) for per-connection
+  Service balancing; gRPC repository load-balancing doc (updated 2021) and gRPC retry guide (current);
+  Marc Brooker, "Fixing retries with token buckets and circuit breakers" (28 Feb 2022, confirmed by
+  search) for retry storms and retry budgets; Azure Architecture Center "Gateway Offloading" (current;
+  says business logic should never be offloaded to the gateway, confirmed by search) and "Backends for
+  Frontends" (current). learn.microsoft.com and brooker.co.za could not be fetched from this session
+  (network policy); both were checked through search results only.
+- Kept as dated history: Maglev (NSDI 2016), the Cloudflare outage of 2 July 2019.
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Min read 33 → 49 (comparison page; usual 35–50, max 60).
+
+Fixed:
+- The page opened with an L4/gRPC puzzle a fresher could not parse. It now opens with "what is the
+  box in front of the servers, and is it three machines?", answered on the first screen. The gRPC
+  puzzle moved to "Going deeper".
+- New Part 1: one running example (Asha's `GET /orders/42`, an orders service good for 100 req/s,
+  180 req/s at peak, 3 copies, one crash), a new mental-model diagram, and five building blocks in
+  four steps: proxy (forward vs reverse), backends and a pool, connection vs request (with keep-alive
+  and round trips), layer 4 vs layer 7, API keys and rate limits.
+- Terms that arrived unexplained now get a plain sentence first: terminating, TLS records, timeout,
+  sync worker, CDN, HTTP/2 streams (four steps), gRPC, Kubernetes pod and Service, in flight, queue,
+  utilisation, hash function, p95 (four steps), median, tail, cache, slow start, single point of
+  failure, router, BGP, ECMP, consistent hashing and `hash mod N`, anycast, aggregation, retry,
+  retry storm, deadline, idempotency key, retry budget, file descriptor, PROXY protocol, signed token,
+  service mesh, north-south and east-west.
+- Every derived number shows its working: buffering (4 × 0.5 = 2 vs 4 × 50 = 200 req/s), 216,000
+  requests (60 × 3,600), queue growth past 100%, power of two choices (3/10 × 2/9 = 6/90 ≈ 7%), the
+  p95 average (13,880 ÷ 100), 1 − 0.95²⁰ in words, the slow backend (40 − 33 = 7/s), health-check
+  window (5 × 3 = 15 s, 15 × 100 = 1,500), three quarters moving under `hash mod N` (values 0–11),
+  aggregation (450 vs 153 ms), retries (3 × 3 = 9, 27), check-yourself 3 (4 × 3 = 12), the nginx
+  `18r/m` limit (18 ÷ 6 = 3 per 10 s), the retry budget (1,000 × 0.10 = 100/s).
+- The keep-alive race is now four numbered steps. A "read it like this" paragraph follows the code.
+- Tagline was a claim needing the page to decode; now one plain sentence.
+- Part 2 rate-limit example made consistent with Part 1 (100 calls a minute on the free plan).
+
+Three-sentence explanation a student could give after Part 1 alone: "The box in front of a
+company's servers receives every request; as a reverse proxy it passes requests on and handles
+chores like HTTPS, as a load balancer it spreads them over several identical copies and skips dead
+ones, and as an API gateway it checks who is calling before choosing the right service. These are
+three jobs, not three machines, so one nginx can do all of them. What really separates them is how
+much of the request a box reads: a layer 4 box sees only connections, a layer 7 box reads each
+request."
