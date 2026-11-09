@@ -113,6 +113,23 @@ The first screen decides whether the reader stays. It does two things:
 2. **The answer in plain words**, right after: the first paragraphs of "The idea in plain words"
    (Part 1). The reader should know the gist before the first scroll.
 
+## The title line, tagline and description
+
+The tagline under the title and the `description` (shown in search results and link previews) are
+the first words anyone reads, before the opening. They follow the fresher rule more strictly than
+anything else on the page:
+
+- One plain sentence saying what the page explains, in words a fresher already knows.
+- No riddles, no wordplay, no hidden reference to a number explained later in the page.
+- No arithmetic the reader has to do. "Your connection could download the page in a thousandth of
+  a second" works; "a 1 Gbit/s line does not download 100 KB in a millisecond" makes the reader
+  convert units before they understand the claim.
+- Bad: "Here is where the other 839 go." Good: "What happens between pressing Enter and seeing the
+  page, and why distance, not your internet speed, decides how long it takes."
+
+The same goes for the opening question: give the reader the conclusion in plain words ("almost a
+full second"), and show the exact numbers and the arithmetic afterwards, in Part 1.
+
 ## Part 1: "Understand it"
 
 Part 1 is a short page of its own. It contains:

@@ -1,7 +1,7 @@
 ---
 title: Load Balancing
 description: How a load balancer picks a server for each request, explained from zero with eight servers and one slow one, then in depth. Why taking turns fails, why least loaded herds on an old shared table while two random choices does not, why least-request goes blind behind fifty sidecars, latency-aware picking with peak EWMA and Google's Prequal, subsetting, zone-aware routing, outlier ejection and panic mode.
-tagline: Every balancer decides with a partial, slightly old view of the pool. The algorithms that work are the ones built for that.
+tagline: How requests get shared across many servers, and why giving every server the same number of requests is not enough.
 difficulty: intermediate
 track: traffic
 prerequisites: [proxy-lb-gateway, latency-vs-throughput]
