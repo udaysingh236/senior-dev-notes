@@ -385,8 +385,12 @@ Throughput relative to one server is N ÷ (1 + α(N − 1) + βN(N − 1)). With
 |---|---|---|---|---|---|---|---|
 | Throughput (× one server) | 1.0 | 1.9 | 3.4 | 5.7 | 8.0 | 9.0 | 7.8 |
 
+Work out one column to see where the numbers come from. For 8 servers: contention adds
+0.05 × (8 − 1) = 0.35, coherence adds 0.001 × 8 × 7 = 0.056, so the bottom of the fraction is
+1 + 0.35 + 0.056 = 1.406, and 8 ÷ 1.406 ≈ 5.7. Eight servers do the work of 5.7.
+
 Thirty-two servers give nine times one server, and sixty-four give less than thirty-two. The peak sits
-at √((1 − α) ÷ β), about 31 servers here. You find α and β by measuring throughput at a few cluster
+at √((1 − α) ÷ β): here (1 − 0.05) ÷ 0.001 = 950, and the square root of 950 is about 31 servers. You find α and β by measuring throughput at a few cluster
 sizes and fitting the curve. The practical lesson: remove shared state from the busy path (split it,
 cache it locally, make it read-only) before buying more servers to fight it. Aravindh Sampathkumar's
 SREcon25 talk walks through fitting it to production data

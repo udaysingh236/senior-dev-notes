@@ -467,8 +467,8 @@ expiries are spread evenly over the next full TTL.
 
 Take a TTL of 3,600 s, one hour, and switch the old server off 10
 minutes after the change. The copies expire evenly over the hour after the change, so by minute
-10 only 10 of 60 minutes' worth have expired: roughly five caches in six still point at the old
-server. Lowering the TTL in the same edit changes nothing, because the copies already out there
+10 only 10 of the 60 minutes' worth have expired, and 60 − 10 = 50 of 60 have not: roughly five
+caches in six still point at the old server. Lowering the TTL in the same edit changes nothing, because the copies already out there
 carry the old TTL. The only thing that helps is lowering it **at least one old TTL before** the
 change, so that by the moment of the change every copy in the world is a short one.
 
@@ -487,7 +487,7 @@ and the only failures come from the 2% of clients that never resolve again. A le
 is half a fix: 68 caches still on the old address, 6% of lookups failing.
 
 The price is in the query counter. With 60-second copies instead of one-hour ones, each cache asks
-up to 60 times as often, and the sim counts about fifty times as many queries. That is why the TTL
+up to 3,600 ÷ 60 = 60 times as often, and the sim counts about fifty times as many queries. That is why the TTL
 goes back up once the move is done.
 
 The full plan uses **`dig`**, a command-line tool that sends one DNS question to the server you
@@ -516,9 +516,8 @@ box is your zone:
   <Delegation />
 </Figure>
 
-The `.com` servers hand out delegations with a TTL of 172,800 seconds, two days. So a resolver
-that learned the old delegation an hour before your switch can keep asking the old provider for 47
-more hours. The DNS standards are published as numbered documents called **RFCs** (requests for comments),
+The `.com` servers hand out delegations with a TTL of 172,800 seconds, two days. 172,800 seconds is 172,800 ÷ 3,600 = 48 hours, so a resolver that learned the old delegation an
+hour before your switch can keep asking the old provider for 48 − 1 = 47 more hours. The DNS standards are published as numbered documents called **RFCs** (requests for comments),
 and one of them, [RFC 2181](https://www.rfc-editor.org/rfc/rfc2181) (section 5.4.1), ranks the
 child zone's own answer above the parent's referral. So a resolver that has asked
 your old provider may keep the old provider's copy of your `NS` records instead. Keep the old
@@ -743,8 +742,10 @@ so 3 × 30 = about 90 seconds to notice
 ([Route 53 docs](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/dns-failover-determining-health-of-endpoints.html)).
 AWS recommends a TTL of 60 seconds or less on records tied to a health check
 ([Route 53 docs](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/resource-record-sets-values-latency.html),
-as of November 2026). Add 60 seconds of TTL, then Java's 30 seconds or Chrome's 60, and open
-connections that never move: two to three minutes is the realistic best case.
+as of November 2026). Add it up: 90 seconds to notice, plus the 60-second TTL, plus Java's 30 seconds (90 + 60 + 30 =
+180 s, three minutes) or Chrome's 60 (90 + 60 + 60 = 210 s, three and a half minutes). With the
+10-second checks, detection drops to 3 × 10 = 30 s and the total to about two minutes. And open
+connections never move at all. So two to three and a half minutes is the realistic best case.
 
 **Geographic answers see the resolver, not the user.** An authoritative server that answers by
 location (often called **GeoDNS**) sees where the *question* came from, and the question comes from
@@ -862,8 +863,9 @@ values) that the resolver put in the question. Nothing else in a plain reply pro
 from.
 
 So an attacker who knows a resolver is about to ask can flood it with forged replies, each
-guessing a different ID and port: 65,536 IDs times tens of thousands of ports. That is a lot of
-guesses, but they are cheap to send. One hit **poisons** that cache: every user of the resolver
+guessing a different ID and port. With about 60,000 possible ports, that is 65,536 × 60,000, about
+4 billion combinations. That is a lot of guesses, but each is one small packet, cheap to send, and
+the attacker needs only one to land. One hit **poisons** that cache: every user of the resolver
 gets the attacker's address for the whole TTL.
 
 **What DNSSEC is.** **DNSSEC** ([RFC 4033](https://www.rfc-editor.org/rfc/rfc4033)) adds
@@ -929,7 +931,7 @@ What it costs:
 
 - **Bigger answers.** Every answer carries signatures. RSA and ECDSA are two families of signature
   maths; ECDSA's signatures are much smaller for the same strength. An RSA-2048 signature is
-  2,048 bits, 256 bytes; an ECDSA P-256 signature is 64 bytes. With RSA keys, key-set answers
+  2,048 bits, which is 2,048 ÷ 8 = 256 bytes; an ECDSA P-256 signature is 64 bytes. With RSA keys, key-set answers
   cross the 1,232-byte line above and need TCP.
 - **More lookups on a cold cache** (one that has nothing saved yet). The resolver must also fetch
   DNSKEY and DS records for every zone on the way down. They cache well, so the cost lands on cold caches and rarely used zones.
@@ -1261,7 +1263,8 @@ quickly you had to lower the TTL at 13:00 or earlier.
 <summary>2. A deploy pipeline polled report.example.in for 10 minutes before the record was created at 09:30. The zone's SOA has TTL 3600 and minimum 900. At 09:40 some users still get NXDOMAIN. Why, and when does it end?</summary>
 
 Every resolver the pipeline's checks went through cached the NXDOMAIN for min(3600, 900) = 900 s,
-so the last one, cached shortly before 09:30, can last until about 09:45, plus any runtime cache.
+and 900 s is 15 minutes. So the last one, cached shortly before 09:30, can last until about
+09:30 + 15 minutes = 09:45, plus any runtime cache.
 Resolvers that were never asked fetched the new record at once.
 
 </details>

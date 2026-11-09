@@ -511,8 +511,10 @@ them:
 | ±1 | 3 | 0.0003% | 0.030% | 231,049 |
 | ±2 | 5 | 0.0005% | 0.050% | 138,629 |
 
-With no limit, an attacker making 10 guesses a minute against a ±1 window makes 14,400 guesses a
-day: a 4% chance of getting in within a day and 26% within a week. NIST sets the limit: at most 100
+With no limit, an attacker making 10 guesses a minute against a ±1 window makes 10 × 60 × 24 =
+14,400 guesses a day. Each guess fails with probability 1 − 0.000003, so all 14,400 fail with
+probability (1 − 0.000003)<sup>14,400</sup> ≈ 0.96 (a calculator does this step): a 4% chance of
+getting in within a day. Over a week, 7 × 14,400 = 100,800 guesses, the same sum gives 26%. NIST sets the limit: at most 100
 failed attempts in a row, then the code check is disabled until the user re-enrols. That gives the
 attacker 100 guesses and a 0.03% chance. NIST chose 100 with exactly this trade-off in mind: low odds
 for the guesser, few lockouts for real users who mistype.
@@ -520,7 +522,8 @@ for the guesser, few lockouts for real users who mistype.
 **The trap in "in a row".** A counter of failures in a row (a **consecutive** counter) goes back to
 zero when the real user logs in successfully. A patient attacker stops at 99 failures, waits for
 Asha's next login to reset the counter, and spends 99 more. If Asha logs in three times a day, that
-is about 300 guesses a day, around 108,000 a year, and a 28% chance. The simulation shows the counter
+is 3 × 99 = 297, about 300 guesses a day, and 297 × 365 ≈ 108,000 a year: the same sum as above
+gives a 28% chance. The simulation shows the counter
 filling and resetting, and the attacker's odds over a year.
 
 <GuessSim />

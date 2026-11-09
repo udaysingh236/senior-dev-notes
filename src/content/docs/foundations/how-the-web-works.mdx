@@ -63,9 +63,10 @@ the clock when you press Enter.
    connection may send only about 14 KB, then must wait for your browser to reply "got it" before
    sending more. The reason: the server does not yet know how much the network between you can
    carry, and sending too much at once makes busy machines on the way throw data away. Each "got it"
-   is proof that the path coped, so the server doubles the amount each time: about 14 KB, then
-   29 KB, then the last 57 KB. The first piece came with the first byte; the other two cost two more
-   round trips, 300 ms. The last byte arrives at 840 ms.
+   is proof that the path coped, so the server roughly doubles the amount each time: about 14 KB,
+   then 29 KB, then the last 57 KB (14 + 29 + 57 = 100 KB). The first piece came with the first
+   byte; each of the other two waits for one more round trip, so 2 × 150 = 300 ms more. The last
+   byte arrives at 540 + 300 = 840 ms.
 
 Here are the same five steps as a picture. Look at the bar at the bottom: it is the 840 ms drawn to
 scale, and the time spent actually moving the bytes is too thin to draw.
@@ -76,7 +77,9 @@ scale, and the time spent actually moving the bytes is too thin to draw.
 
 Add up where the 840 ms went. Five round trips that each waited for the one before: 5 × 150 =
 750 ms. Finding the address: 40 ms. The server's work: 50 ms. And pushing 100 KB through a
-1 Gbit/s line: 0.8 ms (the building blocks below show that arithmetic). So a page load is mostly
+1 Gbit/s line: 0.8 ms (the building blocks below show that arithmetic). Together: 750 + 40 + 50 +
+0.8 = 840.8 ms, about 840 ms, and moving the bytes is less than a thousandth of it. So a page load is
+mostly
 **round trips, one after another, each paying the distance**:
 
 **time ≈ (round trips that wait for each other) × (length of one round trip) + server work + size ÷ line speed**
@@ -92,8 +95,8 @@ server works for only 50 ms of that.
 
 So there are three ways to make a page faster, and the rest of this page is about them:
 
-- **Shorter round trips.** Answer from a machine near the user. At 20 ms instead of 150 ms, each of
-  the five round trips costs 20 ms.
+- **Shorter round trips.** Answer from a machine near the user. If a round trip takes 20 ms instead
+  of 150 ms, the five round trips cost 5 × 20 = 100 ms instead of 750 ms.
 - **Fewer round trips per file.** Newer versions of the protocols merge steps 2 and 3, and a
   connection that is already open skips steps 1 to 3 entirely.
 - **Fewer links in the chain.** Name the important files early, or put what they would fetch
@@ -101,8 +104,8 @@ So there are three ways to make a page faster, and the rest of this page is abou
 
 The second visit shows how much skipping steps saves. Your browser remembers the address, may still have the
 connection open, and keeps copies of files that do not change. A file it already has costs nothing.
-A request on a connection that is still open costs one round trip plus the server's work: 200 ms
-instead of 840.
+A request on a connection that is still open costs one round trip plus the server's work:
+150 + 50 = 200 ms instead of 840.
 
 An everyday picture: ordering from a shop by post, where each letter takes a week. Before ordering
 you look up the shop's address (DNS), write to ask whether they deliver to you and wait for the
@@ -190,7 +193,8 @@ everything arrives, in order, or the program is told that it failed.
 too busy, arrive after a later one, or arrive twice. Without TCP, every program would have to notice
 and repair all of that itself.
 
-**Example.** The 100 KB page leaves the server as 69 packets of about 1,460 bytes each. If packet 12
+**Example.** A packet carries at most about 1,460 bytes of data, so the 100 KB page (100,000 bytes)
+leaves the server as 69 packets: 100,000 ÷ 1,460 is 68.5, rounded up to whole packets. If packet 12
 is lost, your computer receives packets 13 to 69, notices the gap, and the server sends 12 again.
 The browser sees 100 KB in the right order and never learns there was a gap.
 
@@ -234,8 +238,9 @@ it only sets the "size ÷ line speed" part of a load, and for small files that p
 
 **Example.** A **bit** is a single 0 or 1, and a **byte** is 8 bits, enough for one letter of text.
 File sizes are counted in bytes (100 KB is 100,000 bytes) and line speeds in bits per second (1 Gbit/s
-is 1,000,000,000 bits a second). So 100 KB is 800,000 bits, and a 1 Gbit/s line pushes them out in
-800,000 ÷ 1,000,000,000 s = 0.8 ms. At 10 Gbit/s that becomes 0.08 ms: a saving of 0.72 ms out of 840.
+is 1,000,000,000 bits a second). So 100 KB is 100,000 × 8 = 800,000 bits, and a 1 Gbit/s line
+pushes them out in 800,000 ÷ 1,000,000,000 = 0.0008 seconds, which is 0.8 ms. A line ten times
+faster, 10 Gbit/s, takes a tenth of that, 0.08 ms: it saves 0.8 − 0.08 = 0.72 ms out of 840.
 
 **The precise version.** Picture a road. Bandwidth is the number of lanes; the round-trip time is the
 length of the road and back. More lanes let more cars drive at once, but every car still takes as long
@@ -321,8 +326,9 @@ and 50 ms of server work:
 | 75 ms | 545 ms | 473 ms | 466 ms | 0.8 ms |
 | 150 ms | 920 ms | 848 ms | 841 ms | 0.8 ms |
 
-Read across a row: a hundred times the bandwidth saves about 80 ms, because 100 KB takes 80 ms to push
-through a 10 Mbit/s line and under 1 ms through a 1 Gbit/s one. Read down a column: every 75 ms of
+Read across a row: a hundred times the bandwidth saves only about 80 ms. That is because 100 KB is
+800,000 bits, and a 10 Mbit/s line (10,000,000 bits a second) needs 800,000 ÷ 10,000,000 = 0.08
+seconds, 80 ms, to push them out, while a 1 Gbit/s line needs under 1 ms. Read down a column: every 75 ms of
 extra RTT costs 375 ms, because the load needs the five sequential round trips of Part 1 and each one
 pays the distance again (5 × 75 = 375). The bottom-right cell is Part 1's 840 ms. The fix is in the
 count of round trips and in their length, not in the line.
@@ -349,9 +355,12 @@ byte numbering starts.
 **A key exchange** is how TLS gets both sides the same secret key while sending only values that are
 useless to anyone listening. It exists because the key cannot be sent as it is: everyone in between
 would see it. A toy example with small numbers: both sides agree in public on the numbers 5 and 23.
-The browser picks a private number, 6, and sends 5<sup>6</sup> mod 23 = 8 ("mod 23" means "the
-remainder after dividing by 23"). The server picks 15 and sends 5<sup>15</sup> mod 23 = 19. The
-browser computes 19<sup>6</sup> mod 23 = 2, and the server 8<sup>15</sup> mod 23 = 2: the same secret,
+The browser picks a private number, 6, and sends 5<sup>6</sup> mod 23 ("mod 23" means "the remainder
+after dividing by 23"): 5<sup>6</sup> is 15,625, and 15,625 ÷ 23 is 679 with 8 left over, so it sends
+8. The server picks its own private number, 15, works out 5<sup>15</sup> mod 23 the same way, gets 19,
+and sends 19. Each side then combines what it received with its own private number: the browser works
+out 19<sup>6</sup> mod 23 and the server 8<sup>15</sup> mod 23, and both come to 2. (There is no need
+to check these by hand; any calculator gives the same remainders.) The two sides now share the secret
 2, which never crossed the network. Someone who saw only 5, 23, 8 and 19 would have to undo the
 powers, and with real numbers hundreds of digits long (or the curve-based maths modern TLS uses) that
 is out of reach. Each side's public value is its **key share**.
@@ -389,7 +398,8 @@ Here is what each option costs at 150 ms, with 50 ms of server work after the re
   <HandshakeCost />
 </Figure>
 
-The drop from 650 ms (four round trips plus 50 ms) to 200 ms (one plus 50 ms) is pure protocol: the
+The drop from 650 ms (four round trips plus the server's work: 4 × 150 + 50 = 650 ms) to 200 ms (one
+round trip plus the work: 150 + 50 = 200 ms) is pure protocol: the
 server and the code did not change. Three behaviours around these handshakes matter for timing:
 
 - **0-RTT is not free.** The first flight depends on nothing the server sends this time, so an
@@ -436,8 +446,9 @@ allowed would overflow the queue at the slowest link, and that router would drop
 the sender's running guess at how much the path can hold.
 
 **Example.** An ACK takes one round trip to come back, so a sender limited to 10 packets in flight
-puts out at most 10 packets per round trip. That is 10 × 1,460 = 14,600 bytes every 150 ms: about
-97 KB a second, or 0.8 Mbit/s, on a 1 Gbit/s line.
+puts out at most 10 packets per round trip. That is 10 × 1,460 = 14,600 bytes every 150 ms. A second
+holds 1,000 ÷ 150 ≈ 6.7 round trips, so that is about 14,600 × 6.7 ≈ 97,000 bytes a second, or
+97,000 × 8 ≈ 780,000 bits a second: under 1 Mbit/s, on a line that could carry 1,000 Mbit/s.
 
 **The technical version.** A new connection has measured nothing yet, so it starts small: an **initial
 congestion window** of 10 packets ([RFC 6928](https://www.rfc-editor.org/rfc/rfc6928)). Every packet
@@ -459,11 +470,17 @@ size, not on the line:
 | 100 KB | 69 | 3 (10 + 20 + 39) |
 | 1 MB | 685 | 7 |
 
+Read the 100 KB row: the first two rounds carry 10 + 20 = 30 packets, not enough for 69, so a third
+round carries the last 39. For 1 MB the rounds carry 10, 20, 40, 80, 160 and 320 packets, which adds
+up to 630 after six rounds, still short of 685, so it needs a seventh.
+
 How large must the window grow before the line itself becomes the limit? Think of the path as a pipe:
 new packets go in while earlier ones are still inside, and the first ACK comes back only after a full
 round trip. To keep the line busy that whole time, the sender must have one round trip's worth of the
 line's capacity in flight. That amount, bandwidth × RTT, is the **bandwidth-delay product** (BDP). For
-10 Mbit/s and 150 ms it is 10,000,000 × 0.15 = 1,500,000 bits, or 188 KB:
+10 Mbit/s and 150 ms it is 10,000,000 bits a second × 0.15 seconds = 1,500,000 bits. Divided by 8
+that is 187,500 bytes, about 188 KB, or 187,500 ÷ 1,460 ≈ 128 packets. The other rows are worked out
+the same way:
 
 | Line | RTT | Bandwidth × RTT | Packets of 1,460 bytes |
 |---|---|---|---|
@@ -474,7 +491,9 @@ line's capacity in flight. That amount, bandwidth × RTT, is the **bandwidth-del
 
 Until the window reaches the BDP, part of the line sits idle and more bandwidth changes nothing.
 Starting from 10 packets, the 100 Mbit/s line at 150 ms needs about seven doublings to get there
-(10 × 2<sup>7</sup> = 1,280) and the 1 Gbit/s line eleven, so the first second or more of every new
+(10 doubled seven times is 1,280 packets, about the 1,284 it needs) and the 1 Gbit/s line eleven
+(10 doubled eleven times is 20,480, past its 12,842). At one doubling per 150 ms round trip, that
+is about a second for the first and nearly two seconds for the second, so the first second or more of every new
 connection runs far below the speed you paid for. This is the reason behind the advice to fit what
 the first screen needs into the first 14 KB of HTML: that is all that arrives with the first byte.
 
@@ -498,17 +517,19 @@ TCP reads a loss as a sign that some router's queue overflowed, so it resends th
 window and from then on grows it with care. The rule for how far to shrink and how fast to grow is the
 **congestion control algorithm**. Linux's default, CUBIC, cuts the window to 70%
 ([RFC 9438](https://www.rfc-editor.org/rfc/rfc9438)); the older Reno halves it. A window of 20 that
-loses a packet drops to 14 under CUBIC and 10 under Reno, then climbs back slowly instead of doubling.
+loses a packet drops to 14 under CUBIC (70% of 20) and 10 under Reno (half of 20), then climbs back
+slowly instead of doubling.
 
 In the sim, set the loss to 2%: one lost packet in the second round cuts the window to 70%, and from
-then on the sim grows it by one packet per round trip. The same 100 KB now takes six rounds, 900 ms.
+then on the sim grows it by one packet per round trip. The same 100 KB now takes six rounds instead of three: 6 × 150 = 900 ms instead of 450 ms.
 In the same sim, on a link that loses 1% of packets, 1 MB takes over six seconds at 150 ms. Loss is the reason a page
 that is fine on office Wi-Fi crawls on a train.
 
 **TLS records can cost a round trip of their own.** TLS encrypts data in **records** of up to 16 KB.
 Each record ends with an **authentication tag**, a short code that proves no byte inside was changed.
 Until the tag arrives the browser cannot check the record, so it cannot use any byte of it. A 16 KB
-record is 12 packets; the first window carries 10, so the record completes only in the second round
+record is 16,384 bytes, which needs 12 packets (16,384 ÷ 1,460 ≈ 11.2, rounded up); the first window
+carries 10, so the record completes only in the second round
 trip, along with every byte inside it, including the `<head>` the browser wanted first. nginx writes
 16 KB records by default, and its documentation suggests a smaller `ssl_buffer_size`, such as `4k`,
 to get the first byte to the browser sooner
@@ -627,7 +648,7 @@ Two things show up that the protocol diagrams do not tell you. First, HTTP/3 rem
 with these defaults it finishes at the same 2.1 s as HTTP/2: both run every file through one
 congestion window, and every loss cuts that one window. Head-of-line blocking delays individual files;
 the shared window slows all of them. Second, HTTP/1.1 finishes first, at 600 ms, because six
-connections means six windows: 60 packets in the first round instead of 10, and a loss cuts only one
+connections means six windows: 6 × 10 = 60 packets in the first round instead of 10, and a loss cuts only one
 sixth of the sending. Daniel Stenberg, the author of the curl tool, makes the same observation, that at around 2% loss HTTP/1.1 users
 tend to do better than HTTP/2 users ([HTTP/3 explained](https://http3-explained.haxx.se/)). The sim's
 model is simplified (no selective acknowledgements, which tell the sender exactly which packets are
@@ -676,7 +697,8 @@ Now try the levers one at a time and compare with the defaults:
 | Repeat visit | 650 ms | 1.08 s | DNS and static files come from caches; HTML and the API call still pay |
 
 The table sets the priorities. Preconnect does not move first render at all here, because the API
-host is not on the chain to it, but it takes 340 ms off the moment the data appears. The CDN beats
+host is not on the chain to it, but it takes 340 ms off the moment the data appears (the API call finishes at 1.42 s instead of
+1.76 s). The CDN beats
 every protocol change, because it shortens every round trip at once. And the repeat visit is still
 over a second, because the two per-user responses (the HTML and the API call) are exactly the ones no
 cache can serve.
@@ -753,6 +775,11 @@ large:
   <SplitConnection />
 </Figure>
 
+Add up the two rows. Direct: 40 ms of lookup, then TCP, TLS and the request at 150 ms each, 50 ms of
+server work, and a second slow-start round of 150 ms: 40 + 150 + 150 + 150 + 50 + 150 = 690 ms.
+Through the edge: the same 40 ms lookup, TCP and TLS at 20 ms each, the request to the edge and back
+(20 ms), the edge's request to the origin and back over its open connection (150 ms) plus the 50 ms
+of server work, and the second slow-start round at 20 ms: 40 + 20 + 20 + 20 + 150 + 50 + 20 = 320 ms.
 From 690 ms to 320 ms for a response the CDN never stores. This is called **split TCP**, or TCP
 termination at the edge, and it is the part of a CDN's value that does not depend on how often its
 cache has a copy. The cost: one more hop that can fail, and a provider in the middle of your TLS.
@@ -992,10 +1019,12 @@ Second request, same connection:      16.7 ms   (HTTP/1.1 200 OK)
 Read it against the rest of the page. The TCP connect took 14 ms: that is the round trip to
 Cloudflare's edge in Mumbai (`cf-ray` ends in `BOM`, Mumbai's airport code), not to wherever
 `example.com`'s origin lives; the same step to `badssl.com`, hosted in the US, took about 230 ms.
-`age: 2031` says the edge served a copy cached 34 minutes earlier. `alt-svc: h3` is the server
+`age: 2031` says the edge served a copy cached 2,031 seconds earlier, which is 2,031 ÷ 60 ≈ 34
+minutes. `alt-svc: h3` is the server
 offering HTTP/3 for next time. The first byte took 74 ms although the edge had the page cached, a
 sign that its TTFB includes more than one round trip of edge work. And the second request, with no
-set-up and a warm connection, took 17 ms: 89% of the first request was set-up.
+set-up and a warm connection, took 17 ms. So set-up was 151.5 − 16.7 ≈ 135 ms of the first
+request's 151.5 ms: 135 ÷ 151.5 ≈ 89% of it.
 
 ### Step 3: a timeout on every step
 
@@ -1098,8 +1127,9 @@ curl --silent --output /dev/null --write-out '
   HTTP version:  2, status 200, from 172.66.147.243
 ```
 
-Each number is cumulative, so a step's cost is the gap from the line above: here 16 ms of TCP and
-115 ms of TLS, which is more than one 16 ms round trip. A TLS step far longer than the TCP step
+Each number is the time since the start, so a step's cost is the gap from the line above. TCP:
+0.0379 − 0.0216 = 0.016 s, 16 ms. TLS: 0.1531 − 0.0379 = 0.115 s, 115 ms, which is far more than one
+16 ms round trip. A TLS step far longer than the TCP step
 usually means the server is slow to compute its part of the handshake (a busy CPU), or that the
 **certificate chain** (the server's certificate plus those of the authorities that signed it) is too
 large for one window and needs a second round trip.
@@ -1129,7 +1159,7 @@ When nothing answers a SYN, TCP sends it again, doubling the wait each time, and
 the retry count runs out. On Linux, `tcp_syn_retries` defaults to 6 with a 1 s initial timeout:
 1 + 2 + 4 + 8 + 16 + 32 s to the last retry, plus 64 s waiting for its answer, about 127 s
 ([tcp(7)](https://man7.org/linux/man-pages/man7/tcp.7.html)). Windows waits 3 s, 6 s, then 12 s:
-21 s. Measured against `10.255.255.1` with no timeout of our own: 21.1 s on Windows 11, 135 s on
+3 + 6 + 12 = 21 s. Measured against `10.255.255.1` with no timeout of our own: 21.1 s on Windows 11, 135 s on
 Linux running inside Windows (WSL), and 10.8 s with Node's built-in `fetch`, whose client has a 10 s
 connect limit of its own. A service whose threads (the workers that each handle one request) all sit in that wait has stopped
 serving, with
@@ -1204,7 +1234,8 @@ HTTP is what everyone does; what separates answers is where the time and the fai
 <details>
 <summary>1. A user is 100 ms from your server. DNS is cached and the server needs 30 ms. How long until the last byte of a 40 KB HTML response on a new TCP + TLS 1.3 connection? With HTTP/3?</summary>
 
-40 KB is 28 packets: 10 in the first round, 18 in the second, so two rounds of data. TCP 100 + TLS
+40 KB is 40,000 bytes, and 40,000 ÷ 1,460 ≈ 27.4, so 28 packets: 10 in the first round, the other
+18 in the second, so two rounds of data. TCP 100 + TLS
 100 + request 100 + server 30 + one more data round 100 = 430 ms. HTTP/3 removes one set-up round
 trip: 330 ms. Bandwidth barely appears in either number.
 

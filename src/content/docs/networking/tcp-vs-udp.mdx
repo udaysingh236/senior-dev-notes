@@ -47,7 +47,7 @@ decide how the bytes of an HTTP request, a database query or a voice call get fr
 the other.
 
 Follow one voice call. Your phone cuts your voice into small pieces, one piece for every 20 ms of
-sound, so 50 pieces a second. Each piece takes 50 ms to cross the network to your friend's phone.
+sound. A second is 1,000 ms, so that is 1,000 ÷ 20 = 50 pieces a second. Each piece takes 50 ms to cross the network to your friend's phone.
 The mobile network is poor today and loses about 1 piece in 25, which is 4%. (These numbers are
 illustrative, but a bad mobile link behaves like this.)
 
@@ -75,13 +75,14 @@ illustrative, but a bad mobile link behaves like this.)
 9. Your phone receives the third copy of that note at 160 ms (it was sent at 110 ms and needs 50 ms
    to come back). It waits for three copies, not one, because a single repeat could mean that two
    pieces only swapped places on the way. Now it resends piece 7.
-10. The new copy of piece 7 arrives at 210 ms. Your friend's phone hands pieces 7 to 14, everything
-    that arrived while it waited, to the call app at once.
+10. The new copy of piece 7 arrives at 210 ms (sent at 160 ms, plus 50 ms on the way). Pieces 11 to
+    14 have also arrived by then, so your friend's phone hands pieces 7 to 14, everything that
+    arrived while it waited, to the call app at once.
 11. Count the delays. Piece 7 left at 0 ms and was played at 210 ms. Piece 8 left at 20 ms and waited
     190 ms; piece 9, 170 ms; piece 10, 150 ms. A conversation starts to feel awkward when the sound
     is more than about 150 ms behind ([ITU-T G.114](https://www.itu.int/rec/T-REC-G.114)). One lost
     piece made three pieces too late and pushed four more close to the limit. Your friend hears the
-    call freeze for a fifth of a second, then rush.
+    call freeze for 210 ms, about a fifth of a second, then rush.
 
 Here are both outcomes side by side, with five pieces and the third one lost:
 
@@ -134,7 +135,8 @@ carries on its own, with the destination's address written on the front.
 conversations use the same cables at once, a few packets each, and lets each packet take whatever
 route is free.
 
-**Example.** A 100 KB web page leaves the server as about 70 packets. One of them passes through a
+**Example.** A 100 KB web page leaves the server as about 70 packets (each carries about 1,460
+bytes of the page, and 100,000 ÷ 1,460 ≈ 69). One of them passes through a
 busy **router**, a box that passes packets from one cable to the next, whose waiting line is full,
 so the router drops it. The other 69 arrive.
 
@@ -404,8 +406,8 @@ sender:   5000 datagrams sent in 1667 ms, 0 send errors
 receiver: 5000 received, 0 lost (0%), 0 gaps, 0 out of order
 ```
 
-98% vanished, with no error on either side. The receiver handles one datagram every 0.2 ms, at most
-5,000 a second, while the sender produced all 5,000 in 14 ms. The receiving socket's buffer filled
+98% vanished, with no error on either side. The receiver handles one datagram every 0.2 ms, so at
+most 1,000 ÷ 0.2 = 5,000 a second, while the sender produced all 5,000 in 14 ms. The receiving socket's buffer filled
 within milliseconds, and the kernel dropped everything that did not fit. TCP's flow control would
 have slowed the sender down instead. Paced to 3,000 a second, below what the receiver can handle,
 nothing was lost. UDP did not remove that overhead; it handed you the job.
@@ -421,7 +423,7 @@ there is no link between how the application writes and how segments are cut
 On the sending side, the kernel may merge small writes into one segment and must split a large
 write into pieces. The largest piece is the **MSS** (maximum segment size), the 1,460 bytes of data
 that fit in a 1,500-byte packet after 40 bytes of headers. The 220 KB leaderboard therefore leaves
-as about 150 segments.
+as about 150 segments (220,000 ÷ 1,460 ≈ 151).
 
 On the receiving side, the kernel appends every arriving byte to the one receive buffer, and a read
 returns whatever is there at that moment. Nothing in the buffer records where one write ended.
@@ -502,7 +504,9 @@ The first sample sets SRTT to itself and RTTVAR to half of it. Three steady samp
 | 100 ms | 100 | 28.1 | 213 ms |
 | 180 ms | 110 | 41.1 | 274 ms |
 
-Read the last row like this. The 180 ms sample is 80 ms away from SRTT, so RTTVAR moves a quarter
+In rows 2 and 3 each sample equals SRTT, so it is 0 ms away, and RTTVAR moves a quarter of the way
+towards 0: 50 − 50 ÷ 4 = 37.5, then 37.5 − 37.5 ÷ 4 ≈ 28.1. Each timer is SRTT + 4 × RTTVAR, for
+example 100 + 4 × 37.5 = 250 ms. Read the last row like this. The 180 ms sample is 80 ms away from SRTT, so RTTVAR moves a quarter
 of the way from 28.1 towards 80: 28.1 + (80 − 28.1) ÷ 4 = 41.1. SRTT moves an eighth of the way from
 100 towards 180: 110. The timer becomes 110 + 4 × 41.1 = 274 ms. A steady path pulls the timer down
 towards the RTT; jitter pushes it up, so a merely slow ACK is not mistaken for a loss.
@@ -597,7 +601,7 @@ is why the UDP demo above lost 98% while a TCP version would have lost nothing.
 The window has a second effect: it caps **throughput**, the bytes delivered per second, at **one
 window per round trip**, however fast the link. The sender sends a full window, then waits a round
 trip for the ACKs that let it send more. With a 4,000-byte window and a 100 ms round trip, that is
-4,000 bytes every 0.1 s, 40 KB/s, even on a 1 Gbit/s link.
+4,000 bytes every 0.1 s, and 4,000 ÷ 0.1 = 40,000 bytes, 40 KB, a second, even on a 1 Gbit/s link.
 
 Turn it around to ask how big the window must be. To keep a 100 Mbit/s link busy over a 100 ms
 round trip, you need 100,000,000 ÷ 8 × 0.1 = **1.25 MB** in flight at all times. That product of
@@ -640,10 +644,14 @@ segment, so 10 segments acknowledged make a window of 20: the window doubles eve
 | cwnd (segments) | 10 | 20 | 40 | 80 |
 | Sent so far | 14.6 KB | 43.8 KB | 102 KB | 219 KB |
 
-After *k* round trips it has sent 10 × (2^*k* − 1) segments, so a response of *S* bytes on a new
-connection needs about log₂(*S* ÷ 14.6 KB + 1) round trips (log₂ *x* is the number of times you
-double 1 to reach *x*), rounded up: 3 for 100 KB, 7 for 1 MB, 10 for 10 MB, **whatever the
-bandwidth**.
+The last row adds up the windows: 10 segments, then 10 + 20 = 30, then 30 + 40 = 70, then
+70 + 80 = 150, each times 1.46 KB (so 150 × 1.46 ≈ 219 KB).
+
+So a 100 KB response is done in round trip 3, because after two round trips only 43.8 KB has gone
+and after three 102 KB has. Carry the table on and 1 MB needs 7 round trips and 10 MB needs 10,
+**whatever the bandwidth**: the number of round trips depends only on how many times the window must
+double. (As a formula: after *k* round trips the sender has sent 10 × (2<sup>*k*</sup> − 1)
+segments.)
 
 Here is the bill for one ordinary request: a 100 KB HTTPS response on a new connection, 100 ms
 away, on a 50 Mbit/s link. HTTPS adds **TLS**, the layer that encrypts the connection, and TLS 1.3
@@ -669,7 +677,8 @@ it is TCP being careful. The rest of the algorithm:
   (`tcp_slow_start_after_idle`, on by default, from [RFC 2861](https://www.rfc-editor.org/rfc/rfc2861)).
 
 **How it climbs back.** Reno adds one segment per round trip: after a cut from 100 segments to 50
-on a 100 ms path, it needs 50 round trips, 5 s, to get back. CUBIC grows by elapsed time instead,
+on a 100 ms path, it must add 100 − 50 = 50 segments, one per round trip, so 50 round trips of
+0.1 s: 5 s to get back. CUBIC grows by elapsed time instead,
 along a cubic curve centred on *W*max, the window at which the last loss happened. With RFC 9438's
 constants and *W*max = 100 segments:
 
@@ -687,14 +696,16 @@ the slowest link on the path, can queue one more pipe's worth, and anything beyo
 <CwndSim />
 
 The defaults are a 1 MB response, 100 ms away, on 50 Mbit/s. The first response climbs 10, 20, 40,
-80, 160, 320 and finishes in the seventh round trip, **713 ms**. The link alone needs 260 ms (one
-round trip plus 164 ms of bytes), which is what the second response takes: the connection is now
+80, 160, 320 and finishes in the seventh round trip, **713 ms**. The link alone needs 260 ms: one
+100 ms round trip plus 164 ms to push the bytes (1 MB is about 8.2 million bits, and
+8,200,000 ÷ 50,000,000 ≈ 0.164 s), which is what the second response takes: the connection is now
 **warm**, meaning its window has already grown, so it sends at full speed from the start. Slide
 the bandwidth to 1,000 Mbit/s and the first response takes 701 ms: twenty times the bandwidth
-bought 12 ms. On a new connection, round-trip time is the only number that matters.
+bought 713 − 701 = 12 ms. On a new connection, round-trip time is the only number that matters.
 
 Then slide the idle gap to 1,000 ms, longer than the 300 ms RTO. The window halves once per RTO of
-idle time, so three times during the gap (1,000 ÷ 300 ≈ 3), falls from 640 segments to 80, and every warm response takes 429 ms instead of 260.
+idle time, so three times during the gap (1,000 ÷ 300 ≈ 3), falls from 640 segments to 640 ÷ 2 ÷ 2 ÷ 2 =
+80, and every warm response takes 429 ms instead of 260.
 This is the trap of "we reuse connections, so slow start is not our problem": a connection that
 idles for a second between bursts pays part of slow start again on every burst. Servers that hold
 long-lived connections (HTTP/2, gRPC, database proxies) often turn `tcp_slow_start_after_idle` off
@@ -706,16 +717,20 @@ round trip. The sim settles at about **1.6 Mbit/s on a 50 Mbit/s link**.
 
 The classic model of this is the Mathis formula
 ([Mathis et al., 1997](https://courses.cs.duke.edu/fall24/compsci514/readings/mathis-tcpmodel-ccr97.pdf)),
-and it follows from the shape of Reno's window over time, a **sawtooth**. The window climbs by one
-segment per round trip to a peak *W*, one loss halves it to *W*/2, and it climbs again. One cycle
-lasts *W*/2 round trips at an average of 3*W*/4 segments each, so it sends about
-*W*/2 × 3*W*/4 = (3/8)*W*² segments with one loss. The loss rate *p* is therefore
-1 ÷ ((3/8)*W*²).
+and it follows from the shape of Reno's window over time, a **sawtooth**: the window climbs by one
+segment per round trip, a loss halves it, and it climbs again.
 
-At *p* = 1%, (3/8)*W*² = 100 gives *W* ≈ 16: the window swings between 8 and 16 segments and averages
-about 12 per 100 ms round trip, 12 × 1,460 × 8 ÷ 0.1 ≈ **1.4 Mbit/s**, whatever the link. Solved in
-general, the long-run rate is about (MSS ÷ RTT) × 1.22 ÷ √*p*, where √*p* is the square root of the
-loss rate. Halve the round trip and the rate doubles; cut the loss to 0.1% and it rises about three
+Work it through with numbers. Suppose the window climbs from 8 to 16 segments, loses one packet, drops
+back to 8, and repeats. One climb takes 8 round trips (from 8 up to 16, one segment at a time), and
+the window averages about 12 segments over it, so each cycle sends about 8 × 12 = 96 segments, roughly
+100, with one loss. One loss per 100 segments is a 1% loss rate. So at 1% loss the window settles into
+exactly this 8-to-16 sawtooth, averaging 12 segments per 100 ms round trip. That is 12 × 1,460 =
+17,520 bytes every 0.1 s, or 175,200 bytes a second, which is 175,200 × 8 ≈ **1.4 Mbit/s**, whatever
+the link.
+
+The same reasoning in general gives a long-run rate of about (MSS ÷ RTT) × 1.22 ÷ √*p*, where *p* is
+the loss rate and √*p* its square root. Check it on our numbers: (1,460 bytes ÷ 0.1 s) × 1.22 ÷ √0.01
+= 14,600 × 1.22 ÷ 0.1 ≈ 178,000 bytes a second, the same 1.4 Mbit/s. Halve the round trip and the rate doubles; cut the loss to 0.1% and it rises about three
 times (√10 ≈ 3.2). This is why a long-distance transfer over a slightly lossy link is slow even on
 a huge pipe.
 
@@ -767,7 +782,7 @@ nagle on, one write      median   0.06 ms   worst   0.10 ms
 
 The first line is the stall: about 44 ms, the delayed-ACK timer firing a little after its 40 ms
 minimum. That is
-seven hundred times slower than the other two lines, from one extra write. The better fix is the
+44.01 ÷ 0.06 ≈ 730 times slower than the other two lines, from one extra write. The better fix is the
 last line: build the whole message in memory and write it once, as the framing code below does. The
 socket option `TCP_NODELAY` turns Nagle off for one socket. Most HTTP and database libraries set it;
 Node's `http.createServer` does by default since version 18, but a plain `net.Socket` does not ([Node docs](https://nodejs.org/api/http.html)).
@@ -1187,8 +1202,9 @@ link: 10% loss each way, 20-30 ms delay each way
 ```
 
 Plain UDP lost 9 messages and delivered half out of order. Stop-and-wait paid one round trip per
-message. A round trip on this link is about 50 ms (20 to 30 ms each way), so 100 messages need at
-least 5 s, and the 18 timeouts add the rest: almost 7 seconds. That is the flow-control rule, one
+message. A round trip on this link is about 50 ms (20 to 30 ms each way, so about 25 + 25 ms), so 100
+messages need at least 100 × 50 ms = 5,000 ms, which is 5 s, and the 18 timeouts add the rest: almost
+7 seconds. That is the flow-control rule, one
 window per round trip, with a window of one. The sliding window was seven times faster. The last line is head-of-line blocking
 again, now in our own code: 76 of 100 messages arrived and waited for an earlier one. This is
 roughly TCP without congestion control or decades of tuning, which makes it a good way to
@@ -1286,9 +1302,11 @@ guarantee and what it costs when packets are lost.
 <details>
 <summary>1. A 300 KB response, a new HTTPS connection with TLS 1.3, 100 ms round trip, a 1 Gbit/s link, no loss. Roughly how long until the last byte arrives?</summary>
 
-300 KB is about 206 segments. Slow start sends 10, 20, 40, 80 (150 so far) and the remaining 56 in
-the fifth round trip, so five round trips of data. Add one for TCP and one for TLS: about seven
-round trips, 700 ms. The 1 Gbit/s link needs about 2.4 ms for the bytes; it barely matters.
+300 KB is 300,000 bytes, and 300,000 ÷ 1,460 ≈ 206 segments. Slow start sends 10, 20, 40 and 80
+(10 + 20 + 40 + 80 = 150 so far) and the remaining 206 − 150 = 56 in the fifth round trip, so five
+round trips of data. Add one for TCP and one for TLS: about seven round trips, 7 × 100 = 700 ms. The
+1 Gbit/s link needs 300,000 × 8 ÷ 1,000,000,000 = 0.0024 s, about 2.4 ms, for the bytes; it barely
+matters.
 
 </details>
 
@@ -1305,7 +1323,8 @@ deadline from one loss; UDP would have lost one and delivered the rest on time.
 <details>
 <summary>3. A gRPC service holds one HTTP/2 connection to a backend 80 ms away. Requests come in bursts every 2 seconds and each burst is slow, though the connection is never closed. Why, and what would you change?</summary>
 
-Between bursts the connection is idle for longer than the RTO (about 280 ms here), so Linux's
+Between bursts the connection is idle for longer than the RTO (about 80 ms of round trip plus
+Linux's 200 ms minimum, so about 280 ms), so Linux's
 `tcp_slow_start_after_idle` shrinks the congestion window back towards 10 segments, and each burst
 pays part of slow start again. Turn `tcp_slow_start_after_idle` off on that host, or keep a little
 traffic flowing; also check that the receive window is not the limit.
@@ -1339,8 +1358,8 @@ below 350 s, and retry idempotent queries once on a reset.
   and confirm important work at the application level.
 - **Every guarantee is a wait**: handshake round trips, slow start round trips, a stall behind
   every loss, RTO timers from 200 ms (1 s for a SYN), 40 ms Nagle stalls, 60 s of TIME-WAIT.
-- **On a new connection, round-trip time decides speed**, not bandwidth: about log₂(size ÷ 14.6 KB)
-  round trips of slow start. Under loss, rate ≈ (MSS ÷ RTT) × 1.22 ÷ √p.
+- **On a new connection, round-trip time decides speed**, not bandwidth: slow start needs one round
+  trip per doubling of the window, about 3 for 100 KB and 7 for 1 MB. Under loss, rate ≈ (MSS ÷ RTT) × 1.22 ÷ √p.
 - **Reuse connections**, keep them warm, and expire them before the shortest idle timeout on the
   path; a new connection per request runs out of ports at about 470 a second per destination.
 - **QUIC** moves TCP's machinery onto UDP with independent streams, a one-round-trip encrypted
