@@ -54,6 +54,10 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
    Part 1 before Part 2, the four steps for every new concept, technical core over narrative, no
    fact-check sections, no repetition, sims that show mechanisms, and a fresher read before
    publishing.
+3a. Never make the reader do maths: every number the page works out shows its working in words, step
+   by step, with units. Before anything is published to `develop` or `main`, the publishing session
+   reads the whole page itself, top to bottom, as a normal reader, and fixes what a reader would
+   stumble on. A helper agent's report never replaces that read.
 4. Diagrams and simulations: `.claude/skills/add-topic/visuals.md`.
 5. Research widely, then write in our own words. Never copy text, diagrams or code from sources.
    Credit every source in the page's Further reading. No information older than 2020: every

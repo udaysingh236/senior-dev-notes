@@ -58,6 +58,13 @@ and the old point has been rewritten here. Every new or rewritten page must meet
    only what "Who we write for" lists. Mark every sentence where that reader would stop and
    ask "what does that mean?" or "why?", and fix every one (see "The fresher read").
 
+13. **Never make the reader do maths** (November 2026, after the "where the other 839 go" tagline).
+   The page does every calculation for the reader, in words, step by step (see "Numbers without
+   maths for the reader").
+14. **The author reads the whole page as a normal reader before publishing**, top to bottom, every
+   word, on the built page, and fixes what a reader would trip on. Agent reports, checklists and
+   a passing build are not a substitute (see "The publishing read").
+
 No published page meets the November standard yet. Every page published before November 2026 will
 be rewritten with `/add-topic --update`, one page per session, starting with Google Authenticator
 (the pilot) and then latency vs throughput. The first page Uday approves under these rules becomes
@@ -185,6 +192,27 @@ Further rules:
 - When a section uses a number (80% utilisation, 3 valid codes, 90 seconds), show where the number
   comes from before using it.
 
+## Numbers without maths for the reader
+
+A reader should never have to stop and calculate to follow a sentence.
+
+- **State the result in plain words first, then show how it was worked out.** "The line could carry
+  the whole page in under a thousandth of a second. Here is why: 1 Gbit/s is 125 MB every second, so
+  100 KB takes 100 ÷ 125,000 of a second, which is 0.0008 s, or 0.8 ms."
+- **Never leave a conversion to the reader.** Bits to bytes, Gbit/s to MB/s, milliseconds to
+  seconds, percentages to fractions: write each step out the first time it appears on the page.
+- **Every number the page derives shows its working,** one operation per step, with units on every
+  number. "5 × 150 = 750 ms", not "five round trips, so 750 ms".
+- **No hidden numbers.** A sentence must not depend on a number the reader would have to remember
+  from elsewhere or work out ("the other 839", "a fifth of a request").
+- **Formulas come after a worked example, never before.** Name every symbol in words next to the
+  formula ("S, the time one request needs"). After the formula, plug in the running example's
+  numbers and show the result.
+- **Prefer comparisons a reader can feel** ("a thousand times smaller", "almost a full second") to
+  raw figures when the point is the size, and give the exact figure after.
+- **Tables of numbers get one sentence saying what to notice.** The reader should not have to compare
+  rows to find the point.
+
 ## Say each thing once, without padding
 
 - Say each thing once, in the section that owns it. Later sections build on it or link back.
@@ -296,6 +324,21 @@ minute. Length follows what a fresher needs to understand the topic, not a targe
   gotchas, interview material that repeats the page, code that the `examples/` folder already
   holds. Never cut: Part 1, the four steps for a concept, worked examples with numbers, the core
   mechanisms, the failure cases.
+
+## The publishing read
+
+The last step before a page goes to `develop` or `main`, done by the author who publishes it (the
+main session, not a helper agent that wrote the page):
+
+1. Build the site and open the built page, or read the `.mdx` from the first line of frontmatter to
+   the last line of Further reading. Read the title, the tagline and the description first, as a
+   person landing from a search result would.
+2. Read every word in order, as a normal reader with the background in "Who we write for". Do not
+   skim sections because they looked fine before.
+3. Stop at every sentence where that reader would have to calculate, convert, guess a term, look
+   back for a number, or decode a figure. Fix it, then continue.
+4. Only then publish. If the page was written by a helper agent, its report is a summary of what it
+   did, never evidence that the page reads well.
 
 ## The fresher read
 

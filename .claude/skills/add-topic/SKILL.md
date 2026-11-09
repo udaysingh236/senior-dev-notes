@@ -160,6 +160,7 @@ Fix anything that fails. Don't publish with known failures.
 - [ ] All sections of the chosen template present, in order, with no leftover template comments
 - [ ] Part 1 explains the whole idea in plain words with one running example, before any architecture, byte layout or production detail, and ends with "If you stop here"
 - [ ] Opens with a question a fresher understands, answered in plain words on the first screen; Part 2 opens with the sharp question; no narrative; nothing is said twice
+- [ ] No maths left to the reader: every derived number shows its working in words, every conversion is written out, formulas come after a worked example (style guide, "Numbers without maths for the reader")
 - [ ] Tagline and description are one plain sentence a fresher understands: no riddles, no hidden numbers, no arithmetic (style guide, "The title line, tagline and description"); a human-style read of the first screen done before publishing
 - [ ] Every new concept gets the four steps before it is used: plain sentence, why, worked example with numbers, technical version (style guide, "Introducing a new concept")
 - [ ] One new idea per paragraph; no sentence uses two unexplained terms; every number shows where it comes from
@@ -177,6 +178,9 @@ Fix anything that fails. Don't publish with known failures.
 
 ## Phase 9 — Publish
 
+0. **The publishing read** (style guide, "The publishing read"): read the whole built page yourself,
+   top to bottom, as a normal reader, and fix every place they would stop. This is done by the
+   session that publishes, even if helper agents wrote the page. Do not publish on an agent's report.
 1. `git checkout develop && git pull --rebase origin develop`
 2. Stage only the files for this topic: the page, its components, `examples/<slug>/`,
    `research/<slug>.md`, `CURRICULUM.md`, and any pages or shared components touched in Phase 5
