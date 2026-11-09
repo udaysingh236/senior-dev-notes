@@ -197,7 +197,8 @@ in several ways whose costs differ by a factor of thousands, and which way is ch
 data.
 
 **Example.** Our 5,000,000 orders belong to 500,000 customers, about 5,000,000 ÷ 500,000 = 10 orders
-each. So for `customer_id = 31337` the planner estimates about 10 matching rows and picks the index:
+each. So for `customer_id = 31337` the planner estimates about 10 matching rows (our illustration of its
+arithmetic; Part 2 shows what it really chose) and picks the index:
 roughly 3 index pages plus 10 table pages, 13 random reads × 4 = 52 units of cost, against 86,168 for
 the full scan. For the orders of a third of all customers, it estimates 5,000,000 ÷ 3 ≈ 1,670,000 rows,
 spread over every page, and picks the full scan.
@@ -223,8 +224,8 @@ reports how long it took and how many pages it touched (PostgreSQL calls a page 
 ## Going deeper
 
 Part 1 used one table, one index and one query. Real systems raise harder questions. Why does asking
-for 1% of the orders by customer read 38,063 pages, 44% of the table, while asking for 1% of the
-orders by date reads 1,016, thirty-seven times fewer, on the same table with the same kind of index?
+for 1% of the orders by customer read 38,063 pages, 44% of the table (38,063 ÷ 86,168 ≈ 0.44), while asking for
+1% of the orders by date reads 1,016, thirty-seven times fewer (38,063 ÷ 1,016 ≈ 37), on the same table with the same kind of index?
 Why does an index on `(country, created_at)` answer one query in 96 pages and a nearly identical one
 in 19,161? And why can a query that ran in 8 ms in the morning take 130 ms by the afternoon, with no
 change to the code, the index or the data size?
@@ -513,7 +514,8 @@ for its leading columns, then on one range condition for the next column. Column
 only filter: the database reads those entries and discards the ones that do not match. So the order
 is **equality columns first, then the one range or sort column.**
 
-We measured `country = 'IN' AND created_at in June 2025` (`IN` is India). June has 432,000 orders, and 24,023 of
+We measured `country = 'IN' AND created_at in June 2025` (`IN` is India). June has 432,000 orders (one every 6
+seconds: 30 days × 86,400 seconds a day ÷ 6 = 432,000), and 24,023 of
 them are from India. We counted only index pages (the query was answered from the index alone, as
 the section on covering indexes explains), so the table does not blur the picture:
 
