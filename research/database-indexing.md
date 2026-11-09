@@ -162,3 +162,42 @@ change that cost.
 - Adyen: PostgreSQL HOT updates, parts 1 and 2 (2022).
 - Cybertec: B-tree index deduplication (2020).
 - pganalyze: tuning random_page_cost (2022); Bitmap Heap Scan docs (living).
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+The page was rewritten into Part 1 "Understand it" and Part 2 "How it really works" (27 → 43 min
+read). Part 1 follows one query (`customer_id = 31337` on the 5M-row `orders` table) in eight
+numbered steps, with a new mental-model diagram (`MentalModel.astro`: no index / through the index /
+5% of customers), and six building blocks in four steps each: a page (with bytes, bits, KB and the
+cache), a full table scan, an index with binary search, selectivity, sequential vs random reads, and
+the query planner (with `EXPLAIN` and buffers).
+
+What the fresher read found and fixed:
+
+- Terms used before they were explained: page, heap, seek, TID, tuple, fanout, bitmap, `work_mem`,
+  correlation, clustered and secondary index, storage engine, UUID, RFC, bits, composite index, skip
+  scan, transaction, row versions, VACUUM and autovacuum, visibility map, all-visible, heap fetch,
+  sargable, cast, collation, operator class, WAL, replica, primary, HOT update, fillfactor, lock,
+  SQLite, `EXPLAIN QUERY PLAN` output words (`SCAN`, `SEARCH`, `TEMP B-TREE`), column-oriented
+  stores, parallel query, fixed random seed, `$1`. Each now gets a plain sentence (and why, and an
+  example where it is a core idea) before first use.
+- Numbers without working: 86,168 pages (5,000,000 ÷ 58), 673 MB (86,168 × 8 KB ÷ 1,024), 23
+  binary-search steps (halvings shown), 30 CPU cores (100 × 0.33 s), B-tree sizes (5,000,000 ÷ 365,
+  13,712 ÷ 48, 367 × 367 × 365), 104,000 ids per internal page, 3 leaf pages for 1,001 ids, the 44%
+  and 95% page shares (one step per operation), 37× (38,063 ÷ 1,016), the 0.43% and 1.6% crossovers
+  (worked for 1% first, formula after), 1 in 18 (432,000 ÷ 24,023), 150 MB, 16× faster covering
+  scan, 3 updated rows per page (58 ÷ 20), 49× smaller partial index, 5× slower inserts and 3.6×
+  WAL, 11 pages per non-HOT update, Check yourself Q1.
+- Accuracy fixes found on the way: the opening and Part 1 said the planner ignores the index at 5%;
+  our run shows it still chose the bitmap scan at 5% (slower than the full scan) and switched to a
+  full scan only above about 25%. Both claims are now stated separately. The planner example used
+  25% for "picks the full scan"; changed to a third. "1 to 10 March" for 1% of rows was wrong
+  (1% is about 3.5 days of orders); replaced with "any one day". The covering-index motivation said
+  "a few hundred index pages"; the run shows 59.
+- Tables of numbers each got one sentence saying what to notice.
+
+The three-sentence explanation a student could give after Part 1 alone: "A database reads a table
+in fixed-size pages, so without an index finding a few rows means reading every page. An index is a
+sorted copy of a column with each row's address, so the database can look a value up and read only
+the few pages that hold matching rows. But when a query matches a large share of rows, those rows
+sit on nearly every page, so the index saves nothing, and every index also slows down writes."
