@@ -273,3 +273,58 @@ Sim checks (seed 42, headless):
   713 ms in 7 RTTs (10, 20, 40, 80, 160, 320, 55), warm 260 ms (= the link's ideal). 1 Gbit/s:
   cold 701 ms. Idle gap 1,000 ms (> RTO 300 ms): warm drops to 80 segments, 429 ms. 5 MB at 1%
   loss: about 1.6 Mbit/s on the 50 Mbit/s link; 0.1% loss about 21 Mbit/s.
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Page rebuilt as Part 1 / Part 2. Part 1 follows one voice call (a piece every 20 ms, 50 ms one
+way, 4% loss) losing piece 7: over UDP it is a 20 ms gap; over TCP the third repeated ACK reaches
+the sender at 160 ms, the resend lands at 210 ms, and pieces 7–9 miss the 150 ms G.114 deadline.
+Those are the same numbers as the TCP sim's staircase, so Part 2 refers back instead of repeating
+the arithmetic. New mental-model diagram (`MentalModel.astro`), checked at 360px light and 1280px
+dark. Seven building blocks: packets and best-effort IP; bits, bytes and link speed; sockets and the
+kernel (with receive buffer and port); round-trip time (and bandwidth); sequence numbers and ACKs;
+the connection and its handshake; byte stream vs datagrams. The four puzzles (44 ms, 700 ms at any
+bandwidth, 17% late, port exhaustion) moved from the opening to "Going deeper"; the wait table was
+rewritten in plain words; the request timeline moved into the slow-start section, after slow start
+and TLS are explained. Min read 48 → 66 (Part 1 about 12 minutes).
+
+What the fresher read found and fixed:
+
+- Terms used before they were explained: packet, protocol, kernel, socket, receive buffer, port,
+  RTT, bandwidth, segment, SYN/FIN/RST (all now Part 1 building blocks); RFC/IETF, checksum,
+  idempotency key, loopback, MSS, MTU, fragments, firewall, IPv4, frame, gRPC, jitter, Karn's
+  rule, sysctl, socket option, `connect()`, latency, median, head-of-line blocking, codec, HTTP/2
+  streams, throughput, backpressure, router, bottleneck, warm connection, Reno, sawtooth, square
+  root of p, log₂, TLS, SSH, TIME-WAIT, keep-alive (both meanings), connection pool, proxy, TCP
+  timestamps, `SO_LINGER`, file descriptor, `ss`, middlebox, load balancer, conntrack, Kubernetes,
+  `TCP_KEEPIDLE`, user space, 0-RTT, replay, connection IDs, path MTU discovery, spoofing,
+  amplification, DDoS, Tbps, memcached, VPN, WebRTC, CDN, rebuffer, tail latency, glibc, race,
+  CVE, retransmission queue, broadcast and multicast, jitter buffer, network byte order. Each now
+  gets a plain sentence (and why, and an example where it carries weight) before use.
+- Numbers without an origin: the 98% UDP loss (receiver at most 5,000/s vs 5,000 sent in 14 ms),
+  4,170 packets a second (50,000,000 ÷ 8 ÷ 1,500), the 274 ms RTO row (worked through), 3 s SYN
+  cluster (1 + 2), 150 segments for 220 KB, 65,507 bytes (65,535 − 20 − 8), 16 ms for 100 KB at
+  50 Mbit/s, slow-start round trips (log₂ rounded up), three halvings in a 1,000 ms idle gap
+  (1,000 ÷ 300), the (3/8)W² in the Mathis derivation, √10 ≈ 3.2, 470 connections a second
+  (28,232 ÷ 60), 56 s to exhaustion (28,232 ÷ 500), 7 s for stop-and-wait (100 round trips of
+  about 50 ms plus 18 timeouts), 44 ms Nagle stall (delayed-ACK timer just past 40 ms), the
+  handshake example (response at 200 ms vs 100 ms).
+- Figures: the request timeline appeared before slow start and TLS were explained (moved); the
+  NAT figure and the compare sim got a sentence saying what to look at (four QUIC streams).
+- Missing steps: why the 17% late is four times the loss (the staircase, plus resends lost again);
+  why a window caps throughput (one window per round trip, with a 40 KB/s example); what the naive
+  framing errors mean ("Extra data", "Expecting value"); a "read it like this" paragraph for the
+  length-prefix code; the opening now says Part 1 and Part 2 exist.
+- Repetition removed: the staircase arithmetic (now only in Part 1), the "reliable or fast" line
+  (Part 2 now builds on it instead of restating it).
+- Further reading: years added to every source. Still open: several real-world sources are older
+  than 2020 (Jacobson 1988, Mathis 1997, BBR 2016, Google QUIC 2017, Discord 2018, GitHub 2018,
+  Uber 2019, SACK Panic 2019, the Kubernetes issue, Gaffer 2008, HPBN 2013). They were kept as
+  instructed for this rewrite; replacing them needs new research.
+
+Three sentences a student could give after Part 1 alone: The network loses and reorders some
+packets, and TCP and UDP are two ways for programs to deal with that. UDP sends each message once
+as one packet, so nothing ever waits but a lost message is gone, which suits calls and games.
+TCP numbers every byte, has the receiver acknowledge it, resends what is missing and delivers in
+order, so nothing is lost but everything behind a loss waits, which suits web pages, APIs and
+payments.

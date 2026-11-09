@@ -1,0 +1,105 @@
+---
+// Part 1 mental model: the same five voice pieces, piece 3 lost on the way. UDP delivers the
+// rest on time and leaves a gap; TCP resends piece 3 and holds pieces 4 and 5 until it arrives,
+// so nothing is missing but three pieces arrive late, together.
+const W = 38; // box width
+const H = 34; // box height
+const sent = [1, 2, 3, 4, 5].map((n, i) => ({ n, x: 14 + i * 50 }));
+const tcpLate = [3, 4, 5].map((n, i) => ({ n, x: 264 + i * 44 }));
+---
+
+<svg viewBox="0 0 400 378" width="100%" role="img" aria-labelledby="tu-mm-t tu-mm-d">
+  <title id="tu-mm-t">The same lost piece over UDP and over TCP</title>
+  <desc id="tu-mm-d">
+    Top: your phone sends five pieces of a voice call, one every 20 milliseconds; piece 3 is lost
+    on the way. Middle, UDP: the other phone gets pieces 1, 2, 4 and 5, each on time, with an
+    empty slot where piece 3 should be. Nothing waits and nothing is resent. Bottom, TCP: the
+    other phone gets pieces 1 and 2 on time; pieces 4 and 5 arrive but are held, waiting for
+    piece 3; piece 3 is resent, and pieces 3, 4 and 5 are handed over together, late. Nothing is
+    missing, but three pieces are late. Time runs from left to right.
+  </desc>
+  <defs>
+    <marker id="tu-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <!-- What was sent -->
+  <text x="4" y="18" font-size="16" font-weight="700" style="fill: var(--viz-ink)">your phone sends</text>
+  <text x="4" y="38" font-size="15" style="fill: var(--viz-muted)">one piece every 20 ms</text>
+  {
+    sent.map((p) => (
+      <g>
+        <rect
+          x={p.x}
+          y="48"
+          width={W}
+          height={H}
+          rx="5"
+          stroke-width="2"
+          stroke-dasharray={p.n === 3 ? '4 3' : undefined}
+          style={p.n === 3 ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'}
+        />
+        <text x={p.x + W / 2} y="71" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {p.n}
+        </text>
+      </g>
+    ))
+  }
+  <text x="114" y="102" font-size="15" text-anchor="middle" style="fill: var(--viz-bad)">✗ lost</text>
+
+  <!-- UDP lane -->
+  <rect x="4" y="116" width="392" height="104" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="14" y="140" font-size="17" font-weight="700" style="fill: var(--viz-ink)">UDP</text>
+  <text x="60" y="140" font-size="15" style="fill: var(--viz-muted)">sends once, never waits</text>
+  {
+    sent.map((p) =>
+      p.n === 3 ? (
+        <g>
+          <rect x={p.x} y="152" width={W} height={H} rx="5" stroke-width="1.5" stroke-dasharray="4 3" style="fill: none; stroke: var(--viz-bad)" />
+          <text x={p.x + W / 2} y="175" font-size="17" text-anchor="middle" style="fill: var(--viz-bad)">–</text>
+        </g>
+      ) : (
+        <g>
+          <rect x={p.x} y="152" width={W} height={H} rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+          <text x={p.x + W / 2} y="175" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+            {p.n}
+          </text>
+        </g>
+      ),
+    )
+  }
+  <text x="14" y="208" font-size="15" style="fill: var(--viz-ink)">all on time · piece 3 is never heard</text>
+
+  <!-- TCP lane -->
+  <rect x="4" y="232" width="392" height="104" rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="14" y="256" font-size="17" font-weight="700" style="fill: var(--viz-ink)">TCP</text>
+  <text x="60" y="256" font-size="15" style="fill: var(--viz-muted)">resends, keeps order</text>
+  {
+    sent.slice(0, 2).map((p) => (
+      <g>
+        <rect x={p.x} y="268" width={W} height={H} rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+        <text x={p.x + W / 2} y="291" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {p.n}
+        </text>
+      </g>
+    ))
+  }
+  <rect x="114" y="268" width="142" height={H} rx="5" stroke-width="1.5" stroke-dasharray="4 3" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="185" y="291" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">4, 5 held for 3</text>
+  {
+    tcpLate.map((p) => (
+      <g>
+        <rect x={p.x} y="268" width={W} height={H} rx="5" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+        <text x={p.x + W / 2} y="291" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          {p.n}
+        </text>
+      </g>
+    ))
+  }
+  <text x="14" y="324" font-size="15" style="fill: var(--viz-ink)">nothing missing · 3, 4 and 5 arrive late</text>
+
+  <!-- Time axis -->
+  <line x1="14" y1="352" x2="386" y2="352" stroke-width="1.5" style="stroke: var(--viz-muted)" marker-end="url(#tu-mm-a)" />
+  <text x="14" y="369" font-size="15" style="fill: var(--viz-muted)">time at the other phone</text>
+</svg>
