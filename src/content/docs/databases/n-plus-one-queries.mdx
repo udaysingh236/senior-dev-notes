@@ -60,7 +60,9 @@ each pointing back to its order (`order_id`).
    107 ms spent waiting for the network. The page took 112 ms, so the database's real work for all
    101 queries was only the rest: 112 − 107 = about 5 ms.
 6. **Why the laptop hid it.** On the laptop each trip takes about 0.1 ms, so 101 trips add up to
-   101 × 0.1 ms = about 10 ms. The page answered in 17 ms and felt fine. Only the length of the
+   101 × 0.1 ms = about 10 ms. The page answered in 17 ms and felt fine. (The other 17 − 10 = 7 ms
+   is work, a little more than the 5 ms measured in production because a laptop and a server are
+   different machines; the point is the trips, not this small difference.) Only the length of the
    trip changed between the laptop and production; the number of trips was always 101.
 7. **The fix: ask about all 50 orders at once.** Instead of 50 questions about one customer each,
    ask one question about all of them: "give me the customers whose ids are in this list". Do the
@@ -1066,7 +1068,8 @@ Pipelining fixed the waiting, not the work.
 
 ## Recap
 
-- N+1 is one query for N rows plus one more per row; nesting multiplies it (1 + N + N × M).
+- N+1 is one query for N rows plus one more per row; nesting multiplies it (customers, items and
+  each item's product: 1 + N + N + N × M, which is 351 for 50 orders of 5 items).
 - Cost ≈ queries × (round trip + per-query work). Measured: 101 queries took 17 ms with the database
   local and 112 ms at a 1 ms round trip; 3 batched queries took 1.4 ms and 5 ms.
 - It also costs database CPU (337 against 3,462 requests a second on the same 4 cores) and pool
