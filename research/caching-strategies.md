@@ -88,10 +88,14 @@ it (cache-aside, read-through, write-through, write-behind, refresh-ahead), and 
   1.6× the database reads.
 - Popularity flips halfway, 10% cache: LFU without aging falls to 37.2%; W-TinyLFU 71.5%,
   S3-FIFO 72.5%, LRU 67.5%.
-- Race, one key, 500 reads/s, 10 ms DB reads, TTL 60 s, 20 writes/s: stale time 2.90% for set
-  on write, 8.72% for delete on write, 1.70% for versioned markers (the 1.70% is the ~1 ms
-  between each commit and its cache command, which no strategy avoids). At 1 write/s delete on
-  write had a 1.49 s stale stretch.
+- Race, one key, 500 reads/s, 10 ms DB reads, TTL 60 s, 20 writes/s, 10 simulated minutes,
+  counting the cache as outdated only while it holds a version older than one a writer has already
+  told it about: 0.96% for set on write, 7.14% for delete on write, 0.00% for versioned markers
+  (re-run 2026-11-09; an earlier count that included the ~1 ms between each commit and its cache
+  command gave 2.90% / 8.72% / 1.70%). At 1 write/s delete on write had a 1.49 s stale stretch.
+- Zipf s = 1 over 10,000 keys, worked by hand for the page: 1 + 1/2 + … + 1/100 = 5.19,
+  … + 1/1,000 = 7.49, … + 1/10,000 = 9.79, so the top 100 keys get 53.0% and the top 1,000 76.5%.
+  A static cache would need the top 9,068 keys (over 90% of them) to reach a 99% hit ratio.
 
 ## Misconceptions
 
@@ -127,3 +131,49 @@ page.
 - Caffeine wiki: Efficiency; Refresh (living, checked October 2026)
 - AWS ElastiCache: caching strategies (living, checked October 2026)
 - Microsoft Azure Architecture Center: cache-aside pattern (living, checked October 2026)
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+The page was rewritten fresher-first: a new Part 1 (the question about one shop's prices, a
+seven-step running example with product 42, a new mental-model diagram `MentalModel.astro`, five
+building blocks with the four steps, and "If you stop here"), then Part 2 opening with the sharp
+question. What the fresher read found and fixed:
+
+- Terms used before being explained, now introduced with a plain sentence, why and an example
+  before use: cache, key, value, source of truth, fill, hit and miss ratio, stale, TTL, eviction,
+  eviction policy, admission, in-process and remote cache, Redis, percentile and p99, Zipf
+  distribution and its exponent s, best static cache, cluster, commit, deploy, read replica,
+  memoization, CDN, microsecond and nanosecond, deserialisation, pod, feature flags, race
+  condition, in flight, version, marker, atomic, Lua, loader, coalescing, background refresh,
+  acknowledgement (ack), dirty keys and flush, recency and frequency, one-hit wonder, doubly linked
+  list, constant time, scan, thread, lock, bit and byte, logarithmic counter, hash function,
+  collision, count-min sketch, hill climbing, FIFO queue, trace, SOSP and NSDI, fork (Valkey),
+  change data capture and binlog, rolling deploy, Redis hash fields.
+- Numbers without working, now shown step by step with units: 99% to 98% doubling the database
+  load (10,000 ÷ 100 × 2 = 200 reads/s), the average read time at 99% and 90% hits, the Zipf
+  shares (sums of 1/k), the 26% more database reads for LRU (32.4 ÷ 25.8), 50 times the load on a
+  cold cache (100 ÷ 2), the 100 GB of copies (50 × 2 GB), stale seconds from the race percentages
+  (600 s × 0.0714 ≈ 43 s), the Redis LFU probability at counters 5 and 15, 4-bit and 8-bit value
+  ranges, Meta's consistency figures as 1 in a million against 1 in ten billion, the interview
+  "five times" (5% ÷ 1%), and the write-behind loss (5 × 2,000).
+- A wrong figure fixed: the frequency-aware policies stay within one point (not half a point) of
+  their steady hit ratio under the batch job (W-TinyLFU moves 0.7 points). The LFU shift number now
+  says it is the second half of the run, against the steady-traffic figure.
+- Figures: the count-min sketch figure moved after the three-part W-TinyLFU description, because it
+  shows the window candidate and the main-area victim; every figure now has a sentence before it
+  saying what to look at. The write-paths diagram says "says OK" instead of "acks", and its first
+  note moved left so the enlarge button no longer covers it. The eviction table's "notice" line
+  corrected to the last three rows.
+- Missing steps: why the two writers' `SET`s can arrive out of order; why the delete leaves
+  nothing to compare a version with; why the check and the store must be atomic; a "read it like
+  this" paragraph after the S3-FIFO code and a note on the Lua script's `HMGET`/`HSET`/`PEXPIRE`.
+
+Second read: no unexplained terms, unworked numbers or figures without a lead-in found.
+
+The three-sentence explanation a student could give after Part 1 alone: "A cache is a small, fast
+copy of data that really lives in a slower database; the app asks the cache first and only goes to
+the database on a miss, saving a copy on the way back. Since the database only sees the misses, a
+small drop in the hit ratio, from 99% to 98%, doubles its work. The cache is smaller than the data,
+so when full it throws out what is least likely to be read again, and since it cannot see the
+database change, a write must delete the cached copy, with a time limit on every copy as the safety
+net."
