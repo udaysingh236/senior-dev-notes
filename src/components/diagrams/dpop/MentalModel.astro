@@ -1,0 +1,60 @@
+---
+// Part 1 mental model: the app keeps a private key; the token carries the key's fingerprint;
+// every request carries the token plus a fresh note signed by the key. A thief with only the
+// token cannot sign the note.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+---
+
+<svg viewBox="0 0 400 486" width="100%" role="img" aria-labelledby="dp-mm-t dp-mm-d">
+  <title id="dp-mm-t">How DPoP makes a copied token useless</title>
+  <desc id="dp-mm-d">
+    Once, at login: the app makes a key pair and keeps the private key; the login server writes the
+    public key's fingerprint, 0ZcO and so on, into the access token. Then, on every request: the app
+    sends two things, the access token with the fingerprint inside it, and a note signed with the
+    private key saying GET /orders, made at 08:00:00. The API checks that the note's signature is
+    valid, that the signing key matches the fingerprint in the token, and that the note is fresh and
+    for this request, and answers 200 OK. A thief who copied only the token has no private key, so
+    cannot sign a note, and is rejected.
+  </desc>
+  <defs>
+    <marker id="dp-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-warn); font-family: var(--note-font-display)">once, at login</text>
+  <rect {...box(4, 28, 392, 64)} rx="8" stroke-width="2" stroke-dasharray="5 4" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="200" y="54" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">app makes a key pair, keeps the private key</text>
+  <text x="200" y="78" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">login server writes its fingerprint into the token</text>
+
+  <text x="4" y="122" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">every request</text>
+  <rect {...box(4, 132, 392, 48)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="200" y="162" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">your app (holds the private key)</text>
+
+  <line x1="102" y1="181" x2="102" y2="204" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dp-mm-a)" />
+  <line x1="298" y1="181" x2="298" y2="204" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dp-mm-a)" />
+
+  <rect {...box(4, 208, 190, 84)} rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="99" y="232" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">access token</text>
+  <text x="99" y="256" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">user 42, 5 minutes</text>
+  <text x="99" y="280" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">fingerprint <tspan style="font-family: var(--sl-font-mono)">0ZcO…</tspan></text>
+
+  <rect {...box(206, 208, 190, 84)} rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="301" y="232" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">signed note</text>
+  <text x="301" y="256" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">GET /orders</text>
+  <text x="301" y="280" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">made at 08:00:00</text>
+
+  <line x1="102" y1="293" x2="102" y2="316" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dp-mm-a)" />
+  <line x1="298" y1="293" x2="298" y2="316" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#dp-mm-a)" />
+
+  <rect {...box(4, 320, 392, 92)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="344" font-size="16" font-weight="700" style="fill: var(--viz-ink)">API checks</text>
+  <text x="16" y="368" font-size="15" style="fill: var(--viz-ink)">signature valid, signer = token's key,</text>
+  <text x="16" y="392" font-size="15" style="fill: var(--viz-ink)">note fresh and for this request</text>
+  <text x="384" y="344" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ok)">✓ 200 OK</text>
+
+  <rect {...box(4, 428, 392, 52)} rx="8" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="16" y="450" font-size="15" style="fill: var(--viz-ink)">thief with a copied token, no private key:</text>
+  <text x="16" y="471" font-size="15" style="fill: var(--viz-ink)">cannot sign a note</text>
+  <text x="384" y="471" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-bad)">✗ rejected</text>
+</svg>

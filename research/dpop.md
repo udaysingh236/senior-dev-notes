@@ -201,3 +201,37 @@ Docs: Okta DPoP guide (living), Keycloak DPoP 26.4 post (2025), Spring Security 
 MDN CryptoKey.extractable (living).
 Incidents: GitHub (2022), Google GTIG Salesloft Drift (2025).
 Explainers: WorkOS DPoP explained (2025), Duende FAPI 2.0 page (2025), The Hacker News DBSC (2026).
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+The October page opened with an expert question and used OAuth, bearer tokens, JWTs, key pairs,
+thumbprints and `jti` before explaining any of them. What the rewrite fixed:
+
+- Added Part 1: a plain opening question (a token copied from a log works from anyone's laptop),
+  a nine-step running example (user 42, `GET /orders` at 08:00:00 = Unix time 1,800,000,000, a
+  5-minute token, a 60-second window, the RFC 9449 key whose fingerprint is `0ZcO…`), a new
+  mental-model diagram (`MentalModel.astro`, replacing `Overview.astro`), and five building blocks
+  with the four steps: access/refresh tokens and OAuth, bearer tokens, key pairs and signatures
+  (with bits and bytes), hashes and key fingerprints (with base64url and the 43-character working),
+  and JWTs (with Unix time). The old expert question now opens Part 2.
+- Terms explained before use in Part 2: HAR file, proxy, `localStorage`, revocation, audience,
+  certificate and mTLS, TPM, header canonicalisation (in plain words), query string and fragment,
+  UUID, opaque token and introspection, client authentication, replay, instances and load balancer,
+  Redis and `SET NX EX`, XSS, nonce (four steps), HMAC (with the period-number example), public and
+  confidential clients, authorization code, PKCE, FAPI 2.0, Web Crypto and IndexedDB, KMS and HSM,
+  iframe silent login, Content Security Policy, RFC 9700 and refresh rotation with reuse detection,
+  DER, µs, gateway, CORS and origin. Removed "in flight", "service mesh" and "traces".
+- Numbers now show their working: 65-second window (60 + 5), 65,000 `jti` entries and about 6.5 MB
+  (100 bytes per entry, marked illustrative), "3 of 4" (node 0 remembers, nodes 1–3 do not), the
+  20 pre-signed proofs (20 × 30 s = 600 s), "10 of 20" (0 to 270 s, 9 + 1 proofs before the 300 s
+  expiry), "4 of 20" (nonce accepted for its 60 s period and the next, 120 s), 530 bytes ≈ half a
+  kilobyte, 198 µs ≈ 0.2 ms, 85 µs ≈ 0.1 ms, 43 base64url characters (256 bits ÷ 6).
+- Added a "read it like this" paragraph after the server code. Code snippets unchanged.
+- Added RFC 6750 (2012, in force) to Further reading, cited only for the definition of a bearer
+  token. The broken link to the unwritten XSS page was avoided (it is reached through Where to go next).
+
+Three sentences a student could give after Part 1: A normal access token works for anyone who copies
+it, like cash. With DPoP the app makes a key pair, keeps the private key, and the login server writes
+the public key's fingerprint into the token. Every request then carries the token plus a fresh note
+signed with the private key for that method, URL and moment, so a thief who copied only the token
+cannot sign the note and is rejected.
