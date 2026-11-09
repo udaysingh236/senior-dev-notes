@@ -1,0 +1,73 @@
+---
+// Part 1 mental model: every request passes a rate limiter before the real work. The limiter
+// keeps one count per API key; a key under its limit goes on to the API server, a key at its
+// limit gets a 429 straight away.
+const clients = [
+  { x: 4, key: 'wx-42', note: '11th request' },
+  { x: 138, key: 'maps-7', note: '3rd request' },
+  { x: 272, key: 'news-3', note: '1st request' },
+];
+const rows = [
+  { key: 'wx-42', used: '10 of 10 used', verdict: 'reject', tone: 'bad' },
+  { key: 'maps-7', used: '2 of 10 used', verdict: 'allow', tone: 'ok' },
+  { key: 'news-3', used: '0 of 10 used', verdict: 'allow', tone: 'ok' },
+];
+---
+
+<svg viewBox="0 0 400 392" width="100%" role="img" aria-labelledby="rl-mm-t rl-mm-d">
+  <title id="rl-mm-t">A rate limiter: one counter per key, checked before the work</title>
+  <desc id="rl-mm-d">
+    Three apps send requests, each with its own API key: wx-42 is sending its 11th request in
+    this 10 second window, maps-7 its 3rd and news-3 its 1st. Every request first reaches the rate
+    limiter, which allows at most 10 requests per 10 seconds for each key and keeps one count per
+    key. wx-42 has already used 10 of 10, so its request is rejected at once with 429 Too Many
+    Requests and told to retry in 7 seconds. maps-7 has used 2 and news-3 has used 0, so their
+    requests are allowed and go on to the API server, which does the real work.
+  </desc>
+  <defs>
+    <marker id="rl-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="rl-mm-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+    <marker id="rl-mm-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  {clients.map((c) => (
+    <g>
+      <rect x={c.x} y="40" width="124" height="58" rx="12" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+      <text x={c.x + 62} y="64" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{c.key}</text>
+      <text x={c.x + 62} y="86" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{c.note}</text>
+      <line x1={c.x + 62} y1="100" x2={c.x + 62} y2="130" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rl-mm-a)" />
+    </g>
+  ))}
+  <text x="4" y="22" font-size="15" style="fill: var(--viz-muted)">three apps, each with its own API key</text>
+
+  <rect x="4" y="134" width="392" height="140" rx="8" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="160" font-size="16" font-weight="700" style="fill: var(--viz-ink)">rate limiter</text>
+  <text x="16" y="182" font-size="15" style="fill: var(--viz-muted)">at most 10 requests per 10 s, per key</text>
+  <line x1="16" y1="194" x2="384" y2="194" stroke-width="1" style="stroke: var(--viz-stroke)" />
+  {rows.map((r, i) => (
+    <g>
+      <text x="16" y={216 + i * 24} font-size="15" font-weight="600" style="fill: var(--viz-ink)">{r.key}</text>
+      <text x="104" y={216 + i * 24} font-size="15" style="fill: var(--viz-muted)">{r.used}</text>
+      <text x="384" y={216 + i * 24} font-size="15" font-weight="700" text-anchor="end" style={`fill: var(--viz-${r.tone})`}>{r.verdict}</text>
+    </g>
+  ))}
+
+  <line x1="100" y1="276" x2="100" y2="312" stroke-width="2" style="stroke: var(--viz-bad)" marker-end="url(#rl-mm-bad)" />
+  <text x="110" y="300" font-size="15" style="fill: var(--viz-bad)">rejected</text>
+  <line x1="300" y1="276" x2="300" y2="312" stroke-width="2" style="stroke: var(--viz-ok)" marker-end="url(#rl-mm-ok)" />
+  <text x="310" y="300" font-size="15" style="fill: var(--viz-ok)">allowed</text>
+
+  <rect x="4" y="316" width="192" height="70" rx="8" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="100" y="342" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">429 Too Many Requests</text>
+  <text x="100" y="366" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">to wx-42: retry in 7 s</text>
+
+  <rect x="204" y="316" width="192" height="70" rx="8" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="300" y="342" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">API server</text>
+  <text x="300" y="366" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">does the real work</text>
+</svg>

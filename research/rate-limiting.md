@@ -290,3 +290,46 @@ measurements and sources:
 - Azure OpenAI quota — https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota
 - GitHub blog (2021) — https://github.blog/engineering/infrastructure/how-we-scaled-github-api-sharded-replicated-rate-limiter-redis/
 - AWS Architecture Blog, backoff and jitter — https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
+
+## Fresher read (2026-11-09, rewrite under the November standard)
+
+Rewrite for the fresher-first standard. Added Part 1 ("The idea in plain words" with one API key,
+`wx-42`, limited to 10 requests per 10 seconds, followed in eight numbered steps; a new
+`MentalModel.astro`; six building blocks: a rate limit and its key, a time window, a burst and the
+token bucket, 429 and Retry-After, a fleet behind a load balancer, a shared store and a round
+trip). The old question moved to the start of Part 2 as "Going deeper". The token bucket table and
+the window definitions moved from Part 2 into Part 1, so Part 2 builds on them instead of
+repeating them.
+
+What the fresher read found and fixed:
+
+- Terms used before being explained, now introduced before use: sliding window, GCRA and the
+  theoretical arrival time, leaky bucket (meter vs queue), sorted set, byte, proxy, connection,
+  HTTP/2, gRPC, layer 4 load balancer, autoscaling, hot key, anycast, race condition, atomic, Lua,
+  Redis hash, shard, hashing and slots, thread, timeout, exponential backoff, worker, edge, CDN,
+  X-Forwarded-For, middleware, carrier-grade NAT, IPv4/IPv6, bits and /64, language-model tokens
+  (and how they differ from token-bucket tokens), RFC, IETF, jitter, latency, timestamp, in flight,
+  load shedding, staging, live mode, backpressure, DDoS, nginx, Envoy, Kong, Memcached.
+- Numbers without their working, now worked step by step with units: 10 to 1,000 in the Part 2
+  question, the C + r × T bound (10 + 10 = 20), GCRA's four steps, the leaky-bucket queue (8 − 5 = 3
+  rejected), the sliding log's 16 GB, the sliding counter's 60% and 78, the synced-counter
+  overshoot (300 × 0.2 = 60, so about 160), the race multiplier (1,000 × 0.001 = 1, so 200; also
+  110, 400 and 600), the local fallback's 5, the reserve-and-refund lines (166.7 tokens a second,
+  1,000 ÷ 166.7 = 6.0 s, 8,400), the impatient client's 155 ÷ 30 and 5 of 30, nginx's 80,000 and
+  11 + 9, the autoscaling drift (200 and 50), the interview memory sizes (1 GB, 160 GB), and the
+  check-yourself answers (87.5%, 500, 150, 16).
+- A wrong comparison fixed: the interview answer said a sliding log is "a thousand times bigger";
+  it is 16,000 bytes against about 100 bytes per key, and 160 GB in total.
+- Tables now carry a sentence saying what to notice. The tagline and description were rewritten as
+  plain sentences without "ten machines agreeing on one number in under a millisecond".
+- Pre-2020 sources: Brandur's 2015 GCRA post and the redis-cell link removed. Stripe (2017),
+  Cloudflare (2017), AWS backoff and jitter (2015) and the Google SRE book (2016) kept as dated
+  history, with the year in the sentence and in Further reading. smudge.ai dated May 2024.
+
+What a student could say after Part 1 alone: "A rate limiter keeps a counter for each caller, like
+each API key, and checks it before the server does any real work. If the caller is under its
+limit, say 10 requests in 10 seconds, the request goes ahead and the counter goes up; if not, it
+gets a quick 429 Too Many Requests with a Retry-After telling it when to come back. The hard part
+is that real APIs run on many servers, so the counter has to be shared, and then you have to
+handle the network trip, two servers reading the counter at the same moment, and the shared
+counter being down."
