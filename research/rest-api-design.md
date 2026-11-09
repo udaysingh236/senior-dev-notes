@@ -86,3 +86,45 @@ RFC 6902 (2013, standard), RFC 9457 (2023), RFC 9745 (2025), IETF Idempotency-Ke
 (living, 2026), Stripe idempotency and versioning docs (living, 2026), AWS Builders' Library
 (2021), GitHub API versions / breaking changes / best practices docs (living, 2026), GitHub blog
 (2022), Microsoft API guidelines (living), Zalando guidelines (living).
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Rewritten with a Part 1 ("Understand it") that follows one shop API through a month: a payment
+whose response is lost (idempotency key), two editors on one kettle (ETag + If-Match), and a new
+order status in an old app (compatibility). New Part 1 diagram: `MentalModel.astro`. Part 1
+building blocks, each in four steps: resource and representation (with REST and the five methods),
+safe and idempotent methods (with what an RFC is), timeout, idempotency key (with header and UUID),
+ETag (with hash and caching), conditional write with If-Match and 412 (with optimistic concurrency
+control), backward compatibility (with tolerant reader and enumeration). The old "Why this problem
+exists" and "The core idea" sections were folded into Part 1 and "Going deeper"; the AfterTimeout
+figure moved to the safe/idempotent section.
+
+New source: RFC 9562 (2024) for the number of possible random UUIDs (2^122, about 5 × 10^36).
+
+Fixed in the fresher read (terms now explained before use, or numbers given an origin):
+- REST, RFC, IETF, header, UUID, hash, cache, opaque, precondition, concurrency, collection,
+  lifecycle, Location header, proxy, load balancer, audit row, rate limit, database transaction,
+  EC2, Internet-Draft, thread, atomic, lock, version column, blind PUT, Kubernetes, ABORTED,
+  Content-Type, JSON Pointer path, field mask, retry library, Retry-After, jitter, gateway (502/504),
+  URI, stack trace, closed enum and JSON decoder, deprecation, hop, polling, webhook, pagination,
+  index, fingerprint, 304 Not Modified, server-side apply, floating point, BIGINT, RFC 3339 and UTC,
+  streaming, RPC, gRPC, schema, GraphQL, `sku`.
+- Numbers with origins: "one payment in seven" is now 0.9 × 0.15 ≈ 13.5% from the sim defaults;
+  "4 payments a second" is one every 250 ms; the 300 ms think time is the sim default; v3 is
+  explained as two earlier changes; 0.1 + 0.2 shows its actual result; the JavaScript integer
+  limit is compared with BIGINT's maximum (about 9.2 × 10^18); 10:00 in Mumbai is 04:30 UTC
+  because Mumbai is UTC+5:30; offset pagination's cost is shown as 100,000 rows read and discarded.
+- Removed "64-bit" and "bytes" from places a fresher meets them unexplained.
+- Removed repetition: the idempotency-record and non-idempotent-PUT gotchas (now explained once in
+  their sections) and the "never 200 with an error" bullet (kept once, as the danger aside).
+- Replaced a link to the unwritten locking page with "coming soon"; linked the existing timeouts,
+  retries-and-backoff and database-indexing pages.
+- Added a "read it like this" paragraph after the two handlers.
+
+The three-sentence explanation a student could give after Part 1 alone: "A REST API has to be
+designed for the moments when the client cannot be sure what happened. If a request gets no answer,
+the client sends it again with the same idempotency key, and the server recognises the repeat and
+returns its first answer instead of doing the work twice. If two people edit the same thing, each
+save says 'only if still version v3' so a stale save is refused with 412 instead of erasing the
+other change, and to keep old apps working the server only adds to its responses while apps ignore
+what they do not recognise."

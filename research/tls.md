@@ -301,3 +301,58 @@ Sim numbers (seed 42, headless test bundled with esbuild):
   2/3/6/12/23/52% extra bytes; noise 0/10/20%: 100/51/34%.
 - RenewalSim, 2 years: 47-day default: 139 certs, 9 breakages, 0 outage days; alert 0: 27 days;
   6-day: 12 days; 6-day with 1-day fix: 0.
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Rewritten with `/add-topic --update`: Part 1 "Understand it" added (the question, one payment over
+café Wi-Fi in eight numbered steps, the new `MentalModel` diagram, seven building blocks in four
+steps, "If you stop here"); Part 2 opens with "Going deeper" and the sharp questions. The old
+opening primer (symmetric vs public-key) and the old "core idea" primer (hash, toy RSA signature)
+moved into the building blocks, and the Diffie-Hellman toy exchange with its figure moved to the
+key-exchange building block, so Part 2 builds on them instead of restating them. "Where TLS ends"
+became the "Choosing where TLS ends" section. Code blocks unchanged (identical to `examples/tls/`).
+Min read 44 → 61.
+
+Fixed after reading as a final-year student:
+
+- Terms used before they were explained, now introduced first: bits, bytes, hex, KB; key, cipher,
+  symmetric, AES, ChaCha20; tag, MAC, AEAD; hash, SHA-256; key pair, public and private key,
+  signature, `mod`; key exchange, key share, Diffie-Hellman, X25519; certificate, CA, trust store,
+  root and intermediate (all Part 1). In Part 2: record, nonce, man in the middle, fingerprint (in
+  the example output), transcript, Finished, group, key derivation and HKDF, SNI, ALPN, flight,
+  downgrade, wildcard, Certificate Transparency, inspection proxy, session secret, cluster, load
+  balancer, session resumption, rotate, quantum computer, middlebox, origin server, header and
+  content type, plaintext, padding and buckets, compression, CSRF token, RTT, replay, replay cache,
+  ticket age, idempotency key, AIA, OpenSSL, revoke, OCSP and soft-fail, stapling, Must-Staple,
+  domain-validated, domain validation, challenge, ARI, CDN, pinning, Java keystore, mTLS,
+  workload, service mesh, sidecar, SPIFFE, service account, namespace, pod, API gateway, edge,
+  termination choices, zero trust, zones and regions, fail open, trust bundle, TLS policy,
+  CloudFormation, data at rest, metadata, Unix socket, WireGuard/IPsec, private CA, cipher suite
+  name, ECDHE (check-yourself question).
+- Numbers now show their origin: 17 bytes of overhead (16-byte tag + hidden content type); 2^256
+  keys has 78 digits; 2^128 tag guesses (16 bytes = 128 bits); 47-day example certificate
+  (1 October to 17 November); about 16 days left at two-thirds of 47 days; about eight manual
+  renewals a year (365 ÷ 47); 72% of replayed copies running (8 × (1 − (7/8)^5) ≈ 3.9 servers
+  reached, minus the one that ran the original); 1,216-byte share = 1,184 + 32; 8% = 1 in 12;
+  13 months for 398 days.
+- Missing steps added: why a chain (roots kept offline, intermediates sign day to day); why every
+  server in a cluster needs the same STEK; why the record nonce matters (stream reuse); a worked
+  forward-secrecy example (recording of the ₹100 payment, key leaked in 2027); a worked mTLS
+  example (`orders` calling `payments`); a "read it like this" paragraph after the observer code,
+  including how two bytes become a length.
+- Figures: a sentence before the record figure says what a header byte is and why we look at
+  bytes; the key-exchange figure now sits in the building block that explains `mod` first.
+
+After Part 1 alone, a student could say: "When I open my bank's site, my browser and the bank each
+send half of a key exchange in public and both work out the same secret key, which never crosses
+the network. The bank sends a certificate saying which public key is its own, signed by a company
+my device trusts, and then signs our conversation with the matching private key, which nobody else
+has, so a café router cannot pretend to be the bank. After that everything is encrypted and tagged,
+so the router cannot read or change it, though it still sees which site I visit and how much data
+flows."
+
+Not changed, flagged for the owner: several sources and incidents on the page predate 2020
+(DigiNotar 2011, Langley 2010/2013/2014, Miller et al. 2014, BREACH 2013, Azure 2013, MUSCULAR
+2013, Equifax/GAO 2018). They were kept because this rewrite was told to keep the existing
+incidents and sources; they conflict with the "no information older than 2020" rule and need a
+decision.

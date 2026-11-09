@@ -271,3 +271,50 @@ WebSearch results and are worth a second look where marked (*).
 
 UDP port 53 in this session returned fake answers (NXDOMAIN for example.com from "1.1.1.1"), so no
 live lookups were run; `lookup.py`/`lookup.mjs` were removed with the page sections that used them.
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Rewrite: new Part 1 (the question, a nine-step running example of one lookup and one change with
+real numbers, the `MentalModel` diagram, seven building blocks in four steps: names and addresses,
+DNS records, a cache, the TTL, resolvers and authoritative servers, zones and referrals) and a
+Part 2 that opens with the sharp outage question. The old "Why this problem exists" and "The core
+idea" sections were folded into Part 1 and the first H3 of Part 2. Min read 44 → 62 (about 12,200
+words, 159 code lines). Code snippets unchanged and still identical to `examples/dns/`.
+
+Terms that arrived unexplained, now introduced before use: IP address, label and trailing dot,
+record set, cache and eviction, TTL, stub resolver, zone, referral, delegation, name server, DNS
+provider, registry, registrar, anycast, round trip, language runtime, open connection, threads
+(Node's libuv pool), daemon, connection pool, gRPC, `GOAWAY`, lead time, pinned clients, `dig`,
+RFC, result code and reply sections, SOA and secondary servers, race, RTT, load balancer, round
+robin, health check, GeoDNS, ECS, subnet, bit, hit rate, byte, packet, UDP vs TCP, port, EDNS(0)
+and OPT, fragments, DNS Flag Day, TC flag, query ID and source port, cache poisoning, key pair,
+hash, DS, validating resolver, KSK, NSEC (moved after DNSSEC is explained), RSA vs ECDSA, hardware
+security module, CVE, apex, CDN, weighted records, MX, CAA, verification records, monotonic clock,
+upstream, pod, search suffixes, nginx upstreams and worker processes, service registry.
+
+Numbers given their origin: the 5,000-cache load table (arithmetic shown), the "five caches in
+six" migration estimate, 1,232 bytes (1,280 − 40 − 8), the 400 ms Unbound band (20 + 400),
+90 s Route 53 detection (3 × 30 s), 8 Kubernetes queries ((3 + 1) × 2), RSA-2048 signature size
+(2,048 bits = 256 bytes), 65,536 query IDs (2^16).
+
+Figures: the TtlLayers row "a local daemon may" became "a local cache may" (daemon was defined only
+after the figure); the SizeBudget figure now has a sentence before it saying to read only the
+sizes, since DNSKEY/RSA/ECDSA are explained in the next section; the Delegation and DNSSEC figures
+now follow sentences saying what the boxes are.
+
+2020 rule: pre-2020 non-standard sources were removed or replaced. Dropped: IMC 2017/2018/2019
+studies (the 30% no-protection and 8× retry figures, the "half prefer fast servers" figure), the
+2019 ECS measurement, the 2016 Dyn incident, APNIC 2018 on BIND 9.12 defaults, the CERN page and
+glibc bug 24282. Replaced with: RFC 2181 section 5.4.1 (standard in force) for child-centric
+credibility; RFC 6724 plus `gai.conf(5)` for address sorting; Unbound's current docs for name
+server selection; current OpenJDK source for Java's 30 s; current Route 53 docs (health-check
+intervals, and "60 seconds or less" for health-checked records, confirmed by search on
+2026-11-07; the AWS docs host could not be fetched from this session). Julia Evans' post dated
+2020 from secondary write-ups. Every Further reading entry now carries a year or "current docs".
+
+Three sentences a student could say after Part 1 alone: "DNS turns a name like shop.example.in
+into an IP address: your computer asks a resolver, and if the resolver doesn't know, it asks the
+root, then the .in servers, then the owner's server. The owner's answer comes with a TTL, the
+number of seconds anyone may keep it, so resolvers cache it and answer the next people in
+milliseconds. That's why a change takes up to one TTL to reach everyone: each saved copy keeps the
+old answer until its own time runs out, and nobody can recall it."

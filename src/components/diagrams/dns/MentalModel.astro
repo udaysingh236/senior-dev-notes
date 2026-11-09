@@ -1,0 +1,62 @@
+---
+// Part 1 mental model: your laptop asks one resolver; on an empty cache the resolver asks three
+// servers in turn (root, .in, the owner's ns1), keeps the answer for its TTL, and every later
+// question inside those 300 seconds is answered from that copy.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const servers = [
+  { x: 4, n: '1', head: 'root', sub: 'top of the tree', r1: 'not mine:', r2: 'ask .in' },
+  { x: 138, n: '2', head: '.in servers', sub: 'the registry', r1: 'not mine:', r2: 'ask ns1' },
+  { x: 272, n: '3', head: 'ns1', sub: 'the owner’s', r1: '192.0.2.10', r2: 'keep 300 s' },
+];
+---
+
+<svg viewBox="0 0 400 452" width="100%" role="img" aria-labelledby="dn-mm-t dn-mm-d">
+  <title id="dn-mm-t">One DNS lookup: your laptop, one resolver, three servers, one cached answer</title>
+  <desc id="dn-mm-d">
+    Your laptop asks a resolver for the address of shop.example.in. The resolver's cache is empty,
+    so it asks three servers in turn. First a root server, which replies "not mine, ask the .in
+    servers". Then a .in server, run by the registry, which replies "not mine, ask ns1". Then ns1,
+    the owner's server, which replies 192.0.2.10, keep for 300 seconds. The resolver saves that
+    answer in its cache and passes it to the laptop: about 120 ms the first time. For the next 300
+    seconds, every user of this resolver gets the saved copy in about 15 ms, and none of the three
+    servers is asked.
+  </desc>
+  <defs>
+    <marker id="dn-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="20" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">first lookup, empty cache</text>
+
+  <rect {...box(4, 32, 200, 52)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="104" y="54" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">your laptop</text>
+  <text x="104" y="74" font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">shop.example.in?</text>
+
+  <line x1="104" y1="86" x2="104" y2="122" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#dn-mm-a)" marker-end="url(#dn-mm-a)" />
+  <text x="116" y="110" font-size="15" style="fill: var(--viz-muted)">answer: ~120 ms</text>
+
+  <rect {...box(4, 126, 392, 64)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="150" font-size="16" font-weight="700" style="fill: var(--viz-ink)">resolver (1.1.1.1 or your ISP’s)</text>
+  <text x="16" y="174" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">cache: shop → 192.0.2.10, 300 s</text>
+
+  {
+    servers.map((s) => (
+      <g>
+        <line x1={s.x + 62} y1="192" x2={s.x + 62} y2="244" stroke-width="2" style="stroke: var(--viz-flow)" marker-start="url(#dn-mm-a)" marker-end="url(#dn-mm-a)" />
+        <circle cx={s.x + 62} cy="218" r="11" style="fill: var(--viz-flow)" />
+        <text x={s.x + 62} y="223" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-surface)">{s.n}</text>
+        <rect {...box(s.x, 248, 124, 56)} rx="6" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+        <text x={s.x + 62} y="272" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">{s.head}</text>
+        <text x={s.x + 62} y="293" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{s.sub}</text>
+        <text x={s.x + 62} y="328" font-size="15" text-anchor="middle" style={`fill: var(--viz-${s.n === '3' ? 'ink); font-family: var(--sl-font-mono)' : 'muted)'}`}>{s.r1}</text>
+        <text x={s.x + 62} y="348" font-size="15" text-anchor="middle" style={`fill: var(--viz-ink)${s.n === '3' ? '; font-family: var(--sl-font-mono)' : ''}`}>{s.r2}</text>
+      </g>
+    ))
+  }
+
+  <text x="4" y="384" font-size="15" font-style="italic" style="fill: var(--viz-ok); font-family: var(--note-font-display)">the next 300 seconds</text>
+  <rect {...box(4, 394, 392, 54)} rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="200" y="416" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">every user of this resolver gets the copy</text>
+  <text x="200" y="438" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">in ~15 ms; no server above is asked</text>
+</svg>

@@ -1,0 +1,85 @@
+---
+// Part 1 mental model: requests reach a load balancer, which picks one of eight backends for each
+// one, using only what it can see. Backend 1 is three times slower. The balancer is often many
+// copies, each seeing only its own requests.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const backends = Array.from({ length: 8 }, (_, i) => ({
+  n: i + 1,
+  x: 4 + (i % 4) * 100,
+  y: i < 4 ? 214 : 272,
+  slow: i === 0,
+  chosen: i === 2,
+}));
+---
+
+<svg viewBox="0 0 400 486" width="100%" role="img" aria-labelledby="lb-mm-t lb-mm-d">
+  <title id="lb-mm-t">A load balancer picks one backend for each request</title>
+  <desc id="lb-mm-d">
+    Requests arrive at 513 a second at a load balancer, drawn as one box with two dashed copies
+    behind it, because in real systems the balancer is often many copies, each seeing only its own
+    requests. Below it are eight backends in two rows. Backends 2 to 8 need 10 ms per request;
+    backend 1, outlined in amber, needs 30 ms because it is an older machine. An arrow labelled
+    "this request" goes from the balancer to backend 3, the one it picked. A box lists what the
+    balancer can see when it picks: its own requests still in progress at each backend, how fast
+    each one answered lately, and errors. The last box gives the aim: no request should wait in a
+    line it could have avoided.
+  </desc>
+  <defs>
+    <marker id="lb-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="16" font-weight="700" style="fill: var(--viz-ink)">513 requests a second</text>
+  <text x="4" y="42" font-size="15" style="fill: var(--viz-muted)">arriving at random</text>
+  <line x1="232" y1="30" x2="232" y2="70" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lb-mm-a)" />
+  <circle cx="232" cy="40" r="6" style="fill: var(--viz-flow)" />
+
+  <rect {...box(72, 90, 272, 60)} rx="8" stroke-width="1.5" stroke-dasharray="5 4" style="fill: var(--viz-surface); stroke: var(--viz-muted)" />
+  <rect {...box(64, 82, 272, 60)} rx="8" stroke-width="1.5" stroke-dasharray="5 4" style="fill: var(--viz-surface); stroke: var(--viz-muted)" />
+  <rect {...box(56, 74, 272, 60)} rx="8" stroke-width="2.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="192" y="98" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">load balancer</text>
+  <text x="192" y="120" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">picks one backend per request</text>
+
+  <text x="4" y="172" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">often many copies,</text>
+  <text x="4" y="192" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">each sees only its own requests</text>
+
+  <line x1="250" y1="153" x2="250" y2="210" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#lb-mm-a)" />
+  <text x="260" y="190" font-size="15" style="fill: var(--viz-flow)">this request</text>
+
+  {
+    backends.map((b) => (
+      <g>
+        <rect
+          {...box(b.x, b.y, 92, 50)}
+          rx="6"
+          stroke-width={b.slow || b.chosen ? 2.5 : 1.5}
+          style={
+            b.slow
+              ? 'fill: var(--viz-warn-soft); stroke: var(--viz-warn)'
+              : b.chosen
+                ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'
+                : 'fill: var(--viz-surface); stroke: var(--viz-stroke)'
+          }
+        />
+        <text x={b.x + 46} y={b.y + 21} font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+          backend {b.n}
+        </text>
+        <text x={b.x + 46} y={b.y + 41} font-size="15" text-anchor="middle" style={b.slow ? 'fill: var(--viz-warn)' : 'fill: var(--viz-muted)'}>
+          {b.slow ? '30 ms, slow' : '10 ms'}
+        </text>
+      </g>
+    ))
+  }
+
+  <text x="4" y="344" font-size="15" font-style="italic" style="fill: var(--viz-warn); font-family: var(--note-font-display)">backend 1 is an older machine: 3× slower</text>
+
+  <rect {...box(4, 356, 392, 70)} rx="8" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="378" font-size="16" font-weight="700" style="fill: var(--viz-ink)">what it can see when it picks</text>
+  <text x="16" y="398" font-size="15" style="fill: var(--viz-muted)">its requests still in progress at each one,</text>
+  <text x="16" y="416" font-size="15" style="fill: var(--viz-muted)">how fast each answered lately, and errors</text>
+
+  <rect {...box(4, 434, 392, 48)} rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="455" font-size="16" font-weight="700" style="fill: var(--viz-ink)">the aim</text>
+  <text x="16" y="474" font-size="15" style="fill: var(--viz-ink)">no request waits in a line it could have avoided</text>
+</svg>

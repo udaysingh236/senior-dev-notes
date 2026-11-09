@@ -1,12 +1,12 @@
 ---
 title: Load Balancing
-description: How a load balancer actually picks a backend, and what each picking rule can see. Smooth weighted round robin, why "least loaded" herds on a stale table while two random choices does not, why least-request goes blind behind fifty sidecars, latency-aware picking with peak EWMA and Google's Prequal, subsetting, zone-aware routing, outlier ejection and panic mode.
+description: How a load balancer picks a server for each request, explained from zero with eight servers and one slow one, then in depth. Why taking turns fails, why least loaded herds on an old shared table while two random choices does not, why least-request goes blind behind fifty sidecars, latency-aware picking with peak EWMA and Google's Prequal, subsetting, zone-aware routing, outlier ejection and panic mode.
 tagline: Every balancer decides with a partial, slightly old view of the pool. The algorithms that work are the ones built for that.
 difficulty: intermediate
 track: traffic
 prerequisites: [proxy-lb-gateway, latency-vs-throughput]
 next: [consistent-hashing, health-checks-and-probes, service-discovery]
-lastReviewed: 2026-10-26
+lastReviewed: 2026-11-07
 sidebar:
   order: 2
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/load-balancing/MentalModel.astro';
 import Pipeline from '../../../components/diagrams/load-balancing/Pipeline.astro';
 import Herd from '../../../components/diagrams/load-balancing/Herd.astro';
 import PartialView from '../../../components/diagrams/load-balancing/PartialView.astro';
@@ -24,106 +25,335 @@ import EjectSim from '../../../components/sims/load-balancing/EjectSim.astro';
 
 ## The question
 
-Fifty sidecar proxies sit in front of the same eight backends, and every one of them runs
-least-request: send each request to the backend with the fewest requests in flight. One backend
-turns three times slower. Each sidecar sends about ten requests a second, so at any moment it has,
-on average, a fifth of a request in flight across all eight backends. Its counts read zero, zero,
-zero, zero. What is least-request actually deciding on? And if you give every sidecar a shared
-table of the true counts, refreshed twice a second, why does latency get worse, not better?
+Your service runs on eight servers, and a load balancer in front of them hands out requests in
+turn: the first server, the second, and so on up to the eighth, then the first again. Every server
+gets exactly the same number of requests. One of the eight is an older machine, three times slower
+than the rest. A minute later, one request in eight waits close to a minute for its answer, while
+the other seven servers sit idle a third of the time. How can sharing requests out perfectly evenly
+go so wrong, and what should the load balancer do instead?
 
-## Why this problem exists
+The short answer: the same number of requests is not the same amount of work. The slow server is
+handed more work than it can do, so a line of waiting requests builds up in front of it and grows
+every second. A load balancer's real job is to send each request where it will wait the least, and
+for that it has to know how busy each server is right now. The hard part, and the subject of this
+page, is that what a balancer knows is always partial or a little out of date. The rules that work
+are the ones built for that.
 
-The [comparison page](/traffic/proxy-lb-gateway/) covers what a balancer can read at layer 4 and
-layer 7, and why balancing per request beats balancing per connection. This page is about the
-decision itself: given a request and a pool of backends, which one gets it.
+## The idea in plain words
 
-The goal is not equal CPU or equal request counts. It is that no request waits in a queue it could
-have avoided. Waiting is the expensive part: on the [latency page](/foundations/latency-vs-throughput/),
-a server at 80% utilisation with random arrivals makes the average request wait four times its own
-work. Two backends at 60% and 100% average 80%, but the second one's queue grows without limit.
-Imbalance is paid for in queueing, and queueing grows much faster than load.
+Follow one service through one minute. Every number below comes from a small simulation of exactly
+this setup; its code is in
+[examples/load-balancing](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/load-balancing).
 
-Imbalance has three independent causes, and each picking rule handles a different subset of them:
+1. **The servers.** An online shop's product API runs as eight identical copies of the same program,
+   each on its own server. Each copy is called a **backend**, and the eight together are the
+   **pool**. Seven backends need 10 ms of work per request, so each can finish 1,000 ÷ 10 = 100
+   requests a second. Backend 1 runs on an older machine and needs 30 ms, so it finishes about 33 a
+   second. Together the pool can finish 7 × 100 + 33 = 733 requests a second.
+2. **The traffic.** Requests arrive at 513 a second, at random moments: 70% of what the pool can
+   finish. Each request goes first to the **load balancer**, which picks one backend and forwards
+   the request to it. The rule it uses to pick is its **picking rule**, also called its
+   load-balancing algorithm.
+3. **Taking turns.** The simplest rule sends request 1 to backend 1, request 2 to backend 2, and so
+   on, back to backend 1 after backend 8. It is called **round robin**. Each backend gets
+   513 ÷ 8 ≈ 64 requests a second. The seven fast ones need 64 × 10 ms = 640 ms of work in every
+   second, so they are busy 64% of the time. Backend 1 needs 64 × 30 ms = 1,920 ms of work in every
+   second, and a second only has 1,000 ms. It falls behind by 64.2 − 33.3 ≈ 31 requests every
+   second: that many more arrive than it can finish.
+4. **What taking turns costs.** After one minute about 60 × 30.9 ≈ 1,850 requests are waiting in
+   front of backend 1, and a request that arrives then waits about 1,850 × 30 ms ≈ 55 s. One request
+   in eight goes there. In the simulation, the slowest 1 in 100 requests take 51 s or more. Round
+   robin made the number of requests equal, not the work.
+5. **Fewest in progress.** A better rule: the balancer counts, for each backend, how many requests
+   it has sent there that have not been answered yet, and sends each new request to the backend with
+   the smallest count. Backend 1 holds each request three times longer, so its count is usually the
+   highest, and it gets fewer requests without anyone telling the balancer it is slow. The slowest
+   1 in 100 requests now take 78 ms.
+6. **The catch: many balancers.** That 78 ms needs one balancer that sees every request. Real
+   systems usually run many copies of the balancer, say 50, one next to each copy of the program
+   that calls the API, and each copy sees only its own requests. One idea is to give all 50 copies a
+   shared table of the true counts. Keeping it exact would mean every request updating the table
+   over the network, which is too expensive, so it is refreshed every half second. Now, for half a
+   second, every copy sees the same "least busy" backend and sends everything there: about
+   513 × 0.5 ≈ 256 requests to a backend that finishes 100 a second.
+   By the next refresh it is the busiest, and the rush moves to another backend. The slowest 1 in
+   100 take 3.3 s.
+7. **Trick one: compare two at random.** Keep the same half-second-old table, but for each request
+   pick two backends at random and send it to the less busy of those two. The "least busy" backend
+   now gets a request only when it happens to be one of the two picked, so the rush spreads out. The
+   slowest 1 in 100 take 665 ms instead of 3.3 s, with no fresher data.
+8. **Trick two: remember how fast each backend answered.** Most real systems skip the shared table:
+   each copy uses only its own counts, which are always up to date. But one copy out of 50 sends
+   only about 10 requests a second, so it has less than one request in progress at a time, spread
+   over eight backends. Almost every count it holds reads zero, and comparing zero with zero tells
+   it nothing: with two random choices on those counts, the slowest 1 in 100 take 986 ms. If each
+   copy also remembers how long each backend took to answer lately, it knows backend 1 is slow even
+   while every count reads zero, and the slowest 1 in 100 take 390 ms.
+9. **Around the choice: leave out broken backends, but not too many.** If a backend fails every
+   request, the balancer stops sending to it for a while. That helps when one backend is broken. It
+   hurts when many are, because the rest must carry all the traffic.
 
-- **Requests differ.** A cached read might take 2 ms and a report 2 s on the same endpoint. Round
-  robin equalises the number of requests, not the work.
-- **Servers differ.** Mixed instance types, a noisy neighbour on the same host, a garbage
-  collection pause, a cold cache after a deploy. The same request costs more on some backends.
-- **Views differ.** The balancer is rarely one box. It is often many: every replica of an L7
-  proxy tier, or one sidecar per client pod, or a library inside every client process. Each one
-  makes its own decisions from what it alone has seen.
+Here is the picture behind all nine steps. Look at what sits between the requests and the backends:
+one decision per request, made with what the balancer can see.
 
-The third cause is the one most explanations skip, and it decides which algorithms work at scale.
-A balancer instance can observe four things:
+<Figure caption="A load balancer picks one backend for each request, using only what it can see: its own requests still in progress, how fast each backend answered lately, and errors. Backend 1 is three times slower, and the balancer is often many copies, each seeing only part of the traffic.">
+  <MentalModel />
+</Figure>
 
-1. **Its own requests in flight** to each backend: sent, response not yet back. Exact and current,
-   but only for its own traffic.
-2. **The latencies it has measured** from each backend. A record of the past, only from its own
-   requests.
-3. **The errors it has seen**: failed connections, 5xx responses, timeouts.
-4. **What backends report** about themselves: CPU, queue length, a weight, often in a response header
-   or from a central controller. Covers all traffic, but is as old as the last report.
+So a load balancer is a small decision repeated on every request: of the backends I may use, which
+one gets this request? Round robin decides without looking, and pays when backends differ.
+Counting requests in progress looks at the right thing, but in a system of many balancers each one
+sees too little, and a shared view is always old. The two tricks fix that: randomness stops
+everyone rushing to the same backend, and memory of past answers fills in what the counts miss.
 
-Everything a picking rule does is some combination of these four, so their freshness and coverage
-are the real design constraints.
+The same minute, side by side. Each row is one picking rule on the same pool and the same traffic:
+
+| Picking rule | What it looks at | Slowest 1 in 100 |
+|---|---|---|
+| Taking turns (round robin) | nothing | 51 s |
+| Fewest in progress, one balancer | its own exact counts | 78 ms |
+| Fewest in progress, 50 balancers | a shared table, up to 0.5 s old | 3.3 s |
+| Less busy of two random, 50 balancers | the same shared table | 665 ms |
+| Less busy of two random, 50 balancers | each balancer's own counts | 986 ms |
+| Two random, compared by remembered speed, 50 balancers | own counts and own memory of answer times | 390 ms |
+
+The best and the worst rule differ by a factor of 650 on the same servers. Nothing about the
+servers changed; only what each balancer looked at, and how.
+
+An everyday picture: a supermarket with eight checkouts, one of them with a slow scanner. Sending
+shoppers to checkouts strictly in turn piles them up at the slow one. Letting each shopper look and
+join the shortest line works well. Now put up a big screen that shows every line's length, updated
+once a minute: every shopper walks to the line the screen calls shortest, and it is suddenly the
+longest. The picture stops working in one place. A shopper can see the line in front of them and
+change their mind; a request cannot see anything, and once sent it waits its turn.
+
+## The building blocks
+
+Six ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A load balancer, backends and the pool
+
+**What it is.** A **load balancer** is a program that receives requests and forwards each one to
+one of several identical copies of a service.
+
+**Why it exists.** One server cannot carry all the traffic, and callers should not have to know
+how many copies there are or which ones are working. The balancer gives them one address and
+spreads the work behind it.
+
+**Example.** The product API gets 513 requests a second. No single backend can finish more than
+100, so the work is spread over eight backends, and the balancer decides, request by request, which
+backend gets which.
+
+**The precise version.** The copies are **backends** (also called upstreams, targets or hosts), and
+the set of backends the balancer may use is the **pool**. Some balancers can see only network
+connections, not the requests inside them; the
+[proxy, load balancer and gateway page](/traffic/proxy-lb-gateway/) explains that difference and why
+picking per request is the one that spreads work well. This page is about balancers that pick a
+backend for every request.
+
+### Requests in progress ("in flight")
+
+**What it is.** A request is **in flight** at a backend from the moment the balancer sends it there
+until the answer comes back.
+
+**Why it exists as a measure.** A backend works on one request at a time (or a few), so requests in
+flight beyond that are waiting in its line. The count is the simplest sign of how busy a backend is.
+
+**Example.** The balancer sends three requests to backend 2, and one answer comes back. Backend 2
+has 3 − 1 = 2 requests in flight, as far as this balancer knows. The balancer keeps the count by
+adding one when it sends and subtracting one when an answer arrives.
+
+**The precise version.** The count a balancer keeps covers only the requests that *it* sent. Other
+callers may have sent backend 2 many more. The [latency vs throughput page](/foundations/latency-vs-throughput/)
+shows a law that links the average number in flight to the request rate and the time each request
+takes; Part 2 uses it.
+
+### Busy time and the line
+
+**What it is.** A backend's **utilisation** is the fraction of time it is busy working.
+
+**Why it matters here.** It is the number that tells you how long requests wait. A backend that is
+busy more than 100% of the time cannot exist: the extra work waits in a line that grows without end.
+Below 100%, requests still arrive in random clumps, so short lines form, and the waiting grows
+steeply as a backend gets busier.
+
+**Example.** Under round robin, each fast backend gets 64 requests a second of 10 ms each: 0.64 s of
+work every second, 64% utilisation. Backend 1 gets 64 requests of 30 ms: 1.92 s of work every
+second, 192%, so its line grows for as long as the traffic lasts.
+
+**The precise version.** Utilisation = arrival rate × work per request. For one backend with random
+arrivals, the average time a request spends, waiting plus work, is about the work divided by the
+fraction of time the backend is free. At 80% busy it is free 20% of the time, so a 10 ms request
+takes about 10 ms ÷ 0.2 = 50 ms, five times the work.
+The [latency vs throughput page](/foundations/latency-vs-throughput/) derives this. It is why
+**imbalance is so expensive**: shifting load from a backend at 60% to one at 90% makes the second
+one's requests take 10 ÷ 0.1 = 100 ms instead of 10 ÷ 0.4 = 25 ms, four times longer.
+
+### The slowest 1 in 100: percentiles
+
+**What it is.** A **percentile** answers "how long did the slowest few requests take?". The 99th
+percentile, written **p99**, is the time that 99% of requests finish within.
+
+**Why it exists.** An average hides the requests users complain about. If 7 out of 8 requests are
+fast and 1 in 8 waits a minute, the average looks merely bad, while real people are staring at a
+spinner.
+
+**Example.** Take 1,000 requests and sort them by how long they took. If the 990th one took 78 ms,
+then p99 is 78 ms: 990 requests finished within 78 ms and 10 took longer. The **median**, or **p50**,
+is the 500th: the typical request.
+
+**The precise version.** Percentiles are measured over a window of time, such as the last 60
+seconds. The slow end of the sorted list, p99 and beyond, is called the **tail**. Load balancing is
+judged mostly by the tail, because a bad picking rule rarely hurts the typical request; it makes some
+requests wait in a long line while others find none.
+
+### What a balancer can see
+
+**What it is.** A balancer picks using a few **signals**: pieces of information about each backend
+that it has at the moment of the decision.
+
+**Why it exists as an idea.** The balancer cannot ask every backend "how busy are you?" before
+every request: that would add a network round trip, a message there and back, to every request.
+So it decides with what it already has, and what it has is either fresh but partial, or complete but
+old.
+
+**Example.** At one moment, a balancer copy knows: it has 1 request in flight at backend 3 and none
+elsewhere; backend 1 took 31 ms to answer its last request and backend 2 took 9 ms; backend 5 failed
+its last two requests; and a report from backend 4, half a second old, said it had 6 requests in
+flight in total.
+
+**The precise version.** There are four signals, and every picking rule is some combination of them:
+
+1. **Its own requests in flight** to each backend. Exact and current, but only for its own traffic.
+2. **The latencies it measured**: how long each backend took to answer its requests. A record of the
+   past, from its own requests only.
+3. **The errors it saw**: failed connections, 5xx responses, requests that took too long.
+4. **What backends report** about themselves: requests in flight, how busy the processor is, a
+   weight. These cover all traffic, but are as old as the last report.
+
+### Many balancers, not one
+
+**What it is.** In most real systems, the balancing is done by many copies of the balancer at the
+same time, each picking on its own.
+
+**Why it exists.** One balancer box would be a single point of failure (if it stops, all traffic
+stops) and a limit on how much traffic fits through it. Putting the balancing next to every caller
+also saves a network hop: one less machine for every request to pass through.
+
+**Example.** The product API is called by 50 copies of the shop's web front end. Each copy has its
+own small balancer, so 50 balancers share the same eight backends, each sending about 513 ÷ 50 ≈ 10
+requests a second.
+
+**The precise version.** There are three common shapes:
+
+- **A proxy tier**: several copies of a proxy such as nginx or Envoy (two widely used open-source
+  proxies) behind one address, each balancing the requests that reach it.
+- **Sidecars**: a small proxy running next to every copy of the calling program, on the same
+  machine. The set of all those sidecars, plus the system that configures them, is a **service
+  mesh**; Istio and Linkerd are two well-known ones.
+- **A client library**: balancing code inside the calling program itself, as in gRPC, a popular
+  framework for one service calling another.
+
+In all three, each copy decides from its own signals. That one fact decides which picking rules
+work at scale, and most explanations of load balancing leave it out.
+
+:::tip[If you stop here]
+- A load balancer picks one backend for every request. The aim is not equal numbers of requests but
+  no request waiting in a line it could have avoided.
+- Taking turns (round robin) fails when backends differ: a backend three times slower gets the same
+  share, falls behind, and its line grows every second.
+- Sending to the backend with the fewest requests in progress works with one balancer. With many
+  balancer copies, a shared table is always old, and everyone rushes to the same backend; each
+  copy's own counts are fresh but almost always zero.
+- Two tricks fix that: compare two random backends instead of all of them, so nobody rushes; and
+  remember how fast each backend answered, so a balancer knows more than its thin counts.
+- Leaving out broken backends helps, but only up to a limit: the rest must carry their traffic.
+:::
+
+## Going deeper
+
+Here is the puzzle from Part 1 in its sharpest form. Fifty sidecar proxies sit in front of the same
+eight backends, and every one of them runs least-request: send each request to the backend with the
+fewest requests in flight. One backend turns three times slower. Each sidecar has, on average,
+less than one request in flight across all eight backends, so its counts read zero, zero, zero, zero.
+What is least-request actually deciding on? And if you give every sidecar a shared table of the
+true counts, refreshed twice a second, why does latency get worse, not better?
+
+To answer it properly we need to see where imbalance comes from. It has three independent causes,
+and each picking rule handles some of them and not others:
+
+- **Requests differ.** A request answered from memory might take 2 ms and a report that reads a year
+  of orders 2 s, on the same API. Round robin equalises the number of requests, not the work.
+- **Servers differ.** Mixed machine sizes; a **noisy neighbour**, another program on the same
+  physical machine using its processor; a **garbage-collection pause**, when the language runtime
+  stops the program briefly to free unused memory; a **cold cache** after a restart, when the
+  backend's memory of recent results is empty and every request takes the slow path. The same
+  request costs more on some backends than others, and the list changes minute by minute.
+- **Views differ.** The many-balancers fact from Part 1: each copy makes its own decisions from what
+  it alone has seen.
+
+Weights handle known server differences. Counting requests in flight handles both kinds of
+difference, as long as the counts mean something. The third cause is what decides whether they do,
+and it is where the rest of this page spends most of its time.
 
 ## The obvious fix, and why it breaks
 
-"Give every balancer the full picture." Keep one table of true in-flight counts per backend, in
-shared memory or a fast store, and have every balancer read it and pick the minimum.
+"Give every balancer the full picture." Keep one table of true in-flight counts per backend in a
+fast store that every balancer copy can read, such as an in-memory database like Redis, and have
+every balancer read it and pick the backend with the smallest count.
 
 The live version costs too much. Every request now needs a read before it is sent and two writes
-(increment on send, decrement on response). At 50,000 requests a second that is 150,000 operations a
-second on one table, a network round trip added to every request, and a new component whose
-failure stops all traffic.
+(add one on send, subtract one on the answer). For a larger service at 50,000 requests a second, that is
+3 × 50,000 = 150,000 operations a second on one table, a network round trip added to every request,
+and a new component whose failure stops all traffic.
 
 So the table gets refreshed periodically instead: every 100 ms, every second. And then it fails in
 a way that surprises people. Between two refreshes, every balancer sees the same "least loaded"
-backend, and every one of them sends everything to it. By the next refresh that backend is the most
-loaded, and the stampede moves to the next one. This is the **herd effect**: correct information,
-applied by everyone at once, after it has stopped being true.
+backend, and every one of them sends everything to it. By the next refresh that backend is the
+most loaded, and the stampede moves to the next one. This is the **herd effect**: correct
+information, applied by everyone at once, after it has stopped being true.
 
-In our simulation (eight backends, one 3× slower, 70% load, [examples/load-balancing](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/load-balancing)),
-the p99 latency of "pick the minimum" goes from 78 ms with a live table to 173 ms with a 20 ms old
-table, 552 ms at 100 ms and 3.3 s at 500 ms. The information did not get much worse. The rule did.
+The simulation from Part 1 (eight backends, one 3× slower, 70% load, one minute) measures how fast
+it gets worse. The p99 of "pick the minimum" is 78 ms with a live table, 173 ms with a table 20 ms
+old, 552 ms at 100 ms and 3.3 s at 500 ms. The information barely got worse: half a second is not
+long. The rule did.
 
-Three neighbouring ideas get mixed up with load balancing. **Service discovery** decides who is in
-the pool; the balancer decides who gets this request. **Autoscaling** changes how many backends
-there are; it cannot fix a picking rule that overloads some while others idle. **Consistent hashing**
-sends the same key to the same backend on purpose, trading balance for locality; it has its own
-page (coming soon).
+Three neighbouring ideas get mixed up with load balancing:
 
-## The core idea
-
-A load balancer is a filter followed by a choice, run on every request, with results fed back. The
-filter removes backends that should not be considered: unhealthy, ejected, in another zone, outside
-this client's subset. The choice uses a signal that is fresh and local where possible, adds
-randomness so many balancers do not move together, and corrects for speed with weights or measured
-latency. Every response updates the signals for the next decision.
-
-The analogy is a supermarket with many checkouts and shoppers who can only see the two nearest
-queues. The analogy works until you add a big screen showing every queue length, updated once a
-minute: suddenly every shopper walks to the same "shortest" queue.
-
-<Figure caption="The decision a load balancer makes for each request. Each stage removes backends from consideration, and the last stage picks one using signals that each balancer measures itself. The responses feed those signals, and errors feed the ejection filter.">
-  <Pipeline />
-</Figure>
+- **Service discovery** keeps the list of backends that exist and where they are; it decides who
+  is in the pool. The balancer decides who gets this request.
+- **Autoscaling** adds or removes backends as traffic changes. It changes how many backends there
+  are; it cannot fix a picking rule that overloads some while others sit idle.
+- **Consistent hashing** sends requests with the same key, such as the same user ID, to the same
+  backend on purpose, trading balance for keeping related data in one place. It has its own page
+  (coming soon).
 
 ## How it works, piece by piece
 
+Each section below takes one signal or one filter, starting from the simplest. For each, notice
+which of the three causes of imbalance it handles, and what it needs to know.
+
 ### Weights, spread smoothly
 
-A **weight** is a number per backend that says how much of the traffic it should get: weight 2 means
-twice the share of weight 1. Weights come from instance size (a 16-core machine next to 4-core
-ones), from a slow-start ramp after a deploy, or from a controller that measures load (Dropbox's,
-below). They are the one signal that needs no measurement at request time.
+**What it is.** A **weight** is a number per backend that says how big a share of the traffic it
+should get: weight 2 means twice the share of weight 1.
 
-The naive weighted round robin sends each backend `weight` requests in a row. With weights
-a = 5, b = 1, c = 1 the order is `a a a a a b c`: five requests land on `a` back to back, which is a
+**Why it exists.** Some backends can do more than others, for reasons known in advance. A machine
+with 16 processor cores (a core is one of a processor's independent workers) can do about four times
+the work of one with 4. A newly started backend is often eased in gently, which is called
+**slow start**. And a controller can measure load and set the weights itself (Dropbox's, below).
+Weights are the one signal that needs no measurement at request time.
+
+**Example.** Weights a = 5, b = 1, c = 1 add up to 7, so out of every 7 requests, a should get 5
+and b and c one each.
+
+**The technical version.** The naive weighted round robin sends each backend `weight` requests in a
+row. With those weights the order is `a a a a a b c`: five requests land on `a` back to back, a
 burst on `a` while `b` and `c` sit idle.
 
-nginx spreads them out with a **counter per backend**. On every pick it adds each backend's weight to
-that backend's counter, sends the request to the backend with the highest counter, and subtracts
+nginx spreads them out with a **counter per backend**. On every pick it adds each backend's weight
+to that backend's counter, sends the request to the backend with the highest counter, and subtracts
 the total weight (7 here) from the winner's counter. The winner drops to the back; everyone else
 creeps up. Run it for one cycle of 7 picks:
 
@@ -139,52 +369,86 @@ creeps up. Run it for one cycle of 7 picks:
 
 The order is `a a b a c a a`: the same 5 : 1 : 1 shares, interleaved, and the counters are back at
 zero, so the cycle repeats. Ties go to the first backend listed. Envoy reaches the same result with
-a different structure: it gives each backend a "deadline" that advances by 1 / weight per pick and
-always serves the earliest deadline ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
+a different structure: it gives each backend a "deadline" that moves 1 ÷ weight further along on
+every pick of that backend, and always serves the backend whose deadline comes first, so a backend
+with weight 5 comes due five times as often
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
 
 Weights fix servers that differ in a known, stable way. They do nothing for requests that differ,
-and nothing for a backend that slows down for reasons nobody configured.
+and nothing for a backend that slows down for reasons nobody configured. For that, a balancer has
+to look at load.
 
-### Least loaded from a shared table, and the herd
+### Least loaded on an old table: the herd, counted
 
 **Least loaded** means: look at a load number for every backend and pick the smallest. With a live,
-exact number it is close to optimal. The herd shows up as soon as the number is old and many
-requests decide on it.
+exact number it is close to the best any rule can do. The herd shows up as soon as the number is old
+and many requests decide on it.
 
 Count what happens in one refresh period. With a table refreshed every 500 ms and 513 requests a
-second arriving, about 256 requests decide from the same snapshot. If backend 4 showed the lowest
-count, all 256 go to backend 4, which serves 100 a second. Half a second later it holds a queue
-of about 200, and the next snapshot sends the next 256 somewhere else.
+second arriving, about 513 × 0.5 ≈ 256 requests decide from the same snapshot. If backend 4 showed
+the lowest count, all 256 go to backend 4, which finishes 100 a second, so 50 in half a second.
+When the next snapshot is taken, backend 4 holds a line of about 256 − 50 ≈ 200, and the next 256
+go somewhere else.
 
-**Two random choices** (also called P2C, power of two choices) fixes this without fresher data.
-Instead of the minimum over all backends, pick two backends at random and take the less loaded of
-those two. The least loaded backend now wins only when it is one of the two sampled. With 8
-backends, the chance that a particular backend is in a random pair is 1 − (7/8 × 6/7) = 25%. So on a
-stale table, the "best" backend gets at most about a quarter of new requests instead of all of
-them, and the rest still go to backends that were lighter than the alternative they were compared
-with. The randomness throws away a little accuracy and buys immunity to stampedes.
+**What it is.** **Two random choices**, also called the power of two choices or **P2C**, samples two
+backends (picks them at random) and sends the request to the less loaded of those two.
+
+**Why it exists.** It keeps most of the benefit of looking at load, while making sure that no single
+backend can be every request's answer at once.
+
+**Example.** With 8 backends, how often is one particular backend, say backend 4, among the two
+picked? The first pick misses it with chance 7/8. The second pick is one of the other 7, and misses
+it with chance 6/7. So it is missed 7/8 × 6/7 = 6/8 = 75% of the time, and picked 25% of the time.
+On a stale table, the "best" backend gets at most about a quarter of new requests instead of all of
+them, and the rest still go to whichever backend looked lighter than the one it was compared with.
+
+**The technical version.** P2C throws away a little accuracy and buys immunity to stampedes. It also
+reads only two counts per request instead of all of them, which matters in pools of hundreds of
+backends. The figure shows the same stale snapshot of four backends used both ways: on the left
+every one of 8 new requests goes to the backend that looked empty; on the right they spread.
 
 <Figure caption="The same stale snapshot, used two ways. 'Pick the minimum' sends every request in the refresh period to the backend that looked emptiest, which overloads it. 'Better of two random' spreads them, because the emptiest backend wins only when it is sampled.">
   <Herd />
 </Figure>
 
-In the same simulation, P2C on the 500 ms old table has a p99 of 665 ms against 3.3 s for the
-minimum. With a live table the minimum is better (78 ms against 121 ms): randomness costs
-something when the information is perfect. The crossover is already at a 20 ms old table: 173 ms for
-the minimum against 150 ms for P2C. Real tables are always older than that.
+So the herd is a property of the rule, not of the data: the same 500 ms old snapshot overloads one
+backend under "minimum" and spreads load under "two random". In the simulation, P2C on the 500 ms
+old table has a p99 of 665 ms against 3.3 s for the minimum. With a live table the minimum is better
+(78 ms against 121 ms): randomness costs something when the information is perfect. The crossover
+comes early, at a table only 20 ms old: 173 ms for the minimum against 150 ms for P2C. Real shared
+tables are always older than that.
 
-### Least request, and the view each balancer has
+### Least request: fresh, exact and thin
 
-**Least request** (Envoy's name; others say least outstanding or least connections) uses signal 1:
-each balancer's own count of requests in flight to each backend. That count is exact and current,
-so there is no herd. Envoy implements it as P2C over those counts by default
+**Least request** (Envoy's name; others say least outstanding requests or least connections) uses
+signal 1: each balancer's own count of requests in flight to each backend. That count is exact and
+current, so there is no herd. Envoy implements it as P2C over those counts by default
 ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers)).
 
-The count is also partial, and how partial depends on how many balancers share the traffic.
-Little's law (number in flight = arrival rate × time each request spends in flight) gives the number.
-A balancer that sends 10 requests a second with 20 ms latency has, on average, 10 × 0.02 = 0.2
-requests in flight, spread over all backends. Most of the time every count it sees is zero.
-Comparing zero with zero tells it nothing, and least request quietly turns into random.
+The count is also partial, and how partial depends on how many balancers share the traffic. A law
+from queueing theory, the maths of waiting lines, tells us how many requests a balancer typically
+has in flight.
+
+**What it is.** **Little's law**: the average number of requests in flight equals the rate at which
+requests are sent times the average time each one is in flight.
+
+**Why it matters here.** It tells us how much a balancer can see without having to watch it: a
+balancer with few requests in flight has almost nothing to compare.
+
+**Example.** One of 50 balancers sends 513 ÷ 50 ≈ 10 requests a second. A typical answer in our
+simulation takes about 20 ms (the median with 50 balancers is 23 ms). So the balancer has
+10 × 0.02 = 0.2 requests in flight on average. Even if answers took four times as long, that would
+be 0.8 requests spread over eight backends, about 0.1 per backend. Each count it sees is zero most
+of the time.
+
+**The technical version.** In symbols, L = λ × W: L in flight, λ (lambda) the rate, W the time. It
+holds for any system that is not piling up work, whatever the order of service or the shape of the
+traffic; the [latency vs throughput page](/foundations/latency-vs-throughput/) works through it.
+Here it means that comparing zero with zero tells a sidecar nothing, and least request quietly turns
+into random.
+
+The figure shows what three of the fifty sidecars see at one instant, against the true totals that
+none of them can see.
 
 <Figure caption="Three balancers share the same eight backends. Each knows only its own requests in flight, so each sees mostly zeros, while backend 1 has a queue of seven that no single balancer can see.">
   <PartialView />
@@ -192,152 +456,250 @@ Comparing zero with zero tells it nothing, and least request quietly turns into 
 
 The same rule that is excellent behind one central proxy is close to random behind fifty sidecars.
 In the simulation, P2C on own counts has a p99 of 121 ms with one balancer and 986 ms with fifty.
-Same backends, same total traffic, same algorithm. Only the view changed. This is the answer to the
-opening question: the sidecars are deciding on almost nothing, and the stale shared table makes it
-worse by adding a herd.
+Same backends, same total traffic, same algorithm; only the view changed. This answers the first
+half of the opening question: the sidecars are deciding on almost nothing. The second half, the
+shared table refreshed twice a second, is the herd from the previous section.
 
 ### Latency-aware picking
 
 A balancer with little traffic of its own still has a memory: the latencies it measured. That is
-signal 2, and it carries information across time where in-flight counts do not.
+signal 2, and it carries information across time where in-flight counts do not. A count of zero
+forgets backend 1 the moment its last request returns; a remembered latency of 31 ms does not.
 
-The building block is an **exponentially weighted moving average** (EWMA): a running average that
-gives recent samples more weight. Each new sample moves the estimate part of the way towards it:
-`estimate = estimate + α × (sample − estimate)`. With α = 0.3, an estimate of 10 ms and a 40 ms
-sample becomes 10 + 0.3 × 30 = 19 ms. No history needs storing: one number per backend is enough.
+**What it is.** An **exponentially weighted moving average** (**EWMA**) is a running average that
+gives recent samples more weight than old ones.
 
-**Peak EWMA**, used by Finagle and by Linkerd's proxy ([Linkerd docs](https://linkerd.io/docs/reference/load-balancing/)),
-changes two things:
+**Why it exists.** Single response times jump around, so one sample is a poor guide. A plain average
+of all samples ever is steady but slow to notice a change. An EWMA is steady and still follows
+change, and it needs only one stored number per backend.
+
+**Example.** Each new sample moves the estimate part of the way towards itself. With "part of the
+way" set to 30%, an estimate of 10 ms and a new sample of 40 ms give 10 + 0.3 × (40 − 10) = 19 ms.
+A second 40 ms sample gives 19 + 0.3 × 21 = 25.3 ms.
+
+**The technical version.** `estimate = estimate + α × (sample − estimate)`, where α (alpha) is the
+fraction between 0 and 1 that sets how far each sample pulls. No history needs storing.
+
+**Peak EWMA**, used by Finagle (Twitter's open-source library for calls between services) and by
+Linkerd's proxy ([Linkerd docs](https://linkerd.io/docs/reference/load-balancing/)), changes two
+things:
 
 - **Up at once, down slowly.** A sample slower than the estimate replaces it immediately (10 → 40,
   not 10 → 19); faster samples ease it down (40 → 31 → 24.7 → 20.3 on three 10 ms samples). One slow
   response is enough to steer away; recovery needs a run of fast ones.
-- **It fades without samples.** Between samples the estimate decays towards zero (in our code, by
-  a factor of e ≈ 2.7 per second), so a backend that was slow and got no traffic soon looks worth
-  trying again. Without this, a backend that was slow once would never be sampled again.
+- **It fades without samples.** Between samples the estimate shrinks towards zero. In our code it
+  is divided by e, about 2.7, for every second without a sample, so after one quiet second it is
+  37% of what it was (1 ÷ 2.7). A backend that was slow and got no traffic soon looks worth trying
+  again. Without this, a backend that was slow once would never be picked, and so never measured,
+  again.
 
-The cost of a backend is `estimate × (in flight + 1)`: roughly how long a new request would wait if
-it joined this backend's queue. A backend with a 12 ms estimate and 3 requests in flight costs 48; an
-idle one with a 40 ms estimate costs 40 and wins. Combine it with P2C, compare two random backends
-by cost, and the herd problem stays solved.
+The estimate alone ignores how many requests are already queued. So the rule multiplies: the cost of
+a backend is `estimate × (in flight + 1)`, roughly how long a new request would take if it joined
+this backend's line behind the ones already there. A backend with a 12 ms estimate and 3 requests in
+flight costs 12 × 4 = 48; an idle one with a 40 ms estimate costs 40 × 1 = 40 and wins. Combine it
+with P2C, compare two random backends by cost, and the herd stays away.
 
-Run the four rules side by side here. The first two lanes share a table whose age you control; the
-last two use only what each balancer sees.
+Run the four rules side by side here. The first two lanes share a table whose refresh period you
+control; the last two use only what each balancer sees. Start with the defaults, then follow the
+"What to watch for" note under the sim.
 
 <FleetSim />
 
 In the example program (60 simulated seconds; the widget draws different random numbers, so its
 values differ a little but rank the same), with fifty balancers peak EWMA keeps p99 at about 390 ms
-where own-count P2C reaches 986 ms, and it sends the slow backend 5.3% of requests, close to its fair 4.5% share of
-capacity. With one balancer, peak EWMA gets 98 ms. The gap between one balancer and fifty is the
-price of the partial view; latency memory recovers most of it.
+where own-count P2C reaches 986 ms. It sends the slow backend 5.3% of requests, close to its fair
+share of 4.5% (33 of the pool's 733 requests a second). With one balancer, peak EWMA gets 98 ms.
+The gap between one balancer and fifty is the price of the partial view; latency memory recovers
+most of it.
 
-Envoy's least-request policy uses weights and in-flight counts together when weights differ: each
-backend's effective weight is `weight / (in flight + 1) ^ bias`, with bias 1.0 by default. A
-backend of weight 3 with 5 in flight gets 3 / 6 = 0.5; a backend of weight 1 with none gets 1. The
-small idle backend now gets twice the share of the big busy one until the counts change.
+Envoy's least-request policy combines weights and in-flight counts when weights differ: each
+backend's effective weight is `weight / (in flight + 1) ^ bias`, where bias is the power the count
+is raised to; at the default of 1.0 it is a plain division. A backend of weight 3 with 5 in flight gets 3 ÷ 6 = 0.5; a backend of weight 1 with none
+gets 1 ÷ 1 = 1. The small idle backend now gets twice the share of the big busy one, until the counts
+change.
 
 Google's **Prequal** ([NSDI 2024](https://www.usenix.org/conference/nsdi24/presentation/wydrowski))
-goes a step further, and its title is the lesson: "load is not what you should balance". It does not
-balance CPU at all. Each client sends small asynchronous **probes** to a few backends and keeps a pool
-of recent answers: the backend's requests in flight (RIF, counted at the backend, so it covers every
-client's traffic) and its recent latency. It splits the probed backends into "hot" (RIF above a
-threshold) and "cold", picks the lowest latency among the cold ones, and falls back to the lowest RIF
-if every candidate is hot. Probes give each client a fresh, whole-traffic view of a few backends,
-which is exactly what both a shared table (whole but stale) and own counts (fresh but partial) lack.
-Google reports it ran on YouTube for over two years and cut tail latency, errors and resource use
-enough to run machines at higher utilisation.
+goes a step further, and its paper's title is the lesson: "load is not what you should balance". It
+does not balance processor use at all. It is built for **RPCs** (remote procedure calls): requests
+from one service to another that the calling code makes like a function call. Prequal works in
+three steps:
+
+1. **Probe.** Each client sends small extra requests, **probes**, to a few backends, asking "how many
+   requests do you have in flight, and how fast have you been?". It sends them in the background,
+   without making real requests wait for the answers, and keeps a small pool of recent answers.
+2. **Sort into hot and cold.** The backend's count is called **RIF** (requests in flight). It is
+   counted at the backend, so it covers every client's traffic, not one client's. Probed backends
+   with RIF above a threshold are "hot"; the rest are "cold".
+3. **Pick.** Send the request to the cold backend with the lowest recent latency. If every
+   candidate is hot, send it to the one with the lowest RIF.
+
+Probes give each client a fresh, whole-traffic view of a few backends, which is exactly what both a
+shared table (whole but stale) and own counts (fresh but partial) lack. Google reports it ran on
+YouTube for over two years and cut tail latency, errors and resource use, enough to run machines
+busier than before.
 
 ### Subsetting
 
-Every client so far could reach every backend. In a large service that is a **full mesh**: 300
-client tasks and 300 backends need 90,000 connections, each with a TLS session and buffers, and if
-every client health-checks every backend every 5 seconds, the backends receive 18,000 checks a
+Every client so far could reach every backend. That gets expensive at scale, because an open
+connection is not free: each one holds memory for data in transit on both ends, and with HTTPS each
+needs its own encryption set-up, the [TLS](/networking/tls/) handshake. A pool where every client
+connects to every backend is called a **full mesh**.
+
+The other cost is health checks.
+
+**What it is.** A **health check** is a small test request that a balancer sends to a backend on a
+schedule, such as `GET /healthz` every 5 seconds, to find out whether it is working.
+
+**Why it exists.** A balancer should stop sending to a backend that has crashed, ideally before a
+real request finds out the hard way.
+
+**Example.** One client checking 300 backends every 5 seconds sends 300 ÷ 5 = 60 checks a second.
+
+**The technical version.** Checks are **active** (the balancer sends them) or **passive** (the
+balancer watches real responses); the [comparison page](/traffic/proxy-lb-gateway/) covers both,
+and the health checks page (coming soon) covers how to design them.
+
+Now count a full mesh: 300 client copies and 300 backends need 300 × 300 = 90,000 connections. If
+every client checks every backend every 5 seconds, the backends receive 90,000 ÷ 5 = 18,000 checks a
 second between them, 60 each. A **subset** limits each client to k backends. With k = 10 the mesh
-drops to 3,000 connections and each backend sees about 2 checks a second.
+drops to 300 × 10 = 3,000 connections, and each backend has about 10 clients, so it sees about
+10 ÷ 5 = 2 checks a second.
 
-The question is how to choose the k without making the backends uneven. Count how many clients
-pick each backend:
+The question is how to choose each client's 10 without leaving some backends with many clients and
+others with few. Both common methods use a hash, so it comes first.
 
-- **Stable random** (each client keeps the k backends with the highest hash of client and backend,
-  called rendezvous hashing): each backend gets 10 clients on average, but in our run between 2 and
-  20. The backend with 20 clients gets twice the traffic of an average one, and ten times the
-  unluckiest.
-- **Deterministic subsetting**: group clients into rounds of 30 (300 backends / 10 per subset).
-  Every client in a round shuffles the backend list with the same seed, the round number, and takes
-  its own slice of 10. Within a round, every backend is in exactly one slice, so every backend ends
-  up with exactly 10 clients.
+**What it is.** A **hash function** turns any input into a number that looks random, but is always
+the same for the same input.
+
+**Why it exists here.** We want each client to pick backends that look random, so the choices spread
+out, but stay the same every time the client restarts, so it does not reconnect everywhere.
+
+**Example.** Our code's hash, `mix`, turns 700,022 into 2,731,570,026 and 700,023 into 1,658,566,732.
+Inputs one apart, outputs with no visible pattern, and the same outputs on every run.
+
+**The technical version.** `mix` is a well-known integer hash whose outputs are whole numbers from 0
+to about 4.3 billion (32 bits); it is the final step of a hash called MurmurHash3. Any hash that
+spreads its outputs evenly works. Now the two ways to choose a subset. For each, count
+how many clients end up on each backend; the even answer is 300 × 10 ÷ 300 = 10.
+
+- **Stable random**, called **rendezvous hashing**: each client scores every backend by hashing the
+  pair (client number, backend number), and keeps the 10 backends with the highest scores. Client 7
+  in our code keeps backends 0, 23, 29, 71, 84, 135, 232, 247, 267 and 297. Each backend gets 10
+  clients on average, but in our run between 2 and 20. The backend with 20 clients gets twice the
+  traffic of an average one, and ten times that of the unluckiest.
+- **Deterministic subsetting**: group the clients into rounds of 300 ÷ 10 = 30 clients. Every client
+  in a round shuffles the list of 300 backends in the same way, by using the round number as the
+  **seed**, the starting number of a random generator: same seed, same shuffle. Then each client
+  takes its own slice of 10 from the shuffled list. The 30 slices of a round cover all 300 backends
+  exactly once, so every backend ends up with exactly 10 clients: one per round.
+
+The figure shows both methods on a small pool: six clients (rows), six backends (columns), two
+backends each.
 
 <Figure caption="Each client connects to a subset of the backends. Random subsets leave some backends with twice the clients of others; deterministic subsets deal every backend to exactly one client per round.">
   <Subsets />
 </Figure>
 
 Deterministic subsetting has a cost that only shows when the pool changes. Remove one backend and
-the round size changes, every round reshuffles, and in our run 2,821 of the 3,000 connections
-move to different backends. Rendezvous hashing moves 14: only the clients that lost the removed
-backend open one new connection each. Balance or stability, pick one, with the simple algorithms.
+the round size changes, every round reshuffles, and in our run 2,821 of the 3,000 connections move
+to different backends. Rendezvous hashing moves 14: only the clients that had the removed backend
+open one new connection each. Client 7, for example, loses backend 0, keeps the other nine, and
+adds backend 123, its next-highest score. With these two methods you choose between balance and
+stability.
 
 Google ran deterministic subsetting as its default for over a decade and published its replacement
 in 2022, "Rocksteady", built to keep subsets balanced while changing few connections when backends
 are added or removed ([ACM Queue, 2022](https://queue.acm.org/detail.cfm?id=3570937)). Pool changes
-are constant under autoscaling and rolling deploys, so connection churn was causing real incidents.
+are constant under autoscaling and **rolling deploys** (replacing backends with a new version a few
+at a time), so connection churn, many clients reconnecting at once, was causing real incidents.
 
-Subsetting interacts with everything above. A client that sees 10 of 300 backends has a smaller
-view, so its per-backend counts are larger and least request works better; but a slow backend in its
-subset is 10% of its choices, not 0.3%.
+Subsetting interacts with everything above. A client that sees 10 of 300 backends sends all its
+traffic to those 10, so its per-backend counts are 30 times larger and least request works better.
+But a slow backend in its subset is 10% of its choices, not 0.3%.
 
 ### Zones and locality
 
-Cloud regions are split into **zones**: separate data centres a few milliseconds apart. Traffic
-between zones adds latency and, on AWS, is billed per gigabyte in each direction
+**What it is.** A cloud **region** (say, Mumbai) is split into **zones**: separate data centres a
+few milliseconds apart, built so that a fire or power cut in one does not take down the others.
+
+**Why it matters here.** Running backends in several zones keeps a service up when one zone fails.
+But traffic between zones adds latency and, on AWS, is billed per gigabyte in each direction
 ([AWS networking blog](https://aws.amazon.com/blogs/networking-and-content-delivery/optimizing-data-transfer-costs-when-using-aws-network-load-balancer)).
-So balancers prefer backends in their own zone. The danger is that "prefer local" ignores how much
-capacity is local.
+So balancers prefer backends in their own zone.
 
-AWS Network Load Balancers show the trap with defaults. Each zone gets a balancer node, DNS spreads
-clients roughly evenly over the nodes, and cross-zone balancing is off by default for NLBs (always
-on for Application Load Balancers)
+**Example.** The trap is that "prefer local" ignores how much capacity is local. AWS has two main
+managed balancers: the Network Load Balancer (NLB), which forwards connections, and the Application
+Load Balancer (ALB), which reads HTTP requests. Each zone gets its own copy of the balancer, called
+a node, and
+[DNS](/networking/dns/), the internet's name-to-address lookup, spreads clients roughly evenly over
+the nodes. Cross-zone balancing, a node sending to backends in other zones, is off by default for
+NLBs and always on for ALBs
 ([ELB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html),
-as of October 2026). Put 2 targets in zone A and 8 in zone B: each zone node takes half the traffic
-and shares it among its local targets, so each zone A target gets 25% and each zone B target 6.25%.
-Four times the load, from a deployment detail.
+as of October 2026). Put 2 backends in zone A and 8 in zone B behind an NLB. Each zone's node takes
+half the traffic and shares it among its local backends only: each zone A backend gets 50% ÷ 2 = 25%,
+each zone B backend 50% ÷ 8 = 6.25%. Four times the load, from a deployment detail.
 
-Envoy's **zone-aware routing** compares two shares: the share of calling proxies in a zone and the
-share of backends there. If zone A has 50% of the callers but 30% of the backends, Envoy keeps 30/50 =
-60% of zone A's requests local and spills the other 40% to zones with spare backends. If a zone has
-at least its share of backends, everything stays local. It turns itself off below 6 backends
-(`min_cluster_size`), where one host failing would swing the shares too far
+**The technical version.** Envoy's **zone-aware routing** compares two shares: the share of calling
+proxies in a zone and the share of backends there. If zone A has 50% of the callers but 30% of the
+backends, Envoy keeps 30 ÷ 50 = 60% of zone A's requests local and **spills** the other 40% to zones
+with spare backends. If a zone has at least its share of backends, everything stays local. It turns
+itself off below 6 backends (`min_cluster_size`), where one backend failing would swing the shares
+too far
 ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/load_balancing_policies/common/v3/common.proto)).
+
+The figure works through that example with ten backends: three in zone A, seven in zone B, and
+traffic measured in percentage points of the total.
 
 <Figure caption="Zone A has half the callers but only 30% of the backends. Zone-aware routing keeps 60% of zone A's requests local and spills the rest, so every backend gets the same load. Pure 'stay local' would put 67% more load on each zone A backend.">
   <Zones />
 </Figure>
 
-Kubernetes Services gained a similar preference with `trafficDistribution: PreferClose`, and the
-proposal behind it says the trap out loud: endpoints in the preferred zone can become overloaded
-when zones are uneven ([KEP-4444](https://www.kubernetes.dev/resources/keps/4444/)).
+Without spillover, zone A's three backends would share 50% of the traffic, 16.7% each, against the
+10% every backend gets with it: 67% more. Kubernetes, the most widely used system for running
+programs across many machines, gained a similar preference for its **Services** (its stable
+addresses for a group of copies) with `trafficDistribution: PreferClose`. The proposal behind it
+says the trap out loud: backends in the preferred zone can become overloaded when zones are uneven
+([KEP-4444](https://www.kubernetes.dev/resources/keps/4444/)).
 
 ### Ejection, and the panic guard
 
-**Outlier detection** is the error signal turned into a filter: a backend that fails several
-requests in a row is **ejected**, removed from the pool for a while. Envoy's defaults: 5 consecutive
-5xx responses or connection failures, ejection for 30 s multiplied by the number of times this
-backend has been ejected, and never more than 10% of the pool ejected at once (but always at least
-one) ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/outlier_detection.proto),
-as of October 2026). Health checks, active and passive, are covered on the
-[comparison page](/traffic/proxy-lb-gateway/) and in depth on their own page (coming soon).
+**What it is.** **Outlier detection** is the error signal turned into a filter: a backend that fails
+several requests in a row is **ejected**, left out of the pool for a while.
 
-The 10% cap looks timid until you count. Ten backends at 80% load carry 800 requests a second with
-1,000 of capacity. A bad deploy makes three fail. Eject all three and seven backends must carry 800
-with 700 of capacity: they are now at 114%, their queues grow until requests time out, the timeouts
-count as failures, and they are ejected too. Ejection protects against one bad backend and amplifies
-a capacity problem into an outage.
+**Why it exists.** A broken backend often fails fast, and a backend that fails fast looks idle to
+every rule above, so it attracts traffic. Something has to take it out of the choice.
 
-The second guard is **panic mode**: when fewer than a threshold share of backends are left (Envoy's
-default is 50%), stop trusting the filter and send to all of them, ejected or not
+**Example.** Envoy's defaults: 5 consecutive failures (5xx responses or failed connections) eject a
+backend for 30 s, multiplied by the number of times this backend has been ejected, and never more
+than 10% of the pool is ejected at once, but always at least one
+([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/outlier_detection.proto),
+as of October 2026). A backend ejected for the third time stays out for 90 s.
+
+**The technical version.** The 10% cap looks timid until you count. Ten backends at 80% load carry
+800 requests a second with 1,000 of capacity (100 each). A bad deploy makes three of them fail
+every request. Eject all three, and seven backends must carry 800 with 700 of capacity: they are now
+at 800 ÷ 700 = 114%. Their lines grow until requests take longer than the caller's
+[timeout](/resilience/timeouts/), the longest it will wait; the timeouts count as failures, and they
+are ejected too. This is a **cascade**: each ejection overloads the backends that remain, until none
+remain. Ejection protects against one bad backend and amplifies a capacity problem into an outage.
+
+The second guard is panic mode.
+
+**What it is.** **Panic mode** means: when too few backends are left in the pool, stop trusting the
+filter and send to all of them, ejected or not.
+
+**Why it exists.** If half the pool looks broken at the same moment, the checks are more likely
+wrong than half the machines, and some requests failing beats all of them failing.
+
+**Example.** Envoy's threshold is 50% by default
 ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold)).
-The reasoning: if half the pool looks broken at once, the checks are more likely wrong than half the
-machines, and some requests failing beats all of them failing.
+With 10 backends, if 6 are ejected or failing their checks, only 4 of 10 (40%) are left, below 50%,
+so Envoy sends to all 10 again.
+
+**The technical version.** Panic mode is a statement about evidence: a filter that removes most of
+the pool has stopped measuring backends and started measuring something shared, such as a broken
+database or a broken check. The sim calls each backend a **host**. Press the button to start a bad
+deploy on three hosts, then try the two sliders that cap ejection and set the panic threshold.
 
 <EjectSim />
 
@@ -348,18 +710,34 @@ flight. Fast failure looks like spare capacity to every in-flight or latency-bas
 
 ## Choosing between them
 
-| Rule | Signal | Needs coordination | Herd on stale data | Slow backend | Many balancers |
+Put together, every rule and filter above fits one shape. A load balancer is a filter followed by a
+choice, run on every request, with the results fed back. The filter removes backends that should
+not be considered: unhealthy, ejected, in another zone, outside this client's subset. The choice
+uses a signal that is fresh and local where possible, adds randomness so that many balancers do not
+move together, and corrects for speed with weights or measured latency. Every response updates the
+signals for the next decision. Read the figure top to bottom: twelve backends, and how many survive
+each stage.
+
+<Figure caption="The decision a load balancer makes for each request. Each stage removes backends from consideration, and the last stage picks one using signals that each balancer measures itself. The responses feed those signals, and errors feed the ejection filter.">
+  <Pipeline />
+</Figure>
+
+The table compares the picking rules on the questions that matter: what each looks at, whether it
+needs balancers to share anything, and how it does with stale data, a slow backend and many
+balancer copies.
+
+| Rule | Signal | Needs shared data | Herd on stale data | Slow backend | Many balancers |
 |---|---|---|---|---|---|
 | Round robin | none | no | no | blind | fine (equally blind) |
-| Smooth weighted RR | configured weights | no | no | blind unless weights change | fine |
+| Smooth weighted round robin | configured weights | no | no | blind unless weights change | fine |
 | Least loaded (full scan) | a shared table | yes | severe | good if live | herds |
 | P2C least request | own in-flight counts | no | no | good | weak: counts go to zero |
 | P2C peak EWMA | own latency × in-flight | no | no | good | good: latency remembers |
 | Probing (Prequal) | backend-reported RIF and latency | probes only | no | good | good |
 
-How to choose: behind one or a few central L7 proxies, P2C least request is the default for a reason
-and is hard to beat. With many balancers, sidecars or client libraries, add latency awareness
-(peak EWMA) or probing, since each instance's counts are too thin. Use weights for known capacity
+How to choose: behind one or a few central proxies, P2C least request is the default for a reason
+and is hard to beat. With many balancers (sidecars or client libraries), add latency awareness
+(peak EWMA) or probing, since each copy's counts are too thin. Use weights for known capacity
 differences and for slow start, and never "pick the global minimum" from data you did not measure
 yourself a moment ago. Then add the filters: zone preference with spillover, outlier ejection with a
 cap, and a panic threshold.
@@ -415,6 +793,11 @@ function smooth(weights, picks, trace = false) {
   </TabItem>
 </Tabs>
 
+Read it like this: `current` holds one counter per backend, all starting at zero. Each pick adds
+every backend's weight to its counter, chooses the backend with the largest counter, and pushes that
+winner back by the total weight. Called with `{"a": 5, "b": 1, "c": 1}` and 7 picks, it returns the
+seven picks of the table above.
+
 P2C with peak EWMA. Each balancer keeps one estimate and one in-flight count per backend; the pick
 compares two random backends by estimate × (in flight + 1):
 
@@ -469,6 +852,13 @@ function pickPeakEwma(ewma, own, now, r) {
   </TabItem>
 </Tabs>
 
+Read it like this: `value` is the latency estimate as it stood at time `at`, both in milliseconds,
+and it starts at `SERVICE_MS`, the pool's normal 10 ms. `read` returns that estimate faded by the
+time since: `exp(-(now - at) / 1000)` is 1 right after a sample and about 0.37 one second later.
+`observe` takes a new response time and either jumps to it (slower) or moves 30% of the way
+(`ALPHA`, faster). `pick_peak_ewma` uses `two`, which returns two different random backend numbers,
+and sends to the one with the lower cost.
+
 A stable subset by rendezvous hashing: score every backend by a hash of (client, backend) and keep
 the top k. A removed backend only changes the subsets that contained it:
 
@@ -491,23 +881,28 @@ function rendezvousSubset(frontend, backends) {
   </TabItem>
 </Tabs>
 
+Here `frontend` is the client number, `K` is 10 and `mix` is the hash from the subsetting section.
+Multiplying the client number by 100,003, a prime larger than any backend number, gives every
+(client, backend) pair its own input: client 7 and backend 1 become 700,022, the example used there.
+
 `fleet` prints the p99 table quoted throughout this page (50 balancers: P2C own counts 986 ms, peak
 EWMA 390 ms), and `subsets` prints the balance and churn numbers (10–10 and 2,821 connections moved
 for deterministic, 2–20 and 14 for rendezvous). Python and JavaScript print identical output.
 
 ## How real systems do it
 
-**Envoy** (as of October 2026) offers round robin and least request, both weighted with
-earliest-deadline scheduling, plus ring hash, Maglev and random. Least request is P2C by default
-(`choice_count` 2) and switches to `weight / (in flight + 1) ^ bias` when weights differ. Around the
-choice sit zone-aware routing, outlier detection (5 consecutive errors, 30 s base ejection, 10% cap)
-and the 50% panic threshold. Every number in those last two sections is a default you inherit when
-you install Istio or Envoy Gateway, so it is worth knowing what they do.
+**Envoy** (as of October 2026) offers round robin and least request, both weighted with the
+earliest-deadline scheduling described above, plus random and two hashing rules, ring hash and
+Maglev, that belong to the consistent hashing page. Least request is P2C by default (`choice_count`
+2) and switches to `weight / (in flight + 1) ^ bias` when weights differ. Around the choice sit
+zone-aware routing, outlier detection (5 consecutive errors, 30 s base ejection, 10% cap) and the
+50% panic threshold. Istio and Envoy Gateway are built on Envoy, so every one of those numbers is a
+default you inherit when you install them. It is worth knowing what they do.
 
-**Linkerd** balances with peak EWMA over P2C and documents its main failure mode: a backend that
-answers 429 Too Many Requests fast looks fast, so EWMA sends it more traffic, which earns more 429s.
-Linkerd 2.20 (June 2026) added rate-limit-aware balancing that replaces the latency of a 429 with a
-penalty, longer if the server sends `Retry-After`
+**Linkerd** balances with peak EWMA over P2C and documents its main failure mode. A backend that
+answers 429 Too Many Requests quickly looks fast, so EWMA sends it more traffic, which earns more
+429s. Linkerd 2.20 (June 2026) added rate-limit-aware balancing: it replaces the latency of a 429
+with a penalty, longer if the server sends a `Retry-After` header saying how long to wait
 ([Linkerd docs](https://linkerd.io/docs/tasks/rate-limit-aware-load-balancing/)).
 
 **Google** runs two of the ideas on this page at very large scale: Prequal's probing on YouTube (NSDI
@@ -515,10 +910,11 @@ penalty, longer if the server sends `Retry-After`
 different words: the hard part is not the formula, it is what each client can know.
 
 **Dropbox** built Robinhood, its in-house balancing service, around weights instead of in-flight
-counts. Each backend reports utilisation, and a PID controller per backend (a feedback loop that
-raises or lowers an output based on the error, its accumulation and its rate of change) adjusts that
-backend's weight to push its utilisation towards the fleet average. The weights are then normalised
-and pushed to clients ([Dropbox, 2024](https://dropbox.tech/infrastructure/robinhood-in-house-load-balancing-service)).
+counts. Each backend reports its utilisation. A **PID controller** per backend, a feedback loop that
+raises or lowers an output based on the current error, the error added up over time and how fast the
+error is changing, adjusts that backend's weight to push its utilisation towards the average across all backends.
+The weights are then scaled so they add up to a fixed total and pushed to clients
+([Dropbox, 2024](https://dropbox.tech/infrastructure/robinhood-in-house-load-balancing-service)).
 This is signal 4 used carefully: backend reports cover all traffic, and the controller damps them so
 the weights do not swing with every report.
 
@@ -532,43 +928,48 @@ approach) or eject on error rate, and never let only successes feed the latency 
 :::
 
 :::danger[A health check that tests your dependencies takes down the whole pool]
-If `/healthz` checks the database and the database stalls, every backend fails its check at the same
-moment, and the balancer removes all of them, turning a slow database into a total outage. Check
-only what the process itself controls, and keep a panic threshold so that "everyone is unhealthy"
-is treated as a broken check. The health checks page (coming soon) covers check design.
+If `/healthz` checks the database and the database stalls, every backend fails its check at the
+same moment, and the balancer removes all of them, turning a slow database into a total outage.
+Check only what the process itself controls, and keep a panic threshold so that "everyone is
+unhealthy" is treated as a broken check. The health checks page (coming soon) covers check design.
 :::
 
 :::caution[New backends get nothing on long-lived connections]
-A client with HTTP/2 or gRPC connections already open keeps using them. Scale from 10 backends to 20
-and the 10 new ones receive only connections that clients happen to open later, which may be never.
-gRPC servers can set a maximum connection age (`MaxConnectionAge` in grpc-go, infinite by default,
-with ±10% jitter so all clients do not reconnect together); the server sends GOAWAY and the client
-reconnects and rebalances ([grpc-go keepalive](https://pkg.go.dev/google.golang.org/grpc/keepalive)).
+gRPC clients, like other clients of HTTP/2 (the version of HTTP that carries many requests at once
+on one connection), open one connection to a backend and send many requests over it for as long as
+the process runs. Scale from 10 backends to 20 and the 10 new ones receive only connections
+that clients happen to open later, which may be never. gRPC servers can set a maximum connection age
+(`MaxConnectionAge` in grpc-go, infinite by default, with ±10% random variation so all clients do
+not reconnect together). When it is reached, the server sends a GOAWAY message, "stop using this
+connection", and the client reconnects and rebalances
+([grpc-go keepalive](https://pkg.go.dev/google.golang.org/grpc/keepalive)).
 :::
 
 :::caution[Feedback loops oscillate]
-Weights computed from reported CPU swing: a backend reports high CPU, loses weight, cools down,
-regains weight, heats up. The faster the loop and the staler the reports, the bigger the swing, the
-same mechanism as the herd. Damp it (Dropbox's PID controller, smoothing, a maximum change per
+Weights computed from reported processor use swing: a backend reports high use, loses weight, cools
+down, regains weight, heats up. The faster the loop and the staler the reports, the bigger the swing,
+the same mechanism as the herd. Damp it (Dropbox's PID controller, smoothing, a maximum change per
 interval), or use local signals that react per request instead.
 :::
 
 ## Trade-offs and when not to use it
 
 Smarter picking costs state and complexity. Peak EWMA keeps a number per backend per balancer and
-can be fooled by fast errors; probing costs extra RPCs; zone awareness needs topology data from
-discovery. Each filter that removes backends is a way to concentrate load on the rest, which is why
-ejection and locality both need caps.
+can be fooled by fast errors; probing costs extra RPCs; zone awareness needs to know which zone each
+backend is in, from service discovery. Each filter that removes backends concentrates load on the
+rest, which is why ejection and locality both need caps.
 
-Load balancing also cannot fix three things. It cannot create capacity: when the pool is at 114% the
-best rule picks which requests time out. That is the job of load shedding and autoscaling (both coming soon). It cannot make one expensive request cheaper: a single 2 s report request occupies
-whichever backend gets it. And it fights with affinity: when a backend holds per-user state or a warm
-cache for some keys, sending a user anywhere else costs a cache miss or a lost session, and
-consistent hashing (coming soon) is the better tool.
+Load balancing also cannot fix three things. It cannot create capacity: when the pool is at 114%,
+the best rule only picks which requests time out. That is the job of **load shedding** (rejecting
+some requests on purpose so the rest succeed) and autoscaling, both coming soon. It cannot make one
+expensive request cheaper: a single 2 s report request occupies whichever backend gets it. And it
+fights with **affinity**: when a backend holds a user's session or has a warm cache for some keys,
+sending that user anywhere else costs a cache miss or a lost session, and consistent hashing (coming
+soon) is the better tool.
 
 Skip the clever rules when there are few balancers and similar backends: round robin or P2C least
 request behind one proxy tier is fine for most services. The rules on this page start paying off
-with many balancers, uneven machines or long-tail requests.
+with many balancers, uneven machines or requests whose cost varies a lot.
 
 ## Interview corner
 
@@ -577,14 +978,14 @@ whiteboard. The strong answer is the one that opens the box.
 
 - **"How does the load balancer decide?"** Name the signal and the view, not only the algorithm:
   P2C over the balancer's own in-flight counts, why P2C instead of the minimum (no herd, no full
-  scan), and what changes if there are many balancer instances.
+  scan), and what changes if there are many balancer copies.
 - **"One backend is slow. What happens?"** Round robin keeps feeding it; least request and EWMA
   steer away; outlier detection ejects it only if it errors. Mention the cap on ejection and why.
 - **"We added servers and latency did not improve."** Long-lived connections not rebalancing, a
   zone with too few backends, or a subset that does not include the new servers.
-- **"Design the balancing for a service mesh with 2,000 pods."** Client-side balancing in each
-  sidecar, subsetting to bound connections, peak EWMA because each sidecar's counts are thin, zone
-  awareness with spillover, outlier detection with a panic threshold.
+- **"Design the balancing for a service mesh with 2,000 service copies."** Client-side balancing in
+  each sidecar, subsetting to bound connections, peak EWMA because each sidecar's counts are thin,
+  zone awareness with spillover, outlier detection with a panic threshold.
 
 A strong answer quantifies at least once: the 25% sampling chance for P2C with 8 backends, or the
 Little's law estimate of how many requests each balancer has in flight.

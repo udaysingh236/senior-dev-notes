@@ -265,3 +265,65 @@ them or every engineer knows them).
   curl outputs on the page are the 2026-10-18 runs from a network in India. The files were
   re-run here against local targets (a local TLS server for by_hand; IP literals and `.invalid`
   for probe) to confirm they still run. Note: in the sandbox, 10.255.255.1 answers (a proxy).
+
+## Fresher read (2026-11-07, rewrite under the November standard)
+
+Rewrite: added Part 1 "Understand it" (the question, one running example, a new mental-model
+diagram `MentalModel.astro`, seven building blocks, "If you stop here"), moved the critical-path
+figure into "Going deeper", and gave every Part 2 term a plain explanation before use. Page went
+from 46 to 63 min read; Part 1 is about 2,900 words (13 min).
+
+Running example: browser in Mumbai, server 150 ms round trip away (between the measured ~113 ms to
+London and ~187 ms to N. Virginia, cloudping, October 2026), 40 ms DNS (the 39.7 ms by_hand run),
+50 ms of server work, 100 KB HTML: DNS 40 + TCP 150 + TLS 150 + request 150 + server 50 + two more
+data rounds 300 = 840 ms (latency_budget.py prints 841 ms; the extra 0.8 ms is size ÷ bandwidth).
+
+Building blocks added: a protocol; a round trip (with the light-in-fibre floor); an IP address and
+DNS (resolver, TTL, IPv4/IPv6); packets and a connection, TCP (handshake, ACKs); encryption and TLS
+(key, certificate); bandwidth, bits and bytes (0.8 ms arithmetic, latency, throughput); a cache.
+
+What the fresher read flagged and how it was fixed:
+- Opening question assumed DNS/TCP/TLS ("You already know the order"): replaced with a question in
+  user words and a plain answer on the first screen.
+- Step 5 ("sends only 14 KB") had no reason: added the plain why (the sender does not know what the
+  path can carry; ACKs prove it coped).
+- The 40 ms DNS figure had no origin: tied to the measured 39.7 ms lookup.
+- Unexplained in Part 2, now explained before use: critical path, CDN and origin (in the Going
+  deeper question, full four steps in the CDN section), TTFB and where DevTools is, SYN/ACK flags and
+  headers, key exchange and key share (toy 5/23 example), the HTTP versions, transport, UDP, session
+  ticket, 0-RTT, replay, nginx and `ssl_early_data`, `Alt-Svc`, HTTPS DNS record, racing, root/TLD
+  servers, in flight, congestion window (four steps), router queue, authentication tag, keep-alive,
+  "cold" connection, Chromium, multiplexing, connection pool, top-level site (now defined before the
+  pools figure so the caption is readable), client certificate, CORS, preconnect (at first use),
+  buffer, waterfall, first render, parsed, ETag, `s-maxage`, back/forward cache, WebSocket, jQuery,
+  anycast, kernel, middleboxes, HSTS, threads, hosts file, MSS/INITCWND, socket, SNI, ALPN, chunked
+  bodies, uptime monitors, certificate chain.
+- Clash: "frames" meant both link frames and HTTP/2 frames; the link sense was reworded.
+- Numbers without origin: BDP worked once (10,000,000 × 0.15 bits), "seven doublings" shown as
+  10 × 2^7, "375 ms per 75 ms" shown as 5 × 75, 650/200 ms in the handshake figure split into
+  round trips plus server work, "1 MB over six seconds at 1% loss" labelled as the sim's result.
+- Added "read it like this" paragraphs after `latency_budget` (mapping `fetch_ms` to the five
+  steps: 40 + 300 + 150 + 50 + 300 + 0.8 = 841) and `by_hand`.
+
+Sources dropped for the 2020 rule (and replacements):
+- Belshe 2010 bandwidth/RTT measurement: removed; the page's own latency-budget table shows the
+  shape, and Mostafa et al. 2025 stays for the mobile/image nuance.
+- Langley et al. SIGCOMM 2017 QUIC gains: removed; HTTP/3's loss-recovery advantage now cited to
+  RFC 9002 (2021, packet numbers never reused).
+- Cloudflare 2016 TLS record sizing: replaced by the nginx `ssl_buffer_size` docs (smaller buffers
+  to reduce time to first byte).
+- CDN Planet 2017 initcwnd survey: removed; the initial window is described as a server setting
+  (`ip route ... initcwnd`, ip-route(8)) with the 30-packet arithmetic.
+- Grigorik, High Performance Browser Networking (2013): removed from Further reading.
+- Added RFC 9438 (CUBIC, 2023) for the 70% window cut. Kept RFC 6928, 8305 and 8297 as standards
+  still in force. Could not re-check any source online: the sandbox blocks outside hosts.
+
+Second read: no remaining unexplained terms or numbers without origin found.
+
+A student's three-sentence explanation after Part 1 alone: "Before my browser can ask for a page it
+has to look up the server's address, open a connection and set up encryption, and each of those is
+a message that has to go to the server and come back. If the server is 150 ms away there and back,
+those round trips, plus the few more needed because a new connection sends data in small growing
+pieces, add up to most of a second, while the line's speed only affects the tiny time to push the
+bytes. So pages get faster by having fewer round trips or shorter ones: servers closer to users,
+reused connections, caches, and fewer files that wait on each other."
