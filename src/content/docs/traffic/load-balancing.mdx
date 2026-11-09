@@ -48,20 +48,21 @@ this setup; its code is in
 1. **The servers.** An online shop's product API runs as eight identical copies of the same program,
    each on its own server. Each copy is called a **backend**, and the eight together are the
    **pool**. Seven backends need 10 ms of work per request, so each can finish 1,000 ÷ 10 = 100
-   requests a second. Backend 1 runs on an older machine and needs 30 ms, so it finishes about 33 a
+   requests a second. Backend 1 runs on an older machine and needs 30 ms, so it finishes about 1,000 ÷ 30 ≈ 33 a
    second. Together the pool can finish 7 × 100 + 33 = 733 requests a second.
 2. **The traffic.** Requests arrive at 513 a second, at random moments: 70% of what the pool can
-   finish. Each request goes first to the **load balancer**, which picks one backend and forwards
+   finish (0.7 × 733 ≈ 513). Each request goes first to the **load balancer**, which picks one backend and forwards
    the request to it. The rule it uses to pick is its **picking rule**, also called its
    load-balancing algorithm.
 3. **Taking turns.** The simplest rule sends request 1 to backend 1, request 2 to backend 2, and so
    on, back to backend 1 after backend 8. It is called **round robin**. Each backend gets
    513 ÷ 8 ≈ 64 requests a second. The seven fast ones need 64 × 10 ms = 640 ms of work in every
    second, so they are busy 64% of the time. Backend 1 needs 64 × 30 ms = 1,920 ms of work in every
-   second, and a second only has 1,000 ms. It falls behind by 64.2 − 33.3 ≈ 31 requests every
-   second: that many more arrive than it can finish.
-4. **What taking turns costs.** After one minute about 60 × 30.9 ≈ 1,850 requests are waiting in
-   front of backend 1, and a request that arrives then waits about 1,850 × 30 ms ≈ 55 s. One request
+   second, and a second only has 1,000 ms. It receives about 64.1 requests a second (513 ÷ 8) and finishes about 33.3, so it falls behind
+   by 64.1 − 33.3 ≈ 31 requests every second: that many more arrive than it can finish.
+4. **What taking turns costs.** After one minute about 60 × 31 ≈ 1,850 requests are waiting in
+   front of backend 1. Each takes 30 ms, so a request that arrives then waits for all of them:
+   1,850 × 30 ms = 55,500 ms, about 55 s. One request
    in eight goes there. In the simulation, the slowest 1 in 100 requests take 51 s or more. Round
    robin made the number of requests equal, not the work.
 5. **Fewest in progress.** A better rule: the balancer counts, for each backend, how many requests
@@ -84,7 +85,7 @@ this setup; its code is in
    slowest 1 in 100 take 665 ms instead of 3.3 s, with no fresher data.
 8. **Trick two: remember how fast each backend answered.** Most real systems skip the shared table:
    each copy uses only its own counts, which are always up to date. But one copy out of 50 sends
-   only about 10 requests a second, so it has less than one request in progress at a time, spread
+   only about 10 requests a second (513 ÷ 50 ≈ 10), so it has less than one request in progress at a time, spread
    over eight backends. Almost every count it holds reads zero, and comparing zero with zero tells
    it nothing: with two random choices on those counts, the slowest 1 in 100 take 986 ms. If each
    copy also remembers how long each backend took to answer lately, it knows backend 1 is slow even
@@ -117,7 +118,8 @@ The same minute, side by side. Each row is one picking rule on the same pool and
 | Less busy of two random, 50 balancers | each balancer's own counts | 986 ms |
 | Two random, compared by remembered speed, 50 balancers | own counts and own memory of answer times | 390 ms |
 
-The best and the worst rule differ by a factor of 650 on the same servers. Nothing about the
+The best and the worst rule differ by a factor of about 650 on the same servers: 51 s is
+51,000 ms, and 51,000 ÷ 78 ≈ 650. Nothing about the
 servers changed; only what each balancer looked at, and how.
 
 An everyday picture: a supermarket with eight checkouts, one of them with a slow scanner. Sending
@@ -485,7 +487,8 @@ Linkerd's proxy ([Linkerd docs](https://linkerd.io/docs/reference/load-balancing
 things:
 
 - **Up at once, down slowly.** A sample slower than the estimate replaces it immediately (10 → 40,
-  not 10 → 19); faster samples ease it down (40 → 31 → 24.7 → 20.3 on three 10 ms samples). One slow
+  not 10 → 19); faster samples ease it down, 30% of the way each time: on three 10 ms samples, 40 − 0.3 × 30 = 31,
+  then 31 − 0.3 × 21 = 24.7, then 24.7 − 0.3 × 14.7 ≈ 20.3. One slow
   response is enough to steer away; recovery needs a run of fast ones.
 - **It fades without samples.** Between samples the estimate shrinks towards zero. In our code it
   is divided by e, about 2.7, for every second without a sample, so after one quiet second it is
@@ -586,7 +589,7 @@ how many clients end up on each backend; the even answer is 300 × 10 ÷ 300 = 1
   pair (client number, backend number), and keeps the 10 backends with the highest scores. Client 7
   in our code keeps backends 0, 23, 29, 71, 84, 135, 232, 247, 267 and 297. Each backend gets 10
   clients on average, but in our run between 2 and 20. The backend with 20 clients gets twice the
-  traffic of an average one, and ten times that of the unluckiest.
+  traffic of an average one (20 ÷ 10 = 2), and ten times that of the unluckiest (20 ÷ 2 = 10).
 - **Deterministic subsetting**: group the clients into rounds of 300 ÷ 10 = 30 clients. Every client
   in a round shuffles the list of 300 backends in the same way, by using the round number as the
   **seed**, the starting number of a random generator: same seed, same shuffle. Then each client
@@ -614,8 +617,8 @@ are constant under autoscaling and **rolling deploys** (replacing backends with 
 at a time), so connection churn, many clients reconnecting at once, was causing real incidents.
 
 Subsetting interacts with everything above. A client that sees 10 of 300 backends sends all its
-traffic to those 10, so its per-backend counts are 30 times larger and least request works better.
-But a slow backend in its subset is 10% of its choices, not 0.3%.
+traffic to those 10, so its per-backend counts are 300 ÷ 10 = 30 times larger and least request works better.
+But a slow backend in its subset is 1 of its 10 choices, 10%, instead of 1 of 300, about 0.3%.
 
 ### Zones and locality
 
@@ -637,7 +640,8 @@ NLBs and always on for ALBs
 ([ELB docs](https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html),
 as of October 2026). Put 2 backends in zone A and 8 in zone B behind an NLB. Each zone's node takes
 half the traffic and shares it among its local backends only: each zone A backend gets 50% ÷ 2 = 25%,
-each zone B backend 50% ÷ 8 = 6.25%. Four times the load, from a deployment detail.
+each zone B backend 50% ÷ 8 = 6.25%. That is 25 ÷ 6.25 = 4 times the load on each zone A backend,
+from a deployment detail.
 
 **The technical version.** Envoy's **zone-aware routing** compares two shares: the share of calling
 proxies in a zone and the share of backends there. If zone A has 50% of the callers but 30% of the
@@ -654,8 +658,8 @@ traffic measured in percentage points of the total.
   <Zones />
 </Figure>
 
-Without spillover, zone A's three backends would share 50% of the traffic, 16.7% each, against the
-10% every backend gets with it: 67% more. Kubernetes, the most widely used system for running
+Without spillover, zone A's three backends would share 50% of the traffic, 50 ÷ 3 ≈ 16.7% each,
+against the 10% every backend gets with it: 16.7 ÷ 10 ≈ 1.67, so 67% more. Kubernetes, the most widely used system for running
 programs across many machines, gained a similar preference for its **Services** (its stable
 addresses for a group of copies) with `trafficDistribution: PreferClose`. The proposal behind it
 says the trap out loud: backends in the preferred zone can become overloaded when zones are uneven
@@ -673,7 +677,7 @@ every rule above, so it attracts traffic. Something has to take it out of the ch
 backend for 30 s, multiplied by the number of times this backend has been ejected, and never more
 than 10% of the pool is ejected at once, but always at least one
 ([Envoy docs](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/outlier_detection.proto),
-as of October 2026). A backend ejected for the third time stays out for 90 s.
+as of October 2026). A backend ejected for the third time stays out for 3 × 30 = 90 s.
 
 **The technical version.** The 10% cap looks timid until you count. Ten backends at 80% load carry
 800 requests a second with 1,000 of capacity (100 each). A bad deploy makes three of them fail
@@ -882,8 +886,9 @@ function rendezvousSubset(frontend, backends) {
 </Tabs>
 
 Here `frontend` is the client number, `K` is 10 and `mix` is the hash from the subsetting section.
-Multiplying the client number by 100,003, a prime larger than any backend number, gives every
-(client, backend) pair its own input: client 7 and backend 1 become 700,022, the example used there.
+Multiplying the client number by 100,003, a prime larger than any backend number, and adding the
+backend number gives every (client, backend) pair its own input: client 7 and backend 1 become
+7 × 100,003 + 1 = 700,022, the example used there.
 
 `fleet` prints the p99 table quoted throughout this page (50 balancers: P2C own counts 986 ms, peak
 EWMA 390 ms), and `subsets` prints the balance and churn numbers (10–10 and 2,821 connections moved
@@ -1022,8 +1027,9 @@ a = −2. (1, 3) → b, b = −1. (4, 0) → a, a = 0. Order `a a b a`, and the 
 <details>
 <summary>4. Ten backends at 75% load, outlier ejection with no cap. Two backends start failing every request. What happens, and what would a 10% cap change?</summary>
 
-With both ejected, eight backends carry 750 requests a second with 800 of capacity, 94%: slow but
-stable, so no cascade. With three failing it would be 107% and cascade. A 10% cap ejects only one;
+Ten backends of 100 each can do 1,000 requests a second, so 75% load is 750. With both ejected,
+eight backends carry 750 with 800 of capacity: 750 ÷ 800 ≈ 94%, slow but stable, so no cascade.
+With three failing, seven would carry 750 with 700: 750 ÷ 700 ≈ 107%, and the cascade starts. A 10% cap ejects only one;
 the other keeps receiving traffic, and because it fails fast it attracts more than its share, so
 the error rate is higher than 10% while the deploy lasts, but there is no cascade.
 
