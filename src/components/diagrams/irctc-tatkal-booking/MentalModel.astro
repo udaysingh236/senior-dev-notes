@@ -1,0 +1,84 @@
+---
+// Part 1 mental model: a berth is a row of stretches between stops, each sold or free. Two
+// requests want the same free stretches at the same moment; the database checks and takes them
+// in one step, one request at a time, so exactly one of them gets the berth.
+const box = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+const ST = ['NDLS', 'MTJ', 'AGC', 'GWL', 'VGLJ', 'BPL', 'ET', 'NGP'];
+const X0 = 30;
+const W = 50;
+const sold = [1, 1, 0, 0, 0, 1, 1];
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="tk-mm-t tk-mm-d">
+  <title id="tk-mm-t">One berth, sold stretch by stretch, and two requests for the same free stretches</title>
+  <desc id="tk-mm-d">
+    Berth 23 in coach B2 on a route of eight stops from New Delhi to Nagpur. Between the stops are
+    seven stretches. The first two stretches, New Delhi to Agra, are sold, the middle three, Agra
+    to Bhopal, are free, and the last two, Bhopal to Nagpur, are sold. Ravi and Meera both ask for
+    Agra to Bhopal at the same moment. The database handles the two requests one at a time: take
+    those three stretches only if they are still free. Ravi's request goes first and gets berth 23.
+    Meera's finds them already taken and tries the next berth, 31.
+  </desc>
+  <defs>
+    <marker id="tk-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="18" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">berth 23, coach B2: one mark per stretch</text>
+
+  <g font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">
+    {ST.map((s, i) => <text x={X0 + i * W} y="52">{s}</text>)}
+  </g>
+  {ST.map((_, i) => <line x1={X0 + i * W} y1="58" x2={X0 + i * W} y2="104" stroke-width="1" style="stroke: var(--viz-stroke)" />)}
+  {
+    sold.map((b, i) => (
+      <g>
+        <rect
+          x={X0 + i * W + 3}
+          y="64"
+          width={W - 6}
+          height="34"
+          rx="4"
+          stroke-width="1.5"
+          style={b ? 'fill: var(--viz-store-soft); stroke: var(--viz-store)' : 'fill: none; stroke: var(--viz-stroke)'}
+        />
+        <text x={X0 + i * W + W / 2} y="86" font-size="15" text-anchor="middle" style={b ? 'fill: var(--viz-ink)' : 'fill: var(--viz-muted)'}>
+          {b ? 'sold' : 'free'}
+        </text>
+      </g>
+    ))
+  }
+  <path d="M133 112 v8 H277 v-8" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <text x="205" y="142" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">AGC→BPL needs these 3: all free</text>
+
+  <rect {...box(4, 160, 186, 50)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="97" y="181" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Ravi</text>
+  <text x="97" y="200" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">AGC→BPL</text>
+  <rect {...box(210, 160, 186, 50)} rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="303" y="181" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Meera</text>
+  <text x="303" y="200" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">AGC→BPL, same moment</text>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tk-mm-a)">
+    <line x1="97" y1="211" x2="97" y2="238" />
+    <line x1="303" y1="211" x2="303" y2="238" />
+  </g>
+
+  <rect {...box(4, 242, 392, 62)} rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="200" y="266" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">database, one request at a time:</text>
+  <text x="200" y="290" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">take AGC→BPL only if still free</text>
+
+  <g stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tk-mm-a)">
+    <line x1="97" y1="305" x2="97" y2="332" />
+    <line x1="303" y1="305" x2="303" y2="332" />
+  </g>
+
+  <rect {...box(4, 336, 186, 62)} rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="97" y="360" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">first: taken ✓</text>
+  <text x="97" y="384" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">berth 23 is Ravi's</text>
+  <rect {...box(210, 336, 186, 62)} rx="6" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="303" y="360" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">second: not free</text>
+  <text x="303" y="384" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">Meera tries berth 31</text>
+
+  <text x="4" y="414" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">no stretch of a berth is ever sold twice</text>
+</svg>
