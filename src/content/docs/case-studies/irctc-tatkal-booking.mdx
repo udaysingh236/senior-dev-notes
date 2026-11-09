@@ -1,12 +1,12 @@
 ---
 title: How IRCTC Tatkal Booking Works
-description: How a train booking system stores berths that are sold station to station, what the database locks when thousands of Tatkal requests want the same coach, how a berth is chosen, how RAC and waitlist promotion really work, and where payments break.
-tagline: One berth, many journeys, thousands of requests in the same second. What does the database actually lock?
+description: How a train booking system sells each berth stretch by stretch along the route and never sells the same stretch twice, even when thousands of people book at 10 AM, explained from zero. Segments and bitmasks, transactions, row locks and races, then, in depth, four ways to write the booking transaction, choosing which berth, RAC and waitlist promotion, the 10 AM rush and payments that fail halfway.
+tagline: How a train booking system keeps track of every berth along the route, and makes sure two people who book in the same second never get the same berth.
 difficulty: intermediate
 track: case-studies
 prerequisites: [acid-and-isolation-levels, optimistic-vs-pessimistic-locking, idempotency-keys]
 next: [race-conditions, deadlocks, partitioning-and-sharding, payment-system, hot-keys]
-lastReviewed: 2026-10-22
+lastReviewed: 2026-11-09
 sidebar:
   order: 9
 ---
@@ -14,6 +14,7 @@ sidebar:
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/irctc-tatkal-booking/MentalModel.astro';
 import Architecture from '../../../components/diagrams/irctc-tatkal-booking/Architecture.astro';
 import TwoTransactions from '../../../components/diagrams/irctc-tatkal-booking/TwoTransactions.astro';
 import SegmentMask from '../../../components/diagrams/irctc-tatkal-booking/SegmentMask.astro';
@@ -25,97 +26,345 @@ import TatkalRushSim from '../../../components/sims/irctc-tatkal-booking/TatkalR
 
 ## The question
 
-Berth 23 in coach B2 is already sold from New Delhi to Agra, and again from Bhopal to Nagpur. At
-10:00:00.3 three requests arrive in the same millisecond: Agra to Bhopal, Mathura to Gwalior, and
-New Delhi to Nagpur. Which of them can have berth 23? How does the database answer that for 1,300
-berths in microseconds? And when two of those requests both decide berth 23 is free, what exactly
-is locked so that only one of them gets it?
+At 10:00 in the morning, Tatkal booking opens for AC classes on tomorrow's trains, and on a popular
+train thousands of people press "Book" in the same second for a few hundred berths. Yet the same
+berth is never given to two people. Stranger still, one berth can carry three different passengers
+on one trip: New Delhi to Agra, then Agra to Bhopal, then Bhopal to Nagpur. How does the system keep
+track of that, and who gets the berth when two people ask for it at exactly the same moment?
 
-A "seats left" counter cannot answer any of these questions. This page builds the system that
-can. IRCTC and CRIS do not publish the internals of the reservation system, so what follows is how
-we would build it, using the railways' published rules (quotas, Tatkal timings, RAC, charting)
-wherever they shape the design.
+The short answer: the system does not store a berth as one seat that is either sold or free. It
+splits the route into the stretches between stops and remembers, for every berth, which stretches
+are sold. To book, a server asks the database: "mark these stretches of this berth as sold, but only
+if they are still free". The database handles requests for one berth one at a time, so when two
+people want the same stretches, the first gets them and the second is told to try another berth.
+The waitlist, the payments and the 10 AM rush all build on those two ideas.
+
+## How it works, in plain words
+
+Follow one passenger, Ravi. He wants a Tatkal berth in the 3A class (three-tier AC) on tomorrow's
+train, from Agra Cantt to Bhopal. To keep the numbers small, we give the route eight stops; real
+long-distance trains have more. With the railways' station codes, the stops are New Delhi (NDLS),
+Mathura (MTJ), Agra Cantt (AGC), Gwalior (GWL), Jhansi (VGLJ), Bhopal (BPL), Itarsi (ET) and
+Nagpur (NGP).
+
+1. **Tatkal is a quota.** A **quota** is a share of a train's berths set aside for one kind of
+   booking. The Tatkal quota is sold only from the day before the journey: from 10:00 for AC
+   classes and 11:00 for the others. Say 16 berths in each 3A coach are Tatkal quota (an
+   illustrative number; each train has its own). Ravi can only get one of those.
+2. **The route is cut into stretches.** Eight stops have seven stretches between them:
+   NDLS→MTJ, MTJ→AGC, AGC→GWL, GWL→VGLJ, VGLJ→BPL, BPL→ET and ET→NGP. Ravi's journey covers three
+   of them: AGC→GWL, GWL→VGLJ and VGLJ→BPL.
+3. **Each berth remembers its stretches.** Berth 23 in coach B2 is a Tatkal berth that is already
+   sold twice: to someone travelling NDLS→AGC (the first two stretches) and to someone travelling
+   BPL→NGP (the last two). So the database stores berth 23 as seven marks in a row: sold, sold,
+   free, free, free, sold, sold.
+4. **Ravi presses "Book" at 10:00:00.3.** A booking server asks the database for a 3A Tatkal berth
+   whose three stretches from AGC to BPL are all free. Berth 23 qualifies: its three middle marks
+   are free. (A passenger going MTJ→GWL could not have berth 23, because the stretch MTJ→AGC is
+   sold.)
+5. **Meera presses "Book" in the same millisecond**, for the same journey, AGC to BPL. Her request
+   reaches a different booking server, which looks at the same berth and sees the same three free
+   stretches. If both servers now wrote "sold", berth 23 would carry two passengers from AGC to BPL.
+   This is the danger at the centre of the whole system.
+6. **So the check and the take are one step.** Neither server checks in one step and writes in
+   another. Each sends the database one instruction: "mark AGC→BPL as sold on berth 23, but only if
+   those three stretches are still free". The database never applies two changes to the same row at
+   the same time. It applies Ravi's first: the stretches were free, so they become sold. Then it
+   applies Meera's: the stretches are now sold, so it changes nothing and reports "0 rows changed".
+7. **Meera's server tries again.** It picks the next berth that fits, berth 31, sends the same kind
+   of instruction for berth 31, and this time gets "1 row changed". Both of them have a berth, and
+   the whole exchange took a few milliseconds.
+8. **The berth is held, not yet sold.** Berth 23 is set aside for Ravi for 15 minutes
+   (an illustrative limit) while he pays. If the payment arrives in time, the hold becomes a
+   ticket. If not, a cleanup job marks the three stretches free again for the next person.
+9. **When no berth fits**, the booking still goes through, as RAC (half a berth, shared) or on
+   the waitlist. When someone cancels, the stretches they free go to waitlisted passengers whose
+   journeys fit inside those stretches, which is why waitlist number 4 sometimes confirms before
+   number 1.
+
+<Figure caption="Berth 23 is stored as one mark per stretch of the route. Ravi and Meera both want the three free stretches from Agra Cantt to Bhopal at the same moment. The database checks and takes them in one step, one request at a time, so Ravi gets berth 23 and Meera is sent to the next berth.">
+  <MentalModel />
+</Figure>
+
+That answers both halves of the question. One berth can carry several passengers because what is
+sold is a stretch, not a berth. And two people never get the same stretch because "is it free?" and
+"take it" happen as one step inside the database, for one request at a time on each berth.
+
+Why is 10:00 hard, then? Not because of the total number of bookings. IRCTC, the Indian
+Railways' online ticketing company, had its busiest minute so far on 16 August 2025, when 37,410
+tickets were booked. A minute has 60 seconds, so that is 37,410 ÷ 60 = about 620 tickets a
+second, across every train in India, and one database server can write that many rows. The hard
+part is that at 10:00:00 almost all of the requests want the same few hundred berths on a handful
+of popular trains, so they all queue up for the same rows. Part 2 shows how a system can survive
+that: let people in at the rate the database can serve them, and keep the time each request spends
+on a berth's row very short.
+
+An everyday picture: a booking clerk with a paper chart, one line per berth, and a pencil mark for
+each sold stretch. Two clerks working from two copies of the chart would sell the same berth to two
+people; one chart that only one clerk can write on at a time cannot. The picture stops working in
+one place: the database is not one clerk for the whole train. It is one clerk per berth row, all
+working at once, so thousands of bookings for different berths go through in parallel.
+
+## The building blocks
+
+Six ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A segment
+
+**What it is.** A **segment** is the stretch of the route between two stops that come one after
+the other.
+
+**Why it exists.** A berth is sold per segment, not per train. Whether a berth is free depends on
+which segments your journey covers, so the system has to count in segments.
+
+**Example.** Our route has 8 stops, so it has 7 segments. Programmers usually number things from
+0, so the stops are 0 (NDLS) to 7 (NGP) and the segments are 0 (NDLS→MTJ) to 6 (ET→NGP). Ravi
+travels from stop 2 (AGC) to stop 5 (BPL). He uses segments 2, 3 and 4: that is 5 − 2 = 3
+segments, ending one before his last stop's number.
+
+**The technical version.** A route with N stops has N − 1 segments. A journey from stop *a* to stop
+*b* occupies segments *a* up to *b* − 1. Two journeys on the same berth clash exactly when they
+share at least one segment.
+
+### Bits and a bitmask
+
+**What it is.** A **bit** is a single 0 or 1. A **bitmask** is a row of bits used as on/off
+switches, one switch per thing you track.
+
+**Why it exists.** For every berth we need seven sold/free marks, and we need to compare a journey
+with a berth very quickly, millions of times a minute. A row of bits is the smallest way to store
+the marks, and a computer can compare two rows of bits in a single step.
+
+**Example.** Write 1 for sold and 0 for free, segment 0 first. Berth 23 is `1100011`. Ravi's
+journey needs segments 2, 3 and 4, so it is `0011100`. Line them up and look for a position where
+both rows have a 1:
+
+```text
+berth 23   1 1 0 0 0 1 1
+Ravi       0 0 1 1 1 0 0
+both 1?    0 0 0 0 0 0 0   no position is 1 in both: the berth fits
+```
+
+After Ravi's booking, berth 23 becomes `1111111`: sold on every segment.
+
+**The technical version.** A computer stores a whole number as a row of bits, so a bitmask is kept
+as an ordinary integer. "Is there a position where both are 1?" is the **bitwise AND** operation,
+written `&`. Part 2 shows how the integer is built and the other operations we need.
+
+### A transaction
+
+**What it is.** A **transaction** is a group of database changes that either all happen or none
+happen.
+
+**Why it exists.** A booking makes more than one change: it marks the berth's segments as sold, and
+it adds a row for the passenger. If the server crashed between the two, the berth would be marked
+sold with no passenger on it, and nobody could ever use those segments.
+
+**Example.** Ravi's booking runs as:
+
+```sql
+BEGIN;
+UPDATE berth SET ... WHERE coach = 'B2' AND berth_no = 23;   -- mark segments 2-4 sold
+INSERT INTO booking (...) VALUES (...);                        -- Ravi's passenger row
+COMMIT;
+```
+
+If the server dies after the `UPDATE`, the database never sees `COMMIT` and throws the half-done
+change away. That is called a **rollback**.
+
+**The technical version.** This all-or-nothing property is the "A" (atomicity) in **ACID**, the
+four guarantees transactional databases give. A transaction does not, by itself, stop another
+transaction from reading and changing the same row at the same time. The next two blocks are about
+that.
+
+### A race, and a lost update
+
+**What it is.** A **race** is a bug where the result depends on the exact timing of two requests
+running at the same time.
+
+**Why it matters here.** At 10:00:00, requests for the same berth arrive within the same
+millisecond. A bug that needs two requests at once never shows up in testing and shows up every
+Tatkal morning.
+
+**Example.** Suppose each booking server did "read, then decide, then write" in separate steps:
+
+| Time | Ravi's server | Meera's server |
+|---|---|---|
+| 10:00:00.301 | reads berth 23: AGC→BPL free | |
+| 10:00:00.302 | | reads berth 23: AGC→BPL free |
+| 10:00:00.315 | writes "sold", adds Ravi | |
+| 10:00:00.318 | | writes "sold", adds Meera |
+
+Both writes succeed. Berth 23 now has two passengers from AGC to BPL, and no error appeared anywhere.
+
+**The technical version.** This pattern is a **lost update**: two transactions each read a value,
+compute a change from what they read, and write it back, so the second write is based on a value
+that was already out of date. The database sees two valid writes and has no way to know anything
+went wrong.
+
+### A row lock
+
+**What it is.** A **row lock** is a mark the database puts on a row for one transaction, so that
+any other transaction that wants to change that row waits until the first one finishes.
+
+**Why it exists.** It turns "at the same time" into "one after the other" for each row, which is
+what stops a lost update.
+
+**Example.** Ravi's instruction "mark AGC→BPL sold on berth 23 if still free" locks berth 23's row
+at 10:00:00.315. Meera's identical instruction arrives at .316 and waits. Ravi's transaction commits
+at .317 and the lock is released. Meera's instruction now runs, reads the row as it is after Ravi's
+change, finds the segments sold, and changes 0 rows. Meera waited one millisecond.
+
+**The technical version.** An `UPDATE` takes the lock automatically on every row it changes.
+`SELECT ... FOR UPDATE` takes the same lock while reading. A lock is held until the transaction
+commits or rolls back. A plain `SELECT` takes no lock and waits for nobody: in PostgreSQL and MySQL,
+reading never waits for writing, and writing never waits for reading.
+
+### A hold
+
+**What it is.** A **hold** is a booking saved with the status "held" and an expiry time.
+
+**Why it exists.** Paying takes minutes. If the booking kept berth 23's row locked while Ravi
+typed his UPI PIN (UPI is India's instant bank-to-bank payment system), every other request that
+touched that row would wait for minutes. A hold sets the segments aside as ordinary data, so the
+lock can be released in milliseconds.
+
+**Example.** At 10:00:00.317 Ravi's transaction commits: berth 23's segments are marked sold, and
+his booking row says `HELD`, expires at 10:15:00. He pays at 10:03, and the row becomes
+`CONFIRMED`. If he had closed the app instead, a cleanup job would have seen the expired hold
+after 10:15 and marked segments 2 to 4 free again, in a new transaction.
+
+**The technical version.** Locks last milliseconds and belong to the database; holds last minutes
+and belong to your application, as a status column and an `expires_at` column. Part 2 shows what
+happens when a payment arrives after its hold expired.
+
+:::tip[If you stop here]
+- A berth is sold per **segment**, the stretch between two stops, so one berth can carry several
+  passengers on one trip.
+- Each berth stores one sold/free bit per segment. A journey fits a berth when none of its segments
+  is already sold on it.
+- Two requests at the same moment can both see a berth as free. The fix is to make "check it is
+  free" and "mark it sold" one instruction, which the database runs for one request at a time on
+  each row; the loser gets "0 rows changed" and tries another berth.
+- The berth is then **held** for a few minutes while the passenger pays, as data with an expiry, not
+  as a lock.
+- At 10 AM the problem is not the total number of bookings but thousands of them wanting the same
+  few hundred rows at once.
+:::
+
+## Going deeper
+
+Part 1 used one berth and two requests. Here is the real version of the question. Berth 23 is sold
+NDLS→AGC and BPL→NGP. At 10:00:00.3 three requests arrive in the same millisecond: AGC→BPL, MTJ→GWL
+and NDLS→NGP. How does the database decide which of them fits, for 1,300 berths, in a few
+microseconds? When two requests both decide berth 23 is free, what exactly is locked, for how long,
+and what happens to the loser? And the trick that removes waiting on locks turns out to waste the
+most berths. Why?
+
+IRCTC and CRIS (the railways' IT organisation that builds the reservation system) do not publish its
+internals. What follows is how we would build a system like it, using the railways' published
+rules (quotas, Tatkal timings, RAC, charting) wherever they shape the design.
 
 ## What the system has to do, in numbers
+
+Two words in the table need a line each. A **PNR** (passenger name record) is one booking: one
+ticket number that can carry several passengers. A **lakh** is the Indian word for 100,000, so 1.5
+lakh is 150,000.
 
 | Quantity | Value |
 |---|---|
 | Peak tickets booked in one minute | 37,410, on 16 August 2025 ([IANS, June 2026](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101)) |
-| That peak per second, across all trains | about 620 |
-| Tatkal opens | 10:00 for AC classes, 11:00 for non-AC, one day before the journey ([Business Today](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html)) |
+| That peak per second, across all trains | 37,410 ÷ 60 seconds = about 620 |
+| Tatkal opens | 10:00 for AC classes, 11:00 for non-AC, one day before the journey ([All India Radio, June 2025](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1)) |
 | Passengers per Tatkal PNR | at most 4 |
-| Berths on one long-distance train | about 1,300 (illustrative: 22 coaches of 64–72) |
-| Stops on one route | 10 to 60, so 9 to 59 segments |
-| Requests per ticket at the peak | 10 to 20 (illustrative: search, availability, passengers, payment, retries) |
+| Berths on one long-distance train | about 1,300 (illustrative: 18 sleeping coaches × about 72 berths = 1,296) |
+| Stops on one route | 10 to 60, so 9 to 59 segments (one fewer than the stops) |
+| Requests per ticket at the peak | 10 to 20 (illustrative: search, availability, passenger details, payment, retries) |
+| Requests per second at the peak | 620 tickets × 10 to 20 requests = about 6,200 to 12,400 (illustrative) |
 
-620 bookings a second sounds small, and it is: the write rate is not the problem. Two other
+About 620 bookings a second is small for a database. The write rate is not the problem. Two other
 things are:
 
 1. **The writes are not spread out.** In the first seconds after 10:00 almost every write goes to
-   a handful of popular trains, and within each train to one class and one quota. The contention
-   is on a few hundred rows, not on the database.
-2. **A berth is not one unit of stock.** It is sold per **segment**, the stretch between two
-   consecutive stops. A berth can carry three passengers on one trip, one after another. Every
-   question about availability, locking, allocation and the waitlist has to be asked per segment.
+   a handful of popular trains, and within each train to one class and one quota. Many requests
+   wanting the same rows at the same moment is called **contention**, and here it is concentrated
+   on a few hundred rows, not spread across the database.
+2. **A berth is not one unit of stock.** It is sold per segment, so every question about
+   availability, locking, choosing a berth and the waitlist has to be asked per segment.
 
-The hard requirements, in priority order: no segment of a berth sold twice; every payment ends in
-a ticket or a refund; and the booking rate stays at its maximum during the worst minute, rather
-than collapsing.
+The hard requirements, in priority order: no segment of a berth is sold twice; every payment ends
+in a ticket or a refund; and the booking rate stays at its maximum during the worst minute, instead
+of collapsing.
 
 ## The big picture
 
-<Figure caption="Reads and writes take different paths. Availability is served from snapshots a few seconds old; every booking for one train and date goes to the one shard that owns it, which counters write to as well.">
+Before the figure, one idea it depends on. When data is too big or too busy for one server, it is
+split into **shards**: slices of the data, each living on its own server. The field that decides
+which shard a row belongs to is the **partition key**. For example, if the partition key is "train
++ date", every row for train 12627 on 24 October lives on one shard, and every row for train 12628
+on that date may live on another. A booking only ever touches one train on one date, so with this
+key every row a booking needs is on one server, and no booking ever has to lock rows on two
+servers at once.
+
+<Figure caption="Reads and writes take different paths. Searches read availability from copies a few seconds old; every booking for one train and date goes to the one shard that owns it, which station counters write to as well.">
   <Architecture />
 </Figure>
 
-Three decisions shape everything below:
+Reading the figure box by box:
 
-- **The unit of ownership is train + date.** All berths, quotas and waitlists for train 12627 on
-  24 October live together, and nothing in a booking ever touches two trains. When data is too
-  big or too busy for one server, it is split into **shards**, slices that each live on one
-  server, and the **partition key** is the field that decides which shard a row belongs to.
-  Train + date is the natural partition key here: every row a booking touches is in the same
-  shard, so a booking never needs a lock that spans two servers.
-- **Reads are separated from writes.** "Available 43" on the search page is a cached count. If it
-  is two seconds stale, a booking fails and the user sees the new count; nothing is oversold,
+- **Web and app users, and counters.** Station booking counters and phones compete for the same
+  berths. There is no separate web quota to hide behind.
+- **Edge: bot checks, waiting room.** The **edge** is the layer of servers that every request hits
+  first, before any of our own code. It filters out automated booking scripts (bots) and runs a
+  **waiting room**, which lets users in at the rate the system behind it can serve.
+- **Booking servers.** Many identical servers that run the booking logic. They are **stateless**:
+  they keep no data of their own between requests, so any server can handle any request, and
+  adding servers adds capacity.
+- **Read model.** A **cache** of availability: a copy of data kept where it can be served
+  quickly, without asking the source every time. Searches read "43 left" from it, and it is a few
+  seconds old. If the
+  count is two seconds stale, a booking fails and the user sees the new count. Nothing is oversold,
   because only the shard decides.
-- **Counters and the website share one inventory.** A station counter clerk and a phone at
-  10:00:00 compete for the same rows. There is no separate web quota to hide behind.
+- **Inventory shard.** The one place that holds, for its train-dates, the berth bitmasks, the quotas
+  and the waitlist, and the only place that decides who gets a berth.
+- **Payment gateway.** The outside service that talks to banks, UPI and card networks.
+- **Charting job.** A job that freezes the shard into the final passenger list hours before
+  departure.
 
-The rest of the page is the inside of that inventory shard.
+The rest of the page is mostly the inside of the inventory shard.
 
 ## The hard parts
 
 ### One berth, many journeys: the inventory model
 
-Number the stops on the route 0 to N−1. Segment *i* is the stretch from stop *i* to stop *i*+1, so
-a route of 8 stops has 7 segments. A journey from stop *a* to stop *b* occupies segments *a* to
-*b*−1: New Delhi (stop 0) to Agra (stop 2) occupies segments 0 and 1. For each berth we need to
-remember which of the 7 segments are sold, and to answer "are segments 2, 3 and 4 all free on this
-berth?" millions of times a minute. The tool for that is a bitmask, which needs a short detour.
+Part 1 wrote a berth as `1100011`. This section shows how that becomes a number in a database row,
+and how one instruction answers "does this journey fit?".
 
-**Bits and masks.** A **bit** is one 0 or 1. A computer stores an integer as a row of bits, each
-worth a power of two: bit 0 is worth 1, bit 1 is worth 2, bit 2 is worth 4, and so on, and the
-integer is the sum of the bits that are 1. So 99 = 64 + 32 + 2 + 1, which is bits 0, 1, 5 and 6.
-Using an integer as a **bitmask** means ignoring its value as a number and reading it as a row of
-on/off switches, one per thing you track. Here, one switch per segment: 1 is sold, 0 is free. On
-this page masks are written with segment 0 on the left, the reverse of how binary is usually
-printed, so that they line up with the route on a map: `1100011` means segments 0, 1, 5 and 6 are
-sold, and it is stored as the integer 99.
+**How an integer holds bits.** A computer stores a whole number as a row of bits, and each position
+is worth a power of two: bit 0 is worth 1, bit 1 is worth 2, bit 2 is worth 4, bit 3 is worth 8, and
+so on, each double the one before. The number is the sum of the positions that are 1. Berth 23 has
+segments 0, 1, 5 and 6 sold, so it is stored as 1 + 2 + 32 + 64 = 99.
 
-Three operations work on every switch of two masks at once, in a single CPU instruction, and SQL
-databases support them on integers too:
+On this page masks are written with segment 0 on the left, so that they line up with the route on a
+map. That is the reverse of how binary numbers are usually printed (largest position on the left);
+only the writing is reversed, not the number.
+
+**Three operations on masks.** Each one works on every position of two masks at once, in a single
+CPU instruction, and SQL databases support them on integers too:
 
 | Operation | Rule at each position | What we use it for | Example (segment 0 first) |
 |---|---|---|---|
 | AND, `&` | 1 only where both are 1 | Do two sets of segments overlap? Zero means no | `1100011 & 0011100 = 0000000` |
 | OR, `\|` | 1 where either is 1 | Mark a journey's segments as sold | `1100011 \| 0011100 = 1111111` |
-| AND NOT, `& ~` | Clear the right-hand switches | Free a cancelled journey's segments | `1111111 & ~0011100 = 1100011` |
+| AND NOT, `& ~` | Clear the positions that are 1 on the right | Free a cancelled journey's segments | `1111111 & ~0011100 = 1100011` |
 
-One more operation builds masks: a **shift**, `x << k`, slides every switch k positions toward the
-higher segments, so `1 << 3` is a single 1 at segment 3.
+One more operation builds masks: a **shift**, written `x << k`, slides every bit k positions toward
+the higher segments. So `1 << 3` is a single 1 at segment 3.
 
-Now the data model. Store each berth's occupancy as one bitmask:
+**The table.** Store each berth's occupancy as one integer column. A `BIGINT` is a 64-bit integer,
+so it has room for 64 segments. (A **byte** is 8 bits, so a 64-bit integer takes 64 ÷ 8 = 8
+bytes; a KB, kilobyte, is about a thousand bytes, and a GB about a million KB.)
 
 ```sql
 CREATE TABLE berth (
@@ -129,26 +378,42 @@ CREATE TABLE berth (
 );
 ```
 
-A journey from stop *a* to stop *b* needs the mask `need = ((1 << (b − a)) − 1) << a`. Read it
-inside out, for Agra (stop 2) to Bhopal (stop 5), which is 3 segments:
+The `kind` codes are the berth positions: lower, middle, upper, side lower, side upper. The `quota`
+codes are general (GN), Tatkal (TQ), pooled (PQ) and ladies (LD).
+
+**Building a journey's mask.** Ravi travels from stop 2 (AGC) to stop 5 (BPL), which is 5 − 2 = 3
+segments. We need three 1s, starting at segment 2. Three steps get there:
 
 | Step | Value | Mask (segment 0 first) | Meaning |
 |---|---|---|---|
-| `1 << 3` | 8 | `0001000` | a single 1, three places up |
-| `− 1` | 7 | `1110000` | subtracting 1 turns it into three 1s at the bottom |
-| `<< 2` | 28 | `0011100` | slide them up to start at Agra: segments 2, 3 and 4 |
+| `1 << 3` | 8 | `0001000` | a single 1 at position 3 (3 = the number of segments) |
+| `− 1` | 7 | `1110000` | 8 − 1 = 7 = 1 + 2 + 4: three 1s at the bottom |
+| `<< 2` | 28 | `0011100` | slide them up to start at position 2 (AGC): segments 2, 3 and 4 |
 
-The berth can take the journey exactly when `mask & need = 0` (no segment both sold and wanted);
-booking it is `mask = mask | need`; cancelling it is `mask = mask & ~need`.
+As a formula, for a journey from stop *a* to stop *b*: `need = ((1 << (b − a)) − 1) << a`.
 
-<Figure caption="Berth 23 is sold New Delhi–Agra and Bhopal–Nagpur. Agra–Bhopal ANDs to zero and fits; Mathura–Gwalior collides on one segment. One AND instruction answers 'is this berth free for this journey'.">
+With that, the three questions every booking asks are three one-line operations:
+
+- the berth fits when `mask & need = 0` (no segment both sold and wanted);
+- booking it is `mask = mask | need`;
+- cancelling it is `mask = mask & ~need`.
+
+Here are two of the three requests from the opening question, on berth 23:
+
+<Figure caption="Berth 23 is sold NDLS–AGC and BPL–NGP. AGC–BPL ANDs to zero and fits; MTJ–GWL collides on one segment. One AND instruction answers 'is this berth free for this journey'.">
   <SegmentMask />
 </Figure>
 
-Why not counters? Because availability depends on the journey. With 40 stops there are 780 station
-pairs, and one booking from stop 3 to stop 9 changes the count for every pair that overlaps it,
-which is hundreds of counters updated in one transaction, all of them hot. With bitmasks, nothing
-is stored but the masks. Availability for a journey is computed:
+The third request, NDLS→NGP, needs all seven segments, `1111111`, and ANDs to `1100011` with berth
+23: four clashes, so it needs a berth that is empty for the whole route.
+
+**Why not keep a "seats left" counter per journey?** Because availability depends on the journey.
+With 40 stops, the number of different journeys is the number of ways to pick a start and a later
+end: 40 choices of start × 39 choices of end = 1,560, halved because the end must come after the
+start, which gives 780. One booking from stop 3 to stop 9 changes the count for every journey that
+overlaps segments 3 to 8, which is hundreds of counters updated in one transaction, all of them
+contended. With bitmasks, nothing is stored but the masks, and availability for a journey is
+computed when someone asks:
 
 ```sql
 SELECT count(*) FROM berth
@@ -156,18 +421,19 @@ WHERE train_date = $1 AND coach LIKE 'B%' AND quota = 'TQ'
   AND mask & $need = 0;
 ```
 
-That is a scan of a few hundred integers, a few microseconds of CPU, and it is what the read model
-caches per popular journey. A 64-bit integer covers routes with up to 65 stops; longer routes use
-two words or a bit string type (PostgreSQL's `bit varying` supports `&` and `|`). Only stops where
-the train actually halts get an index.
+That scans a few hundred integers (one per Tatkal 3A berth on the train). Comparing one integer
+takes a few nanoseconds (billionths of a second), so the scan takes a few **microseconds**: a
+microsecond (µs) is a millionth of a second, and 1,000 µs make 1 ms. This is what the read model
+caches for popular journeys.
 
-**Quotas are a property of the berth, with a segment range.** The railways earmark berths per
-quota and per station: general quota for journeys from the origin, Tatkal, ladies, and
-**pooled** and **remote location** quotas that are kept for passengers boarding at particular
-intermediate stations, with the distribution decided by the zonal railway for each train
-([Lok Sabha answer, 2010](https://eparlib.nic.in/bitstream/123456789/581602/1/86072.pdf)). In this
-model, a pooled-quota berth is a berth whose quota tag is `PQ` and whose sellable range is limited
-to certain stations. It is still one mask; the rule only filters which journeys may look at it.
+A 64-bit mask covers 64 segments, which is a route of 64 + 1 = 65 stops. Longer routes use two
+integers, or a bit-string column type (PostgreSQL's `bit varying` supports `&` and `|`). Only stops
+where the train actually halts get a segment number.
+
+**Quotas are a property of the berth.** Each berth carries a quota tag, and the quota decides which
+requests may look at it: a Tatkal request scans only `TQ` berths. Some quotas are kept for
+passengers who board or leave at particular stations along the route. In this model such a berth is
+still one mask; its quota rule only filters which journeys may use it.
 
 Now watch the model work. Eight berths, seven segments, short journeys first and end-to-end ones
 after:
@@ -176,43 +442,43 @@ after:
 
 The grid shows the property that makes rail inventory harder than airline inventory: **free
 capacity is not the same as sellable capacity**. Ten free cells scattered across eight berths sell
-nothing to a passenger who needs one berth for all seven segments. A passenger cannot change
-berths at Gwalior, so the question is never "is every segment available somewhere" but "is one
-berth free across the whole range". How the system chooses berths therefore decides how much of
-the train it can actually sell. We come back to that after the locks, because the two problems
-pull in opposite directions.
+nothing to a passenger who needs one berth for all seven segments. A passenger cannot change berths
+at Gwalior, so the question is never "is every segment available somewhere" but "is one berth free
+for the whole journey". How the system chooses berths therefore decides how much of the train it can
+actually sell. We come back to that after the locks, because the two problems pull in opposite
+directions.
 
 ### What exactly gets locked
 
 Every correct booking does three things: find a berth whose mask fits, set the bits, insert the
-passenger rows. The question is how to stop two transactions from both finding the same berth
-free. That needs three database ideas, which the separate page on locking covers in depth and which
-are worth having straight before the strategies.
+passenger rows. Part 1 showed the race this invites and the row lock that puts the two requests in order. Here are
+the precise rules, then four ways to write the transaction.
 
-**A transaction** groups statements so that they all commit or none do. It does not, by itself,
-stop other transactions from changing what you read. At the default isolation level of PostgreSQL
-(**read committed**), every statement sees the data committed at the moment it starts, so between
-your `SELECT` and your `UPDATE` another transaction can commit a change to the same row, and your
-`UPDATE` will not notice unless you make it check.
+**Isolation levels.** An **isolation level** is a database setting that decides how much one
+transaction sees of other transactions' changes while it runs. It exists because seeing less is
+safer but makes transactions wait or fail more often, so databases let you choose. PostgreSQL's
+default is **read committed**: every statement sees the data that was committed at the moment that
+statement started. So between your `SELECT` at 10:00:00.301 and your `UPDATE` at .315, another
+transaction can commit a change to berth 23, and your `UPDATE` will not notice unless the
+`UPDATE` itself checks. MySQL's default is **repeatable read**, where a plain `SELECT` keeps seeing
+the data as it was at the transaction's first read, even after others commit. For this race it
+behaves the same way, because the naive write never re-checks anything.
 
-**A row lock** is a mark the database puts on a row on behalf of one transaction, held until that
-transaction commits or rolls back. An `UPDATE` takes it automatically on every row it changes.
-`SELECT ... FOR UPDATE` takes the same lock while reading. Any other transaction that tries to
-update or lock that row **waits** until the lock is released. A plain `SELECT` takes no lock and
-waits for nobody: in PostgreSQL and MySQL InnoDB, readers never block writers and writers never
-block readers.
+**Two bets: pessimistic and optimistic.** Built from row locks, there are two ways to stop the lost
+update, and each is a bet about how often collisions happen:
 
-**Pessimistic and optimistic locking** are two bets about collisions, built from those pieces:
-
-- **Pessimistic** bets that a collision is likely, so it locks the row *before* reading the value it
-  will decide on (`SELECT ... FOR UPDATE`). The second transaction queues behind the first and,
-  when its turn comes, reads the new value. Nobody ever decides on stale data; the price is
-  waiting.
-- **Optimistic** bets that a collision is rare, so it reads without a lock and checks at write time
-  that nothing it depended on has changed. The classic check is a **version column**:
+- **Pessimistic** locking bets a collision is likely, so it locks the row *before* reading the value
+  it will decide on (`SELECT ... FOR UPDATE`). The second transaction waits behind the first and,
+  when its turn comes, reads the new value. Nobody decides on stale data; the price is waiting.
+- **Optimistic** locking bets a collision is rare, so it reads without a lock and checks at write
+  time that nothing it depended on has changed. The classic check is a **version column**, a
+  number that goes up by one on every change. For example,
   `UPDATE berth SET mask = ..., version = 8 WHERE id = 23 AND version = 7` changes one row if the
   berth is still at version 7, and zero rows if someone else committed version 8 in between. Zero
   rows means "you lost; read again and retry". Nobody waits; the price is retries.
+
+Here are the same two transactions, Ravi's and Meera's, with no locking, with the pessimistic bet
+and with the optimistic one:
 
 <Figure caption="The same two transactions, three ways. Without locking, both read 'free' and both commit: a lost update. Pessimistic: the second waits for the lock and then sees the berth sold. Optimistic: both read, both try a conditional write, and the second learns from '0 rows' that it lost.">
   <TwoTransactions />
@@ -223,33 +489,32 @@ block readers.
 | Lock taken | Before reading, until commit | Only during the final `UPDATE`, until commit |
 | The loser | Waits, then reads the new value | Gets 0 rows, re-reads and retries |
 | Cheap when | Collisions are frequent and the work inside is short | Collisions are rare |
-| Hurts when | Work inside the lock is slow: the queue grows; multi-row locks can deadlock | Many requests want the same row: retries pile up and repeat work |
+| Hurts when | Work inside the lock is slow: the line of waiters grows; locking several rows can leave two transactions waiting for each other (a deadlock, below) | Many requests want the same row: retries pile up and repeat work |
 
 The booking problem sits in the awkward middle: at most times of day collisions are rare, and at
-10:00:00 thousands of transactions want the same few hundred rows. Keep that table in mind for the
-four strategies below.
+10:00:00 thousands of transactions want the same few hundred rows.
 
-**Wrong: read, work, write.** Read a fitting berth, compute the fare and build passenger rows, then
-write `mask = mask | need`. Under the default isolation level of PostgreSQL and MySQL (read
-committed and repeatable read), two transactions can read the same old mask, both decide berth 23
-fits, and both write. The second `OR` does not fail: it ORs the same bits again. The database has
-no idea anything went wrong; the only symptom is two passenger rows on one segment. This is a
-**lost update**, and it is invisible in testing because it needs two requests in the same few
-milliseconds, which is every Tatkal morning.
+**Wrong: read, work, write.** Read a fitting berth, compute the fare and build the passenger rows,
+then write `mask = mask | need`. This is the race from Part 1 in SQL. Under the defaults of both
+databases, two transactions read the same old mask, both decide berth 23 fits, and both write. The
+second `OR` does not fail: it sets the same bits again. The only symptom is two passenger rows on
+one segment.
 
-There are four correct ways to write the transaction. Here they are racing on the same burst:
+There are four correct ways to write the transaction. Here they are racing on the same burst of
+requests for one coach:
 
 <LockRaceSim />
 
 **1. Lock the coach (pessimistic).** `SELECT ... FROM berth WHERE coach = 'B2' FOR UPDATE` locks
-every row the query reads; the next transaction blocks until the first commits. Never oversells,
-and is the first thing most people write. Its cost is that the coach becomes a single-file queue:
-with 15 ms of work inside the transaction, the 12th request waits about 165 ms before it even
-starts, and at Tatkal volume the queue grows faster than it drains. The lock scope is the whole coach for a decision
-that touches one row.
+every row the query reads, so the next transaction waits until the first commits. It never
+oversells, and it is the first thing most people write. Its cost is that the coach becomes a
+single-file line. With 15 ms of work inside each transaction, the 12th request has 11 requests
+ahead of it, so it waits 11 × 15 ms = 165 ms before it even starts. At Tatkal volume, requests join
+the line faster than it empties. The lock covers the whole coach for a decision that touches one
+row.
 
-**2. Conditional update (optimistic).** Do the slow work first, then make the check and the take one
-statement:
+**2. Conditional update (optimistic).** Do the slow work first, then make the check and the take
+one statement. This is the instruction from Part 1, step 6:
 
 ```sql
 UPDATE berth SET mask = mask | $need
@@ -258,22 +523,26 @@ WHERE train_date = $1 AND coach = $2 AND berth_no = $3
 ```
 
 This is optimistic locking with a better check than a version column. A version column fails the
-write whenever *anything* on the berth changed, including a booking of different segments, Mathura
-to Agra, that does not touch ours at all. The condition `mask & $need = 0` fails only if one of
-*our* segments was taken in between, so unrelated bookings on the same berth never cause a retry.
-It is safe under read committed
-for a reason worth knowing: in PostgreSQL, when an `UPDATE` finds that the row was changed by a
-transaction that committed after its snapshot, it re-evaluates the `WHERE` clause against the new
-version of the row before updating it; in MySQL InnoDB, `UPDATE` always reads the latest committed
-row version and locks it. Either way, the second transaction sees the new mask, the condition is
-false, and it updates zero rows. Under PostgreSQL's repeatable read the same race raises a
-serialization failure (SQLSTATE `40001`) instead, which your code must catch and retry. The row lock
-is held only from the `UPDATE` to `COMMIT`, which is microseconds if nothing slow happens in
-between. The cost shows in the sim: everyone's first choice is the same "best" berth, so the losers
-retry, and retries grow with the number of concurrent requests for the same journey.
+write whenever *anything* on the berth changed, including a booking of MTJ→AGC, which does not touch
+Ravi's segments at all. The condition `mask & $need = 0` fails only if one of *Ravi's* segments was
+taken in between, so unrelated bookings on the same berth never cause a retry.
 
-**3. `FOR UPDATE SKIP LOCKED` (pessimistic, without the queue).** Ask for a free berth and lock it,
-skipping rows other transactions have locked instead of waiting for them:
+Why is it safe at read committed, when the naive version was not? In PostgreSQL, when an `UPDATE`
+finds that another transaction has changed its row, or is in the middle of changing it, it waits for
+that transaction to finish, then re-checks the `WHERE` clause against the new version of the row
+before updating. In MySQL, an `UPDATE` always reads the latest committed version of the row and locks it. Either way,
+Meera's `UPDATE` sees Ravi's bits, the condition is false, and it updates zero rows.
+
+At PostgreSQL's repeatable read the same race ends differently: instead of re-checking, the database
+refuses with a **serialization failure**. SQL databases report errors as a five-character code
+called a SQLSTATE, and this one is `40001`. Your code must catch it and retry the transaction.
+
+The row lock is held only from the `UPDATE` to `COMMIT`, which is microseconds if nothing slow
+happens in between. The cost shows in the sim: everyone's first choice is the same "best" berth, so
+the losers retry, and retries grow with the number of requests for the same journey at once.
+
+**3. `FOR UPDATE SKIP LOCKED` (pessimistic, without the line).** Ask for a free berth and lock it,
+but skip rows that other transactions have locked instead of waiting for them:
 
 ```sql
 SELECT coach, berth_no FROM berth
@@ -283,95 +552,118 @@ LIMIT 1
 FOR UPDATE SKIP LOCKED;
 ```
 
-Twelve concurrent transactions get twelve different berths with no waiting and no retries; this
-is the pattern job queues use to hand out work. Two catches. When every fitting row is locked by
+Twelve transactions at once get twelve different berths, with no waiting and no retries; job queues
+use this pattern to hand out work. There are two catches. When every fitting row is locked by
 someone else, the query returns nothing, so a request can be told "sold out" while a berth it could
 have had is held by a transaction that is about to roll back. And the berth you get is "the first
 unlocked one", not the best one, which matters a lot in the next section.
 
-**4. A single writer per train-date (no locks at all).** Locks exist because many threads may
-change the same rows at once. Remove that and the locks go with it: route every write for one train
-and date to one thread that owns that shard's masks in memory, and let it process requests one at a
-time from a queue. No two decisions can interleave, so there is nothing to lock.
+**4. A single writer per train-date (no locks at all).** Locks exist because several threads may
+change the same rows at once. A **thread** is one sequence of instructions running inside a
+program; a server runs many threads at once so it can serve many requests together. Remove the
+"several" and the locks go with it: send every write for one train and date to one thread that owns
+that shard's masks in memory, and let it process requests one at a time from a **queue**, a line of waiting requests served in
+arrival order. No two
+decisions can overlap, so there is nothing to lock.
 
-Memory alone is lost in a crash, so before replying "booked", the thread appends the decision to a
-**durable log**: a file of decisions in order, from which the masks can be rebuilt by replaying it.
-"Durable" has a precise meaning. Writing to a file only puts the bytes in the operating system's
-memory; they reach the disk later. The system call `fsync` forces them onto the disk and waits until
-the disk confirms, which takes far longer than a mask scan. The arithmetic: an allocation is a scan
-of a few hundred integers, around a microsecond or two, so one thread could decide hundreds of
-thousands of bookings a second, and the whole train has 1,300 berths. The bottleneck is the fsync.
-The fix is **group commit**: collect every decision made in the last 2 ms, write them together, call
-fsync once, then reply to all of them. If 500 bookings arrive in those 2 ms, they cost one disk
-flush instead of 500, and each waits at most 2 ms longer. For failover, a standby server reads the
-same log and replays it, so it holds the same masks and can take over. This is the design we would choose
-for the shard in the architecture diagram, because the contention is naturally per train and this
-removes it rather than managing it.
+Memory is lost in a crash, so before replying "booked", the thread appends the decision to a
+**durable log**: a file of decisions in order, from which the masks can be rebuilt by replaying
+it. "Durable" has a precise meaning. Writing to a file only puts the bytes in the operating
+system's memory; they reach the disk later. The **system call** (a request from a program to the operating system) **`fsync`** forces them onto the disk
+and waits until the disk confirms, which takes far longer than a mask scan.
+
+So the thread's speed is set by the disk, not by the deciding. Deciding one booking is a scan of a
+few hundred integers, about 1 to 2 µs. A second has 1,000,000 µs, so even at the slower 2 µs one
+thread could decide 1,000,000 ÷ 2 = 500,000 bookings a second, while the whole train has only 1,300
+berths.
+
+Now add the disk. Say one fsync takes 0.5 ms (an illustrative figure; it depends on the disk). With
+one fsync per booking, a second of 1,000 ms allows at most 1,000 ÷ 0.5 = 2,000 bookings. That is
+500,000 ÷ 2,000 = 250 times fewer than the deciding alone allows.
+
+The fix is **group commit**: collect every decision made in the last 2 ms, write them together,
+call fsync once, then reply to all of them. If 500 bookings arrive in those 2 ms, they cost one
+disk flush instead of 500, and each waits at most 2 ms longer. For **failover** (another server
+taking over when this one dies), a standby server reads the same log and replays it, so it holds the
+same masks and can take over. This is the design we would choose for the shard in the architecture
+diagram: the contention is naturally per train, and this removes it instead of managing it. The
+same idea, one thread processing an ordered input log, was described by the LMAX trading exchange
+in 2011.
 
 **What about `SERIALIZABLE`?** **Serializable** is the strictest isolation level: the database
-promises that the result of running transactions concurrently equals the result of running them
-one after another in some order. PostgreSQL keeps that promise with serializable snapshot
-isolation: it lets transactions run without blocking, records which rows each one read and wrote,
-and at commit aborts any transaction whose reads and writes cannot fit into a one-at-a-time order.
-Two bookings that both read berth 23 as free and both wrote it cannot be put in any order (whichever
-went second would have seen the berth sold), so one of them is aborted with a serialization
-failure. It is correct, and it lets you write the naive code. The cost appears under
-exactly this workload: every transaction that read the same coach is a conflict candidate, so at
-10:00 most of them abort and retry, and each retry repeats the slow work. Serializable is a good
-default for low-contention business logic; for a known hot spot, an explicit conditional update
-says what you mean and fails cheaply.
+promises that running transactions at the same time gives the same result as running them one after
+another in some order. PostgreSQL keeps that promise by letting transactions run without waiting,
+recording which rows each one read and wrote, and at commit aborting any transaction whose reads and
+writes cannot fit into a one-at-a-time order. Ravi's and Meera's naive transactions cannot be put in
+any order (whichever went second would have seen the berth sold), so one of them is aborted with a
+serialization failure. It is correct, and it lets you write the naive code. The cost appears under
+exactly this workload: every transaction that read the same coach may conflict, so at 10:00 most of
+them abort and retry, and each retry repeats the slow work. Serializable is a good default for
+business logic where collisions are rare; for a known hot spot, a conditional update says what you
+mean and fails cheaply.
 
-**Make the booking request itself idempotent.** A user on a slow network taps "Book" twice, or the
-app retries after a timeout. Without protection, that is two holds on two berths for one person,
-and at Tatkal time the second hold steals a berth from someone else. The client sends a request ID
-generated once per booking attempt; the bookings table has a unique constraint on it; a second
-insert with the same ID returns the first booking instead of allocating again.
+**Make the booking request itself idempotent.** An operation is **idempotent** when doing it twice
+has the same effect as doing it once. It matters because a user on a slow network taps "Book"
+twice, or the app retries after a timeout, and without protection that is two holds on two berths
+for one person; at Tatkal time the second hold takes a berth from someone else. The fix: the app
+generates one request ID per booking attempt, say `r-7f3a`, and sends it with every retry. The
+bookings table has a unique constraint on the request ID, so a second insert with `r-7f3a` fails,
+and the server returns the first booking instead of choosing a berth again.
 
 :::caution[Group bookings and deadlocks]
-A Tatkal PNR can carry four passengers, which is four berths in one transaction. If request A locks
-berth 21 then wants 22, while request B locked 22 and wants 21, the database detects a **deadlock**
-and kills one of them (PostgreSQL checks after `deadlock_timeout`, 1 s by default). Always lock rows
-in one global order (coach, then berth number), or take all four with one statement and check that
-the number of rows updated is four, rolling back otherwise.
+A Tatkal PNR can carry four passengers: four berths in one transaction. A **deadlock** is two
+transactions each waiting for a lock the other holds, so neither can ever continue. If request A
+locks berth 21 and then wants 22, while request B locked 22 and wants 21, that is a deadlock. The
+database detects it and kills one of them (PostgreSQL checks after `deadlock_timeout`, 1 s by
+default). Always lock rows in one fixed order (coach, then berth number), or take all four with one
+statement and check that it updated four rows, rolling back otherwise.
 :::
 
-**Never hold a lock across a payment.** The user takes one to five minutes to pay. The booking
-transaction should commit a **hold**: the bits are set, a booking row has status `HELD` and an
-`expires_at`, and the lock is released at commit. If payment does not arrive in time, an expiry job
-clears the bits in a new short transaction. Locks are for milliseconds; holds are for minutes.
+**Never hold a lock across a payment.** This is the hold from Part 1, and now the reason is
+concrete: a row lock held for the one to five minutes a payment takes would make every conditional
+update on that berth wait for minutes. The booking transaction commits the hold (bits set, status
+`HELD`, an `expires_at`), which releases the lock. If payment does not arrive in time, an expiry job
+clears the bits in a new short transaction.
 
 ### Choosing which berth
 
 The lock strategies above decide *whether* two requests collide. Allocation decides *which* berth
 each one gets, and it has three goals that conflict.
 
-**Goal 1: keep long runs free.** Put each journey where it leaves the smallest free gap around it.
-This is the **best-fit** rule that memory allocators use: given free gaps of 8 KB, 3 KB and 20 KB,
-a 3 KB request goes into the 3 KB gap, so the 20 KB gap stays whole for a large request later.
-Here the gaps are runs of free segments on each berth. A Mathura–Agra passenger should go on a berth that is already sold
-New Delhi–Mathura and Agra onwards, not on an empty berth, which it would split into two shorter
-pieces nobody may want. Here is the cost of ignoring it, on the same journeys:
+**Goal 1: keep long free runs whole.** Put each journey where it leaves the smallest free gap
+around it. This is the **best-fit** rule. Memory allocators, the part of a program that hands out
+pieces of memory, use it: given free gaps of 8 KB, 3 KB and 20 KB, a 3 KB request goes into the 3 KB
+gap, so the 20 KB gap stays whole for a large request later. Here the gaps are runs of free segments
+on each berth. A MTJ→AGC passenger should go on a berth that is already sold NDLS→MTJ and AGC
+onwards, not on an empty berth, which it would split into two shorter pieces nobody may want.
+
+Here is the cost of ignoring it, on the same journeys. The top grid uses best-fit; the bottom one
+puts each journey on any berth that fits, at random:
 
 <InventorySim mode="compare" />
 
-With ten short journeys first, packing turns away 4 of 8 end-to-end passengers; spreading the
-same journeys over any fitting berth turns away 6 and leaves almost twice as many cells empty (28
-against 15). In a separate test of 500 random runs, with ten short journeys followed by eight
-full-route requests, packing kept room for about 3.9 full-route passengers and random spreading for
-about 1.4. Spreading is exactly what `SKIP LOCKED` and "pick a random free berth to
-avoid contention" do. **The trick that removes lock contention is the one that wastes the most
-inventory.** This is the strongest argument for the single-writer shard: one thread can run
-best-fit over the whole train with no contention at all.
+With ten short journeys first and eight end-to-end requests after, packing turns away 4 of the 8
+end-to-end passengers. Spreading the same journeys over any fitting berth turns away 6 of the 8, and
+leaves almost twice as many cells empty: 28 against 15. To check this was not one lucky run, we ran
+the same setup 500 times with different random journeys: on average, packing still had room for
+3.9 of the 8 end-to-end passengers, and random spreading for 1.4.
 
-**Goal 2: respect the passenger.** Preferences (lower, side, window) are soft constraints. Some are
-rules: the reservation system automatically considers senior citizens and women aged 45 and over
-for lower berths even if they did not ask, subject to availability, and each coach keeps a small
-number of lower berths for them, about 6–7 in Sleeper, 4–5 in 3A and 3–4 in 2A
-([Lok Sabha answer, 2025](https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf)).
-A group of four wants the same bay of one coach, not four coaches.
+Spreading is exactly what `SKIP LOCKED` and "pick a random free berth to avoid contention" do.
+**The trick that removes waiting on locks is the one that wastes the most berths.** This is the
+strongest argument for the single-writer shard: one thread can run best-fit over the whole train
+with no contention at all.
 
-**Goal 3: be fast and deterministic.** The allocation runs inside the critical section, so it must
-be a short scan with a score, not a search. A workable score for each candidate berth, lowest wins:
+**Goal 2: respect the passenger.** Preferences (lower, side, window) are soft: the system tries but
+may not manage. Some are rules: the reservation system automatically considers senior citizens and
+women aged 45 and over for lower berths even if they did not ask, subject to availability, and each
+coach keeps a small number of lower berths for them, about 6–7 in Sleeper, 4–5 in 3A and 3–4 in
+2A (two-tier AC) ([Lok Sabha answer, 2025](https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf)).
+A group of four wants the same **bay** (the block of berths facing each other) of one coach, not four
+coaches.
+
+**Goal 3: be fast and give the same answer every time.** The allocation runs while the row is
+being decided, so it must be a short scan with a score, not a search. A workable score for each
+candidate berth, lowest wins:
 
 1. the free run left around the journey (tightest fit first);
 2. a penalty if the passenger needs a lower berth and this is not one;
@@ -381,37 +673,40 @@ be a short scan with a score, not a search. A workable score for each candidate 
 For a group, allocate the passengers together: try each bay, score the bay as a whole, and take
 the best bay that fits all four; only if no bay fits, fall back to the best individual berths.
 
-Seat choice changes the contention picture. The next-generation PRS that the railways began
-migrating to in August 2026 is reported to let passengers choose their seat as airlines do, and to
-target over 1.5 lakh bookings a minute
-([Tribune](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train),
+Seat choice changes the contention picture. The next-generation reservation system that the
+railways began moving to in August 2026 is reported to let passengers choose their seat as airlines
+do, and to target over 1.5 lakh (150,000) bookings a minute
+([Tribune, 2026](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train),
 [PIB, August 2026](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf)).
 How that system allocates is not public. In our model, letting thousands of people click the same
-lower berths at 10:00 turns those rows into hot spots: conditional updates fail far more often, and
+lower berths at 10:00 turns those rows into hot spots, rows that many requests hit at once: conditional updates fail far more often, and
 the interface needs a fast fallback ("that berth is gone; we gave you B2-31, also lower").
 
 ### RAC, waitlist and charting
 
-When no berth fits, the booking still succeeds, as **RAC** (reservation against cancellation) or
-**waitlist** (WL). Both are queues with segment ranges, and both have races that a naive design
-gets wrong.
+When no berth fits, the booking can still succeed, as **RAC** (reservation against cancellation)
+or on the **waitlist** (WL). Both are queues with segment ranges, and both have races that a naive
+design gets wrong.
 
-**RAC is half a berth.** An RAC passenger shares a side lower berth with another RAC passenger,
-sitting by day ([Deccan Herald, November 2025](https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790)).
-Model each side lower set aside for RAC as two **slots**, each with its own mask. An RAC booking is
-the same allocation problem on slots instead of berths. Promotion has an order: a freed berth goes
-to an RAC passenger first, and their freed slot goes to the first waitlisted passenger who fits.
+**RAC is half a berth.** An RAC passenger shares a side lower berth (the berth along the corridor,
+which is a seat by day) with another RAC passenger
+([Deccan Herald, November 2025](https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790)).
+Model each side lower berth set aside for RAC as two **slots**, each with its own mask. An RAC
+booking is then the same allocation problem on slots instead of berths. Promotion has an order: a
+freed berth goes to an RAC passenger first, and the slot that passenger leaves goes to the first
+waitlisted passenger who fits.
 
 **The waitlist is not first in, first out.** A cancellation frees some segments of one berth. Only
-waitlisted journeys that fit entirely inside those segments can use them:
+waitlisted journeys that fit entirely inside those segments can use them. In the figure, the
+AGC→BPL passenger cancels, freeing segments 2 to 4:
 
-<Figure caption="The Agra–Bhopal passenger cancels. WL 1 needs the whole route and WL 3 starts one stop early, so neither fits. WL 2 and WL 4 do, and confirm ahead of them. Waitlist numbers are an order of consideration, not a promise of order of confirmation.">
+<Figure caption="The AGC–BPL passenger cancels. WL 1 needs the whole route and WL 3 starts one stop early, so neither fits. WL 2 and WL 4 do, and confirm ahead of them. Waitlist numbers are an order of consideration, not a promise of order of confirmation.">
   <WaitlistSegments />
 </Figure>
 
-So the promotion step is: walk the waitlist in order, and give each entry the best-fitting freed
-range it fits in; stop when the freed bits are used up. This is why a WL 12 ticket can confirm
-while WL 3 does not, which passengers often take as a bug.
+So the promotion step is: walk the waitlist in order, give each entry the best-fitting freed range
+it fits in, and stop when the freed bits are used up. This is why a WL 12 ticket can confirm while
+WL 3 does not, which passengers often take as a bug.
 
 **The race: a fresh booking against the waitlist.** When a passenger cancels at 10:00:05, both the
 promotion job and a brand-new Tatkal request want the freed bits. If the cancellation clears the
@@ -421,113 +716,147 @@ and the promotions **in the same transaction**, so the bits are never visibly fr
 single-writer shard, process the cancellation and its promotions as one event before taking the
 next request.
 
-**Caps and freezing.** The railways cap how long a waitlist may grow, at 60% of capacity in AC
-classes and 30% in non-AC, and officials have said only about 20–25% of waitlisted tickets usually
-confirm ([PTI via The Week, June 2025](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html)).
-The cap is a check on the length of the queue per train, class and quota, enforced in the same
-transaction that adds to it, or it is not a cap.
+**Caps.** The railways cap the waitlist at 60% of the berths in AC classes and 30% in non-AC
+classes, and officials have said only about 20–25% of waitlisted tickets usually confirm
+([PTI via The Week, June 2025](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html)).
+For a 3A class with 100 berths on a train, 60% of 100 = 60 waitlist places. The cap is a limit on
+the length of the queue per train, class and quota, so it must be checked in the same transaction
+that adds to the queue; checked anywhere else, two requests at once both see 59 and both add one.
 
-**Charting is a batch job that turns live state into a fixed list.** The first chart is prepared at
+**Charting is a batch job (a job that runs once over all the data) that turns live state into a
+fixed list.** The first chart is prepared at
 least 8 hours before departure
 ([All India Radio, 2025](https://www.newsonair.gov.in/railway-board-to-prepare-reservation-charts-8-hours-prior-to-train-departure));
-a second chart has been prepared up to 30 minutes before departure
+a second chart is prepared up to 30 minutes before departure
 ([Deccan Herald, 2020](https://www.deccanherald.com/india/railways-to-restore-system-of-issuing-second-reservation-charts-30-minutes-before-departure-of-trains-898230.html)).
-At charting, online tickets still fully waitlisted are cancelled and refunded
-([Lok Sabha](https://eparlib.nic.in/bitstream/123456789/951605/1/AU1903.pdf)), and the vacant berths,
-including ones vacant only between intermediate stations, are published for anyone to see
-([The Quint, 2019](https://thequint.com/news/india/irctc-check-train-reservation-chart-vacant-seats-online-website-app)).
-In our model, charting is: stop accepting waitlist entries, run the final promotions, snapshot the
-masks, generate the chart from the snapshot, and switch the shard into a "current booking" mode that
-sells only from the leftover bits. Taking the snapshot inside one transaction, or as one event on
-the single writer, is what makes the chart consistent with the last booking before it.
+At charting, online tickets that are still fully waitlisted are cancelled and refunded
+([IANS, 2023](https://ianslive.in/navigating-railway-ticket-cancellations--20231130124042)). In our
+model, charting is: stop accepting waitlist entries, run the final promotions, take a snapshot (a
+frozen copy) of the masks, generate the chart from the snapshot, and switch the shard into a "current booking" mode
+that sells only from the leftover bits. Taking the snapshot inside one transaction, or as one event
+on the single writer, is what makes the chart agree with the last booking before it.
 
 ### Routing every write to one owner
 
-The single-writer design and the read model both depend on knowing which shard owns a train and
-date, and on keeping the read side close to the truth.
+The single-writer design and the read model both depend on two things: knowing which shard owns a
+train-date, and keeping the read side close to the truth.
 
 **How many owners?** Bookings open 60 days ahead
 ([All India Radio, 2024](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days)).
-With a few thousand reserved train services a day (illustrative), that is a few hundred thousand
-live train-dates at any time, each a few hundred kilobytes of masks and waitlists. That fits in the
-memory of a modest cluster. The obvious mapping, `hash(train-date) mod N`, has a flaw: change N
-from 4 shards to 5 and the remainder changes for about four in five train-dates, so most of them
-move at once. **Consistent hashing** avoids that. Picture the range of hash values as a circle;
-each shard is placed at a few points on it, and each train-date belongs to the next shard point
-clockwise from its own hash. Adding a fifth shard only takes over the train-dates that now fall right
-before its new points, about one in five, and the rest stay put. Keep the result in a routing table
-that the booking servers cache.
+Say 3,000 reserved train services run each day (an illustrative number). Then 3,000 trains × 60
+days = 180,000 train-dates are open for booking at any time. Each needs its masks (1,300 berths × 8
+bytes = 10,400 bytes, about 10 KB) plus its bookings and waitlist, say 300 KB in all (illustrative).
+In total that is 180,000 × 300 KB = 54,000,000 KB. A GB is about a million KB, so that is
+54,000,000 ÷ 1,000,000 = about 54 GB, which fits in the memory of a few
+ordinary servers.
+
+**Which shard owns a train-date?** The usual tool is a **hash function**: a recipe that turns any
+input into a number that looks random but is always the same for the same input. It exists so that
+keys spread evenly over shards without a lookup table. For example, the text `12627/2026-10-24`
+might hash to 9,071. The obvious mapping is `hash mod N`: the remainder after dividing by the number
+of shards. With 4 shards, 9,071 mod 4 = 3 (9,071 = 4 × 2,267 + 3), so shard 3.
+
+That mapping has a flaw. Add a fifth shard and 9,071 mod 5 = 1 (9,071 = 5 × 1,814 + 1): the
+train-date moves to shard 1. Most train-dates move like this. Look at the hash values 0 to 19: only
+0, 1, 2 and 3 give the same remainder for 4 and for 5, so 4 out of every 20 values stay, which is 1
+in 5. The other 16 out of 20, which is 4 in 5, change shards at once.
+
+**Consistent hashing** avoids that. Picture all possible hash values arranged on a circle. Each
+shard is placed at a few points on the circle, and each train-date belongs to the next shard point
+clockwise from its own hash. Adding a fifth shard only takes over the train-dates that fall right
+before its new points, about one in five, and the rest stay where they were. The booking servers
+keep the result in a cached routing table.
 
 **Hot shards are expected, not a bug.** At 10:00 the train-dates for tomorrow's popular trains are
-hot, and everything else is quiet. Because each train-date is one owner, a hot one cannot be split
-across machines. It does not need to be: one train has at most a few thousand berth-segments to
-decide, and the single writer handles that in memory. What must not happen is two hot train-dates
-landing on one weak shard; assign tomorrow's known popular trains to separate shards the evening
+hot, and everything else is quiet. Because each train-date has one owner, a hot one cannot be split
+across machines. It does not need to be: one train has about 1,300 berths to choose from, and the
+single writer decides among them in memory, in microseconds per booking. What must not happen is two hot train-dates
+landing on one weak shard. Assign tomorrow's known popular trains to separate shards the evening
 before, which the railway can do because it knows its own timetable.
 
-**Keeping the read model fresh.** The shard publishes every committed change (berth, bits, quota)
-to a **change stream**: an ordered feed of changes that other systems can read from, such as a
-Kafka topic or the database's own change log. Here it can be the durable log itself. The read model applies them and recomputes availability only for the journeys
-people actually search: computing all 780 station pairs per class per train on every change is
-wasted work, while computing "AGC→BPL, 3A, TQ" when someone searches it, then caching it for a
-second or two, costs one scan. Under the Tatkal spike, the cache absorbs thousands of identical
+**Keeping the read model fresh.** The shard publishes every committed change (berth, bits, quota) to
+a **change stream**: an ordered feed of changes that other systems can read, such as a Kafka topic
+(Kafka is a widely used system for such feeds) or the database's own change log. Here the durable
+log can be the change stream. The read model applies the changes and recomputes availability only
+for the journeys people actually search. Computing all 780 journeys per class per train on every
+change is wasted work; computing "AGC→BPL, 3A, TQ" when someone searches it, then caching it for a
+second or two, costs one scan. Under the Tatkal spike, that cache answers thousands of identical
 searches per popular journey.
 
 ### Surviving 10:00:00
 
-At 10:00:00 a popular train's shard gets most of its day's write demand in a few seconds, and the
-site gets many times its normal reads. The railways' own controls work on the demand: AC and non-AC
-Tatkal open an hour apart, agents are barred for the first 30 minutes, and since July 2025 Tatkal
-users must be Aadhaar-authenticated with an OTP
+At 10:00:00 a popular train's shard gets most of its day's booking requests in a few seconds, and
+the site gets many times its normal searches. The railways' own controls work on the demand. AC and
+non-AC Tatkal open an hour apart. Booking agents are barred for the first 30 minutes. Since July
+2025, Tatkal users must verify themselves with Aadhaar, India's national identity number, and an
+**OTP** (a one-time password sent to the phone)
 ([All India Radio, June 2025](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1)).
 The Ministry has said bots made up to half the login attempts in the first five minutes of Tatkal
 before its anti-bot work ([IANS, June 2025](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204)).
 
 On the system side, four mechanisms matter, in order:
 
-1. **Admission control.** A waiting room at the edge hands out signed places in line and admits
-   users at the rate the shards can commit. A user turned away by the queue costs the edge a few
-   bytes; a user turned away by the database cost it a transaction.
+1. **Admission control.** **Admission control** means deciding at the door how many requests to let
+   in, so the system behind the door only gets work it can finish. Here, the waiting room at the
+   edge gives each user a **signed** place in line (a token the edge can check it issued, so nobody
+   can forge an earlier place) and lets users through at the rate the shards can commit. A user
+   turned away by the waiting room costs the edge a few bytes; a user turned away by the database
+   cost it a transaction.
 2. **Fail fast in memory.** Once the Tatkal quota of 3A on a train is gone for most journeys, the
-   shard keeps a "sold out" summary per class and quota and rejects without touching a row. For a
-   train with 96 Tatkal berths and 20,000 interested users, more than 99% of requests end here.
+   shard keeps a "sold out" summary per class and quota and rejects requests without touching a row.
+   Take a train with 96 Tatkal 3A berths and 20,000 interested users (illustrative). At most 96 of
+   the 20,000 can get a berth; 96 ÷ 20,000 = 0.0048, which is 0.48%. The other 100% − 0.48% = 99.52% of
+requests end at the summary, without touching a row.
 3. **Reads off the write path.** Availability comes from the read model. A stale count costs one
    failed booking attempt; reading the shard for every search would cost the shard.
-4. **No retries from the server side.** A booking that fails on a conflict is retried inside the
-   shard (pick the next berth), never by asking the client to resubmit the whole flow.
+4. **No retries from the client.** A booking that loses a race is retried inside the shard (pick
+   the next berth), never by asking the user to resubmit the whole flow, which would multiply the
+   requests.
 
-The sim below shows the first mechanism in isolation: the same minute with and without a waiting
+The sim below shows the first mechanism on its own: the same minute with and without a waiting
 room.
 
 <TatkalRushSim mode="compare" />
 
 ### Payments: when money leaves but no ticket arrives
 
-The berth is in the railway's database; the money is in the passenger's bank. No transaction spans
-both. When one business action spans systems that cannot share a transaction, the pattern is a
-**saga**: a sequence of steps, each committed on its own, where every step that can be undone has a
-**compensating step** that undoes it if a later step fails. The booking is a small saga: hold the
-berth (local commit), take the payment (remote), confirm or release (local commit), with a refund as
-the compensation when the last step cannot happen.
+The berth is in the railway's database; the money is in the passenger's bank. No transaction can
+cover both, because they are different systems run by different organisations.
+
+A **saga** is the pattern for a business action that spans such systems: a sequence of steps, each
+committed on its own, where every step that can be undone has a **compensating step** that undoes
+it if a later step fails. It exists because the all-or-nothing of a transaction is not available
+across systems, so you build it from steps and undo-steps. The booking is a small saga: hold the
+berth (a local commit), take the payment (at the bank), then confirm the booking (a local commit).
+If the payment succeeded but the confirmation cannot happen, the compensation is a refund.
+
+The bank tells us about a payment through a **callback**: the payment gateway calls a URL on our
+server to report "payment `P-88213` succeeded". The trouble is timing. The hold and the payment run
+on two separate clocks:
 
 <Figure caption="The hold and the payment run on two clocks. If the bank's confirmation lands after the hold expired and the bits were given to someone else, money has moved and the berth has not, until reconciliation settles it.">
   <PaymentGap />
 </Figure>
 
-Four failures to design for, and the answer to each:
+In the figure, the hold runs from 10:00 to 10:15, the money leaves at 10:02, and the bank's
+confirmation arrives at 10:16, one minute after the berth went back. There are four failures to
+design for:
 
 - **Late success.** The callback arrives after the hold expired. Try the allocation again for the
   same journey; if a berth fits, confirm; otherwise refund at once and record why.
-- **Duplicate callback.** The gateway retries. The callback handler looks up the payment ID first; a
-  repeat gets the same answer and does nothing. This is an [idempotency key](/messaging/idempotency-keys/)
-  with the payment ID as primary key of an outcomes table.
-- **Lost callback.** No handler ever runs. A reconciliation job asks the gateway every few minutes
-  for successful payments and settles any it has no outcome for, through the same handler.
-- **Ambiguous timeout.** The client does not know if it paid. The status comes from the server, by
-  payment ID, never from retrying the payment.
+- **Duplicate callback.** The gateway sends the same callback twice. The handler looks up the
+  payment ID first, and a repeat gets the same answer and does nothing. This is an
+  [idempotency key](/messaging/idempotency-keys/): the payment ID is the primary key of an outcomes
+  table.
+- **Lost callback.** The callback never arrives. **Reconciliation** is a job that compares our
+  records with the gateway's: every few minutes it asks the gateway for successful payments and
+  settles any it has no outcome for, through the same handler.
+- **Ambiguous timeout.** The app does not know whether the payment went through. It asks the server
+  for the status by payment ID, and never retries the payment itself.
 
-The bank side has its own deadline: the RBI requires failed debits to be reversed within one to five
-days depending on the channel, with compensation of ₹100 a day after that
+The bank side has its own deadline: the Reserve Bank of India's rule for failed transactions, issued
+in 2019 and still the rule in force, requires failed debits to be reversed within one to five days
+depending on the payment method, with compensation of ₹100 a day after that
 ([RBI, 2019](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693)).
 
 :::danger[Every path to "paid" goes through one gate]
@@ -541,18 +870,19 @@ idempotent handler.
 
 | Failure | What users see | Design response |
 |---|---|---|
-| Expiry job lags 10 minutes | Berths held by abandoned sessions show "sold out" | Check `expires_at` at read time too: an expired hold counts as free even before the job runs |
-| Read model stale by 30 s | Users see availability, booking fails | Accept it; show the fresh count from the failed attempt |
-| Shard primary dies at 10:00:02 | Bookings for that train stall | Standby replays the log; requests in flight are idempotent by request ID so retries do not double-book |
-| Callback storm after a bank outage | Thousands of late successes | Late-success path rebooks or refunds; reconciliation catches the rest |
+| Expiry job runs 10 minutes late | Berths held by abandoned sessions show "sold out" | Check `expires_at` when reading too: an expired hold counts as free even before the job runs |
+| Read model 30 s out of date | Users see availability, then the booking fails | Accept it; show the fresh count from the failed attempt |
+| Shard's main server dies at 10:00:02 | Bookings for that train stall | The standby replays the log and takes over; requests being processed carry request IDs, so retries do not double-book |
+| Flood of callbacks after a bank outage | Thousands of late successes | The late-success path rebooks or refunds; reconciliation catches the rest |
 | Cancellation and promotion in two transactions | A new booking takes a waitlisted passenger's berth | One transaction, or one event on the single writer |
 
 ## Build a piece of it
 
-The inventory model and the conditional update, against SQLite: eight berths, seven segments, 40
-concurrent requests for overlapping journeys, each doing 20 ms of work between choosing a berth and
-writing it. The naive version reads, waits, then ORs the bits in; the correct one makes the check
-part of the `UPDATE` and chooses again when it gets zero rows.
+The inventory model and the conditional update, against SQLite (a small database that runs inside
+the program): eight berths, seven segments, 40 requests at once for overlapping journeys, each
+doing 20 ms of work between choosing a berth and writing it. The naive version reads, waits, then
+ORs the bits in; the correct one makes the check part of the `UPDATE` and chooses again when it gets
+zero rows.
 
 <Tabs syncKey="lang">
   <TabItem label="Python">
@@ -641,6 +971,14 @@ async function book(db, a, b, senior, stats) {
   </TabItem>
 </Tabs>
 
+Read it like this. `need` builds the journey's mask, as in the three-step table. `waste` walks left
+and right from the journey along the berth's free segments and counts how many free segments would
+be left over around it: that is the best-fit score. `best_berth` fetches every berth that fits and
+sorts by that score. `book` chooses a berth, does 20 ms of other work (by which time the choice may
+be stale), then runs the conditional `UPDATE`. If it changed one row, the berth is taken and the
+passenger row is added in the same transaction; if it changed zero rows, someone else got there
+first, so it counts a retry and chooses again.
+
 ```text title="python berth_allocator.py (node berth-allocator.mjs prints the same)"
 8 berths x 7 segments (NDLS..NGP); 40 concurrent requests, 20 ms of work each
 
@@ -652,12 +990,13 @@ bitmask check: berth booked NDLS-AGC 1100000, journey AGC-BPL needs 0011100, AND
 
 The naive version "booked" all 40 by stacking journeys on top of each other: 276 pairs of
 passengers share a segment of a berth. The correct version booked the 29 that fit and turned the
-rest away, with 34 cheap retries caused by stale choices. The verification query is worth keeping
-as a production invariant check: any two bookings on one berth with
-`x.from_idx < y.to_idx AND y.from_idx < x.to_idx` is an oversell.
+other 40 − 29 = 11 away, with 34 cheap retries caused by stale choices. The check that counted the
+overlapping pairs is worth keeping as a production check that should always find nothing: two
+bookings `x` and `y` on one berth overlap when `x.from_idx < y.to_idx AND y.from_idx < x.to_idx`
+(each starts before the other ends).
 
-The payment side (holds that expire, an idempotent callback, reconciliation) is in
-`seat_hold.py` and `seat-hold.mjs` in the same folder. Full code and run instructions:
+The payment side (holds that expire, an idempotent callback, reconciliation) is in `seat_hold.py`
+and `seat-hold.mjs` in the same folder. Full code and run instructions:
 [`examples/irctc-tatkal-booking/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/irctc-tatkal-booking).
 
 ## Trade-offs, and what we'd change
@@ -665,17 +1004,19 @@ The payment side (holds that expire, an idempotent callback, reconciliation) is 
 - **Single writer per train-date vs row locks in a shared database.** The single writer removes
   contention and makes best-fit free, at the cost of building failover, log replay and routing
   yourself. Row locks reuse the database's machinery and are simpler to operate, at the cost of
-  contention on popular trains and pressure to spread allocations. Below a few thousand concurrent
-  bookings per train, the conditional update in PostgreSQL is the simpler choice.
+  contention on popular trains and pressure to spread allocations. Below a few thousand bookings at
+  once per train, the conditional update in PostgreSQL is the simpler choice.
 - **Bitmask per berth vs one row per berth-segment.** A row per segment makes availability a
   `GROUP BY` and a booking a multi-row update with more locks. The bitmask keeps a booking to one
-  row and one statement, and needs care only for routes past 64 stops.
-- **Best-fit vs fast.** Best-fit costs a scan over candidate berths inside the critical section.
-  On 1,300 berths that is microseconds; on a 50,000-seat stadium it would need an index of free runs.
+  row and one statement, and needs care only for routes past 64 segments.
+- **Best-fit vs fast.** Best-fit costs a scan over candidate berths while the decision is being
+  made. On 1,300 berths that is microseconds; on a 50,000-seat stadium it would need an index of
+  free runs.
 - **Cancellation with promotion in one transaction.** Correct and simple, but a cancellation now
-  does work proportional to the waitlist length. Capped waitlists keep that bounded.
-- **At 10× scale** the shard per train-date still holds; what breaks first is the read side and the
-  edge. **At 0.1×**, one PostgreSQL instance with conditional updates does all of this.
+  does work that grows with the length of the waitlist. The waitlist cap keeps that bounded.
+- **At 10× the scale**, the shard per train-date still holds; what breaks first is the read side and
+  the edge. **At a tenth of the scale**, one PostgreSQL server with conditional updates does all of
+  this.
 
 ## Interview corner
 
@@ -683,7 +1024,7 @@ The payment side (holds that expire, an idempotent callback, reconciliation) is 
 and is not. A strong 45 minutes:
 
 1. Requirements and numbers (5 min): partial journeys, quotas, waitlist, the 10 AM spike.
-2. Data model (10 min): berth with segment bitmask, why counters fail, availability as a query.
+2. Data model (10 min): berth with a segment bitmask, why counters fail, availability as a query.
 3. Concurrency (15 min): the lost update, then conditional update vs `SKIP LOCKED` vs single writer,
    with their costs.
 4. Allocation and waitlist (10 min): best-fit, group bookings, segment-aware promotion.
@@ -691,44 +1032,43 @@ and is not. A strong 45 minutes:
 
 The follow-ups interviewers usually ask:
 
-- **"Why not lock the row while the user is paying?"** Because a lock is held by a database session
-  for minutes, blocks every reader of that row with `FOR UPDATE`, and vanishes if the session dies.
+- **"Why not lock the row while the user is paying?"** Because a lock is held by a database
+  connection for minutes, makes every writer of that row wait, and vanishes if the connection dies.
   A hold is data: bits set, a status and an expiry, released by a job.
-- **"How do you handle two passengers booking four berths each in opposite order?"** Lock ordering
-  by (coach, berth), or one multi-row conditional `UPDATE` with a row-count check.
-- **"How does the waitlist promote correctly with partial journeys?"** Walk in order, give each entry
-  a fitting part of the freed bits, in the same transaction as the cancellation.
-- **"Where is your bottleneck at 10:00?"** Not the write rate. Contention on one train's rows,
-  then reads and retries; then the answer is partitioning by train-date and admission control.
+- **"How do you handle two passengers booking four berths each in opposite order?"** Lock in a
+  fixed order by (coach, berth), or one multi-row conditional `UPDATE` with a row-count check.
+- **"Where is your bottleneck at 10:00?"** Not the write rate. Contention on one train's rows, then
+  reads and retries; the answer is partitioning by train-date and admission control.
 
 ## Check yourself
 
 <details>
 <summary>1. A berth's mask on a 7-segment route is 1000110 (segment 0 first). Which of these fit: NDLS→MTJ (segment 0), MTJ→GWL (segments 1–2), GWL→ET (segments 3–5)?</summary>
 
-Only MTJ→GWL. Read left to right, 1000110 has bits 0, 4 and 5 set. NDLS→MTJ needs bit 0: clash.
-MTJ→GWL needs bits 1 and 2 (0110000): AND is zero, it fits. GWL→ET needs bits 3 to 5 (0001110):
-clash on 4 and 5. Reading masks by eye is error-prone, which is why the check is one `&` in code.
+Only MTJ→GWL. Read left to right, 1000110 has segments 0, 4 and 5 sold. NDLS→MTJ needs segment 0:
+clash. MTJ→GWL needs segments 1 and 2 (0110000): no position is 1 in both, so it fits. GWL→ET needs
+segments 3 to 5 (0001110): clash on 4 and 5. Reading masks by eye is error-prone, which is why the
+check is one `&` in code.
 
 </details>
 
 <details>
 <summary>2. You switch from a coach-level FOR UPDATE to FOR UPDATE SKIP LOCKED with ORDER BY berth_no. Latency drops. A week later, the business reports more end-to-end passengers turned away on long routes. Why?</summary>
 
-SKIP LOCKED gives each concurrent request the first unlocked berth that fits, not the tightest fit.
-Short journeys get spread over many berths, chopping free runs into short pieces, so fewer berths
-stay free for the whole route. Fix it with best-fit ordering inside a single writer, or score
-candidates by fit and use the conditional update.
+SKIP LOCKED gives each request the first unlocked berth that fits, not the tightest fit. Short
+journeys get spread over many berths, cutting free runs into short pieces, so fewer berths stay free
+for the whole route. Fix it with best-fit ordering inside a single writer, or score candidates by
+fit and use the conditional update.
 
 </details>
 
 <details>
 <summary>3. Your booking transaction runs at PostgreSQL REPEATABLE READ and uses the conditional UPDATE. Under load you see errors with SQLSTATE 40001. Is your data wrong?</summary>
 
-No. At repeatable read, PostgreSQL refuses to update a row that changed after your snapshot and
-raises a serialization failure instead of re-checking the condition. The data is safe; the
-transaction must be retried. At read committed the same `UPDATE` would re-evaluate the `WHERE` and
-return zero rows instead.
+No. At repeatable read, PostgreSQL refuses to update a row that changed after your transaction first
+read the database, and raises a serialization failure instead of re-checking the condition. The data is
+safe; the transaction must be retried. At read committed the same `UPDATE` would re-check the
+`WHERE` and return zero rows instead.
 
 </details>
 
@@ -744,11 +1084,11 @@ transaction, or process cancellation and promotion as one event on the train's s
 ## Recap
 
 - Rail inventory is per **segment**: a berth is a bitmask, a journey is a mask, `mask & need = 0`
-  means it fits. Counters per station pair do not work.
-- **Read, work, write** loses updates under default isolation; the database will not warn you.
-- Correct options: lock the coach (simple, serial), conditional `UPDATE` (short locks, retries),
-  `SKIP LOCKED` (no waits, worse allocation), or a **single writer per train-date** (no locks, best
-  allocation, you build failover).
+  means it fits. Counters per journey do not work.
+- **Read, work, write** loses updates under default isolation, and the database will not warn you.
+- Correct options: lock the coach (simple, one at a time), a conditional `UPDATE` (short locks,
+  retries), `SKIP LOCKED` (no waiting, worse allocation), or a **single writer per train-date** (no
+  locks, best allocation, you build failover).
 - **Allocation decides sellable capacity.** Best-fit keeps long runs free; spreading to avoid
   contention fragments the train.
 - **Waitlists promote by fit, not by number,** and promotion must be atomic with the cancellation.
@@ -771,30 +1111,27 @@ transaction, or process cancellation and promotion as one event on the train's s
 **Official sources**
 
 - [All India Radio: charts 8 hours before departure (2025)](https://www.newsonair.gov.in/railway-board-to-prepare-reservation-charts-8-hours-prior-to-train-departure) — when the waitlist freezes.
-- [All India Radio: Aadhaar OTP for Tatkal (June 2025)](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1) — identity checks and the agent embargo.
-- [All India Radio: 60-day advance reservation period (2024)](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days) — how far ahead train-dates are live.
-- [Lok Sabha: remote location and pooled quotas (2010)](https://eparlib.nic.in/bitstream/123456789/581602/1/86072.pdf) — quotas earmarked per station by the zonal railway.
+- [All India Radio: Aadhaar OTP for Tatkal (June 2025)](https://www.newsonair.gov.in/railways-announces-new-rules-for-tatkal-tickets-aadhaar-based-otp-authentication-must-from-july-1) — Tatkal timings, identity checks and the agent embargo.
+- [All India Radio: 60-day advance reservation period (2024)](https://www.newsonair.gov.in/railways-reduces-time-limit-for-advance-ticket-booking-from-120-to-60-days) — how far ahead train-dates are open.
 - [Lok Sabha: lower berths for senior citizens (2025)](https://eparlib.sansad.in/bitstream/123456789/3013644/1/AU3199_LYz0sV.pdf) — automatic lower-berth allotment and the per-coach numbers.
-- [Lok Sabha: waitlisted e-tickets after charting](https://eparlib.nic.in/bitstream/123456789/951605/1/AU1903.pdf) — automatic cancellation and refund.
-- [PIB: next-generation PRS (August 2026)](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf) — the move to a new reservation system.
-- [RBI: turnaround time for failed transactions (2019)](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693) — reversal deadlines and compensation.
+- [PIB: next-generation reservation system (August 2026)](https://static.pib.gov.in/WriteReadData/specificdocs/documents/2026/aug/doc202686945401.pdf) — the move to a new reservation system.
+- [RBI: turnaround time for failed transactions (2019, still in force)](https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=11693) — reversal deadlines and compensation.
 
 **Databases and engineering**
 
-- [PostgreSQL: transaction isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — how `UPDATE` re-checks rows at read committed, and serialization failures at repeatable read.
-- [PostgreSQL: SELECT, the locking clause](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — `FOR UPDATE` and `SKIP LOCKED`.
-- [PostgreSQL: lock management settings](https://www.postgresql.org/docs/current/runtime-config-locks.html) — `deadlock_timeout`.
-- [MySQL: InnoDB locking reads](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) — current reads for `UPDATE` and `SELECT ... FOR UPDATE`.
-- [Martin Fowler: The LMAX architecture](https://martinfowler.com/articles/lmax.html) — a single-threaded business logic processor with an input log, the idea behind the single writer per shard.
-- [Stripe: idempotency](https://stripe.com/blog/idempotency) — idempotency keys for payments.
-- [Cloudflare: Building Waiting Room](https://blog.cloudflare.com/building-waiting-room-on-workers-and-durable-objects) — admission control at the edge.
+- [PostgreSQL: transaction isolation (current docs)](https://www.postgresql.org/docs/current/transaction-iso.html) — how `UPDATE` re-checks rows at read committed, and serialization failures at repeatable read.
+- [PostgreSQL: SELECT, the locking clause (current docs)](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE) — `FOR UPDATE` and `SKIP LOCKED`.
+- [PostgreSQL: lock management settings (current docs)](https://www.postgresql.org/docs/current/runtime-config-locks.html) — `deadlock_timeout`.
+- [MySQL 8.4: InnoDB locking reads (2024)](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html) — how `UPDATE` and `SELECT ... FOR UPDATE` read the latest row.
+- [Martin Fowler: The LMAX architecture (2011, dated history)](https://martinfowler.com/articles/lmax.html) — a single-threaded processor with an input log, the idea behind the single writer per shard.
+- [Stripe API: idempotent requests (current docs)](https://docs.stripe.com/api/idempotent_requests) — idempotency keys for payments.
+- [Cloudflare: Building Waiting Room (2021)](https://blog.cloudflare.com/building-waiting-room-on-workers-and-durable-objects) — admission control at the edge.
 
 **News**
 
 - [IANS: IRCTC booking figures (June 2026)](https://ianslive.in/irctc-delivers-58-crore-meals-a-year-handles-18-lakh-daily-tickets--20260603170101) — the per-minute peak.
-- [Business Today: staggered Tatkal timings (2015)](https://www.businesstoday.in/story/railway-tatkal-ticket-booking-timings-changed-from-today/1/220563.html) — the 10 and 11 AM split.
 - [IANS: suspicious IDs and bots (June 2025)](https://ianslive.in/indian-railways-ai-system-cracks-down-on-25-crore-suspicious-user-ids--20250604161204) — the bot share of Tatkal logins.
-- [PTI via The Week: waitlist cap (June 2025)](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html) — 60% and 30% caps and confirmation rates.
+- [IANS: railway ticket cancellations (2023)](https://ianslive.in/navigating-railway-ticket-cancellations--20231130124042) — waitlisted e-tickets cancelled and refunded at charting.
+- [PTI via The Week: waitlist cap (June 2025)](https://www.theweek.in/wire-updates/national/2025/06/29/del48-rail-enhances-waiting-list.html) — the 60% and 30% caps and confirmation rates.
 - [Deccan Herald: RAC and lower berth rules (2025)](https://www.deccanherald.com/india/indian-railways-reshuffles-rules-for-booking-lower-berth-seats-all-you-need-to-know-3782790) and [second reservation chart (2020)](https://www.deccanherald.com/india/railways-to-restore-system-of-issuing-second-reservation-charts-30-minutes-before-departure-of-trains-898230.html).
-- [The Quint: chart vacancy online (2019)](https://thequint.com/news/india/irctc-check-train-reservation-chart-vacant-seats-online-website-app) — vacant berths, including between intermediate stations.
-- [Tribune: seat selection in the new PRS](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train) — choosing seats like airlines.
+- [Tribune: seat selection in the new reservation system (2026)](https://www.tribuneindia.com/news/india/just-like-airlines-now-you-can-choose-your-seat-when-travelling-by-train) — choosing seats like airlines.
