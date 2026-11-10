@@ -1,0 +1,103 @@
+---
+title: "Agent errors, retries and tracing"
+description: "How to keep an agent from failing silently or looping forever, and how to see what it did. Outline: the full article is coming soon."
+tagline: "How to keep an agent from failing silently or looping forever, and how to see what it did."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [human-in-the-loop-and-permissions]
+next: [eval-driven-development, eval-grading-methods]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 38
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+An agent ran for 20 minutes, cost $14 and produced nothing. How do you stop that, and find out what went wrong?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: one failed agent run, replayed step by step from its trace.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Tool error
+
+### Retry
+
+### Loop and cost limits
+
+### Trace
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Sorting errors into kinds
+
+### Retries and fallbacks for tools
+
+### Step and cost budgets
+
+### Tracing with OpenTelemetry
+
+### Replaying a run
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

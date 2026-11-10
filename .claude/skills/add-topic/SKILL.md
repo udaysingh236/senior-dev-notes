@@ -10,7 +10,7 @@ allowed-tools: WebSearch WebFetch Bash(npm run build) Bash(python3 *) Bash(node 
 
 Before starting, read the "Owner's standing feedback" section of `style-guide.md`; it overrides
 anything below that conflicts with it. Then read these files in this skill folder: `template.mdx`, `template-compare.mdx`,
-`template-case-study.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
+`template-case-study.mdx`, `template-build.mdx`, `style-guide.md`, `visuals.md`. Also read the project's `CLAUDE.md` and `CURRICULUM.md`.
 
 Work through the phases in order. Don't skip a phase because the topic feels familiar.
 
@@ -37,7 +37,12 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
 1. Search `CURRICULUM.md` and `src/content/docs/` for the topic and its synonyms.
 2. If a published page already covers it and `--update` was not given: stop and tell the user
    which page covers it, and offer to extend that page.
-3. If it's listed as `planned` or `pilot`: use its track, slug and order.
+3. If it's listed as `planned`, `outline` or `pilot`: use its track, slug and order. An `outline`
+   page already exists with `outline: true`: write the full page over it, keeping its title,
+   slug, tagline (unless it fails the tagline rules), `prerequisites`, `next` and `sidebar.order`,
+   and remove `outline`, `giscus: false`, `pagefind: false` and the `noindex` head entry. Its
+   headings are the plan, not a contract: adapt them to the template. Change its status in
+   `CURRICULUM.md` to `published (YYYY-MM-DD)`.
 4. If it's new:
    - Pick the best existing track. Create a new track only if nothing fits, and add it to the
      sidebar config too.
@@ -58,6 +63,11 @@ Work through the phases in order. Don't skip a phase because the topic feels fam
      system end to end and pulls many concepts together: `template-case-study.mdx`, in the
      `case-studies` track. Each deep dive links to its concept's own page; add missing concepts
      to `CURRICULUM.md` as `planned`.
+   - **Build project** (a page in the `build` track that teaches one concept by building one
+     small working project): `template-build.mdx`. The title is the concept's name, the tagline
+     starts with "Build" and says what is built, the slug ends in `-lab`, and the concept page is
+     the first prerequisite. The concept page's `next` lists the build page. The whole project
+     lives in `examples/<slug>/`, runs free on a laptop, and was run end to end before publishing.
 7. Decide `prerequisites` and `next` slugs (planned pages are fine).
 8. Create `research/<slug>.md`.
 

@@ -56,9 +56,18 @@ const share = total ? (totalPublished / total) * 100 : 0;
           </div>
         </div>
         {track.intro && <p class="roadmap-track-intro">{track.intro}</p>}
+        {(track.groups.length ? track.groups : [undefined]).map((group) => (
+        <Fragment>
+        {group && <h3 class="roadmap-group">{group.title}</h3>}
         <ol class="roadmap-topics">
-          {topics.map((t) => {
-            const status = t.published ? 'published' : statusOf.get(t.slug) === 'pilot' ? 'pilot' : 'planned';
+          {topics.filter((t) => !group || t.group === group.folder).map((t) => {
+            const status = t.published
+              ? 'published'
+              : statusOf.get(t.slug) === 'pilot'
+                ? 'pilot'
+                : t.outline
+                  ? 'outline'
+                  : 'planned';
             return (
               <li class:list={['roadmap-topic', `is-${status}`]}>
                 <span class="roadmap-topic-dot" aria-hidden="true" />
@@ -70,12 +79,16 @@ const share = total ? (totalPublished / total) * 100 : 0;
                   <span class="roadmap-topic-title">{t.title}</span>
                 )}
                 <span class={`roadmap-status roadmap-status-${status}`}>
-                  {status === 'published' ? 'Published' : status === 'pilot' ? 'Up next' : 'Planned'}
+                  {
+                    { published: 'Published', pilot: 'Up next', outline: 'Outline', planned: 'Planned' }[status]
+                  }
                 </span>
               </li>
             );
           })}
         </ol>
+        </Fragment>
+        ))}
       </section>
     ))
   }
@@ -252,5 +265,26 @@ const share = total ? (totalPublished / total) * 100 : 0;
   .roadmap-status-pilot {
     border-style: dashed;
     color: var(--sl-color-gray-1);
+  }
+  .roadmap-status-outline {
+    border-style: dashed;
+    border-color: var(--note-margin);
+    color: var(--note-margin);
+  }
+  .is-outline a.roadmap-topic-title {
+    font-weight: 500;
+    color: var(--sl-color-gray-2);
+    text-decoration-color: var(--sl-color-gray-4);
+    text-decoration-style: dashed;
+    text-decoration-thickness: 1px;
+  }
+  .roadmap-group {
+    margin: 1.6rem 0 0;
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--note-margin);
   }
 </style>

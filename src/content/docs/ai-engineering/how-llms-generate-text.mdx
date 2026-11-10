@@ -1,0 +1,101 @@
+---
+title: "How an LLM writes: one token at a time"
+description: "How a language model picks the next token again and again until the answer is done. Outline: the full article is coming soon."
+tagline: "How a language model picks the next token again and again until the answer is done."
+difficulty: beginner
+track: ai-engineering
+prerequisites: [tokens-and-context-windows]
+next: [embeddings, transformers-and-attention]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 3
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+When a chatbot answers you, how does it decide what word comes next?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: the model completing "The capital of France is" one token at a time, with the probability of each choice.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Next-token prediction
+
+### Probabilities and logits
+
+### Generating in a loop
+
+### When generation stops
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### From logits to probabilities
+
+### Greedy choice vs sampling
+
+### Prefill vs decode: why reading is fast and writing is slow
+
+### Streaming tokens to the user
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

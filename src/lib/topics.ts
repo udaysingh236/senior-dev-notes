@@ -10,7 +10,12 @@ export interface ResolvedTopic {
   trackTitle: string;
   /** Page URL when the page exists on disk; undefined for topics that are not written yet. */
   href?: string;
+  /** True only when the full article is written; outline pages have an href but are not published. */
   published: boolean;
+  /** The page exists but shows only the planned structure. */
+  outline: boolean;
+  /** Sub-group folder within the track, if the track has sub-groups. */
+  group?: string;
   difficulty?: 'beginner' | 'intermediate' | 'advanced';
   tagline?: string;
 }
@@ -80,7 +85,9 @@ export async function resolveTopic(slug: string, usedOn?: string): Promise<Resol
     track,
     trackTitle: getTrack(track)?.title ?? track,
     href: page ? pageHref(page) : undefined,
-    published: Boolean(page),
+    published: Boolean(page && !page.data.outline),
+    outline: Boolean(page?.data.outline),
+    group: topic?.group,
     difficulty: page?.data.difficulty,
     tagline: page?.data.tagline,
   };

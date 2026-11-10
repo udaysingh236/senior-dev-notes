@@ -320,6 +320,7 @@ minute. Length follows what a fresher needs to understand the topic, not a targe
 | Single topic (`template.mdx`) | 8–15 min | 40–60 min | 75 min | at most ~150 lines |
 | Comparison (`template-compare.mdx`) | 8–15 min | 35–50 min | 60 min | at most ~100 lines |
 | Case study (`template-case-study.mdx`) | 8–15 min | 45–65 min | 75 min | at most ~150 lines |
+| Build project (`template-build.mdx`) | 8–12 min | 35–55 min | 70 min | at most ~250 lines |
 
 - Past the hard maximum, split: a basics page (Part 1 plus the first mechanisms) and a deep-dive
   page, linked to each other. Never squeeze explanations to stay under it.

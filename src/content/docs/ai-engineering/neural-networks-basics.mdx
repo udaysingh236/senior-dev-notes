@@ -1,0 +1,103 @@
+---
+title: "Neural networks for engineers"
+description: "How a neural network turns numbers into a prediction, and how it learns from its mistakes. Outline: the full article is coming soon."
+tagline: "How a neural network turns numbers into a prediction, and how it learns from its mistakes."
+difficulty: beginner
+track: ai-engineering
+prerequisites: []
+next: [tokens-and-context-windows, how-llms-generate-text]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 1
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+How can a program that nobody wrote rules for learn to tell a spam email from a real one?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a tiny network that reads three numbers about an email and scores how likely it is to be spam.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Neurons and weights
+
+### Layers
+
+### Loss: how wrong a guess was
+
+### Gradient descent
+
+### Training vs inference
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### A forward pass worked by hand
+
+### Backpropagation in plain steps
+
+### Why GPUs: everything is matrix multiplication
+
+### Overfitting and how to spot it
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

@@ -30,7 +30,7 @@ src/styles/custom.css                 the notebook theme: colours, fonts, --viz-
 examples/<slug>/python|js/            runnable code behind every snippet on the page
 research/<slug>.md                    research notes and sources (not published)
 CURRICULUM.md                         master topic list: track, order, slug, status, plus the Inbox of saved ideas
-.claude/skills/add-topic/             the workflow, page templates (single topic, comparison, case study), style guide, visuals guide
+.claude/skills/add-topic/             the workflow, page templates (single topic, comparison, case study, build project), style guide, visuals guide
 .claude/skills/save-topic/            quick capture of topic ideas into the CURRICULUM.md Inbox
 ```
 
@@ -43,8 +43,11 @@ CURRICULUM.md                         master topic list: track, order, slug, sta
 ## Rules
 
 1. Write or extend topics with `/add-topic`. Every page follows `.claude/skills/add-topic/template.mdx`,
-   `template-compare.mdx` for "X vs Y vs Z" pages, or `template-case-study.mdx` for "How X works"
-   walkthroughs of one real system. Save ideas for later with `/save-topic`.
+   `template-compare.mdx` for "X vs Y vs Z" pages, `template-case-study.mdx` for "How X works"
+   walkthroughs of one real system, or `template-build.mdx` for "Build it yourself" projects
+   (titled by the concept, one working project per page). Save ideas for later with `/save-topic`.
+   Pages marked `outline: true` are live placeholders that show only the planned headings;
+   writing the page replaces the outline.
 2. Write for the fresher first. Every page has two parts: Part 1 "Understand it" explains the whole
    idea in plain words with one running example, and Part 2 "How it really works" goes deep. Every
    new concept is explained in four steps before it is used. Length follows understanding: usually

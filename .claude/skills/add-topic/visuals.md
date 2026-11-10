@@ -26,6 +26,10 @@ Every page should let the reader see the idea, and where it moves, watch it move
   concept drawn in the same layout so they can be compared at a glance, and a decision-flow
   diagram or list. Add a sim where the concepts behave differently under load (for example layer 4
   vs layer 7 balancing with long-lived connections).
+- Build projects (`template-build.mdx`): the Part 1 mental-model diagram shows what is built,
+  as the handful of boxes the data passes through. In Part 2, real output (a results table, a
+  dashboard screenshot taken from the running project) beats a drawn diagram. A sim is rarely
+  needed: the project is the interactive part.
 - Case studies (`template-case-study.mdx`): the Part 1 mental-model diagram, then in Part 2 one
   architecture diagram of at most ~8 boxes,
   one diagram per deep dive, and a sim for each of the one or two hardest mechanisms (for a booking

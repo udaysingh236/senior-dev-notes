@@ -1,0 +1,101 @@
+---
+title: "LLM rate limits, retries and token budgets"
+description: "How model providers limit requests and tokens per minute, and how to stay within the limits. Outline: the full article is coming soon."
+tagline: "How model providers limit requests and tokens per minute, and how to stay within the limits."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [rate-limiting, retries-and-backoff]
+next: [llm-cost-management, llm-latency]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 52
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Your app works in testing, then fails with error 429 on launch day. What limit did it hit?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a batch job sending 10,000 summaries to a provider with a tokens-per-minute limit.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Requests per minute
+
+### Tokens per minute
+
+### The 429 error
+
+### Token budget
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### How provider limits work
+
+### Retrying with backoff
+
+### A token bucket in your own client
+
+### Queues and batch APIs
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

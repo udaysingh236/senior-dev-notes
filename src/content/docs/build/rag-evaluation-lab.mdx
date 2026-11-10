@@ -1,0 +1,102 @@
+---
+title: "RAG evaluation"
+description: "Build a dashboard that scores retrieval and answers, so you can see if a change helped. Outline: the full article is coming soon."
+tagline: "Build a dashboard that scores retrieval and answers, so you can see if a change helped."
+difficulty: intermediate
+track: build
+prerequisites: [rag-evaluation]
+next: [agent-orchestration-lab]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 9
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Can you put a number on "the RAG app got better" after every change?
+
+## The idea in plain words
+
+The concept recapped in plain words, enough to follow the build, with the data we will use:
+the hybrid-search app scored on 40 questions before and after a chunking change. The concept page has the full explanation.
+
+## What you will build
+
+The finished project first: its real output with real numbers, what you need (all free, runs on a
+laptop), and the folder in `examples/` that holds the code.
+
+## The building blocks
+
+The tools and terms this build adds, each in four steps.
+
+### Recall@k
+
+### Faithfulness
+
+### LLM judge
+
+:::tip[If you stop here]
+Three to five plain sentences on what the project does and what it showed.
+:::
+
+## Going deeper
+
+The question the measurements answer, and what makes this hard in practice.
+
+## Set up
+
+Versions, the install command, where the data comes from, and the one command that runs it all.
+
+## Build it, step by step
+
+### Step 1: Build the test set
+
+### Step 2: Score retrieval
+
+### Step 3: Score answers with Ragas
+
+### Step 4: Spot-check the judge by hand
+
+### Step 5: Compare two versions
+
+## Measure it
+
+A table of real numbers from running the project, each one worked out in words.
+
+## What breaks in production
+
+What goes wrong when this meets real traffic, data and users, and how to fix it.
+
+## Extend it yourself
+
+Three to five exercises, each with a hint and the result to expect.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Five or six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Library docs with the versions used, and the papers or posts behind the method, from 2020 or later.

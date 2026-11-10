@@ -1,0 +1,103 @@
+---
+title: "Semantic caching"
+description: "How to reuse an earlier answer when a new question means the same thing, even in different words. Outline: the full article is coming soon."
+tagline: "How to reuse an earlier answer when a new question means the same thing, even in different words."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [caching-strategies, embeddings]
+next: [semantic-caching-lab, gpu-fundamentals, model-serving-vllm]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 55
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+"How do I reset my password?" and "forgot password, help" need the same answer. Why pay the model twice?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a support bot getting 10,000 questions a day, many of them repeats.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Exact-match cache
+
+### Semantic cache
+
+### Similarity threshold
+
+### Hit rate
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Embedding the question
+
+### Picking the threshold
+
+### Storing it in Redis or FAISS
+
+### When a cached answer is wrong
+
+### Measuring savings
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

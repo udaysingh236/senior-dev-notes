@@ -1,0 +1,105 @@
+---
+title: "Transformers and self-attention"
+description: "How a transformer lets every word look at every other word to work out what it means. Outline: the full article is coming soon."
+tagline: "How a transformer lets every word look at every other word to work out what it means."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [embeddings]
+next: [how-llms-are-trained, sampling-and-hallucinations]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 5
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+In "the bank of the river" and "the bank gave me a loan", how does a model know which "bank" is meant?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: self-attention worked out by hand on a three-word sentence.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Sequence
+
+### Attention
+
+### Query, key and value
+
+### Position information
+
+### Layers and heads
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Attention by hand on three words
+
+### Multi-head attention
+
+### Why cost grows with the square of the length
+
+### Decoder-only models
+
+### The KV cache, first look
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

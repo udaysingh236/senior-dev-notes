@@ -39,7 +39,7 @@ A page usually takes 40–60 minutes to read. Part 1 alone, about ten minutes, e
 ## What it covers
 
 The [roadmap](https://seniordevnotes.in/roadmap/) lists every planned topic and shows which are
-already published. Topics are grouped into 14 tracks:
+already published. Topics are grouped into 15 tracks:
 
 | Track | Examples |
 |---|---|
@@ -55,7 +55,8 @@ already published. Topics are grouped into 14 tracks:
 | Performance & runtime | scaling, autoscaling, concurrency, event loops, garbage collection |
 | Delivery & infrastructure | containers, Kubernetes, CI/CD, feature flags, deployment strategies |
 | Observability & operations | logging, metrics, tracing, alerting, SLOs, incident response |
-| AI-era systems | Model Context Protocol, RAG, vector databases, LLM rate limits |
+| AI engineering | LLMs, prompting, RAG, agents, evals, fine-tuning, LLMOps |
+| Build it yourself | hands-on projects, one per concept: hybrid search, reranking, agents, LoRA |
 | Case studies | URL shortener, chat, news feed, payments, IRCTC Tatkal booking |
 
 If you are new, start with the [suggested starter path](https://seniordevnotes.in/) on the home

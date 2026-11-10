@@ -1,0 +1,101 @@
+---
+title: "Model selection, routing and fallbacks"
+description: "How to pick the right model for each request, and switch to another when one fails. Outline: the full article is coming soon."
+tagline: "How to pick the right model for each request, and switch to another when one fails."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [llm-apis-and-streaming]
+next: [llm-rate-limits, llm-cost-management]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 51
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Most questions are simple and a few are hard. Why send all of them to your most expensive model?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: 1,000 support questions split between a small and a large model.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Model tiers
+
+### Router
+
+### Fallback
+
+### AI gateway
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Choosing models by task
+
+### Rule-based vs learned routing
+
+### Fallback chains
+
+### Gateways
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.
