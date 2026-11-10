@@ -1,14 +1,17 @@
 ---
-title: System design, explained like a mentor would
-description: System design and production engineering for beginners, explained the way a senior engineer mentors a junior.
+title: System design and AI engineering, explained like a mentor would
+description: System design, production engineering and AI engineering for beginners, explained the way a senior engineer mentors a junior.
 template: splash
 giscus: false
 hero:
-  title: System design, explained like a <em>mentor</em> would.
-  tagline: Rate limits, retries, caches, queues, replicas. The ideas that keep real systems standing. Each one starts from the problem that made it necessary. You can watch it move in a simulation, run it in Python and JavaScript, and walk into the interview ready to explain it.
+  title: System design and AI engineering, explained like a <em>mentor</em> would.
+  tagline: Caches, queues and retries. RAG, agents and evals. The ideas behind real production systems, each one starting from the problem that made it necessary, explained in plain words first and then in depth, with code you can run.
   actions:
     - text: Start the starter path
       link: '#the-starter-path'
+    - text: Start with AI engineering
+      link: '#the-ai-starter-path'
+      variant: minimal
     - text: See the roadmap
       link: /roadmap/
       variant: minimal
@@ -27,7 +30,8 @@ import LatestTopics from '../../components/landing/LatestTopics.astro';
 You are in your final year of a CS degree, fresh out of a bootcamp, or a year or two into your
 first job. You can write Python or JavaScript, you know roughly what an HTTP request is, and you
 have created a database table or two. Then someone says "put a rate limiter in front of it" or
-"make that endpoint idempotent", and everyone nods except you.
+"make that endpoint idempotent", and everyone nods except you. Or your team wants to add search
+over its documents with an AI model, and words like embeddings, RAG and evals fly past.
 
 Every page here is written the way a patient senior engineer would explain it at your desk, in
 two parts. Part 1 explains the whole idea in plain words, following one example with real numbers,
@@ -71,3 +75,13 @@ New to all of this? Read these twenty in order. Together they cover the ideas th
 almost every production system and almost every system design interview.
 
 <StarterPath />
+
+<p class="note-eyebrow">Start here for AI</p>
+
+## The AI starter path
+
+Want to build with AI models? Read these ten in order. They go from how a model reads text to
+calling it from your code, searching your own documents with it, letting it use tools, and testing
+whether its answers are any good. Then try the projects in **Build it yourself**.
+
+<StarterPath path="ai" />

@@ -20,6 +20,12 @@ load-balancing → caching-strategies → database-indexing → connection-pooli
 timeouts → retries-and-backoff → idempotency-keys → rate-limiting → circuit-breakers →
 message-queues → replication → logging → slis-slos-error-budgets
 
+## AI starter path (read these 10 first for AI engineering)
+
+tokens-and-context-windows → how-llms-generate-text → embeddings → prompt-basics →
+structured-outputs → llm-apis-and-streaming → rag-architecture → hybrid-search →
+function-calling-and-tools → eval-driven-development
+
 ---
 
 ## 1. Foundations — `foundations`
