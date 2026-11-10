@@ -1,0 +1,102 @@
+---
+title: "Guardrails"
+description: "Build a text-to-SQL tool that blocks destructive queries and runs only on a read-only copy. Outline: the full article is coming soon."
+tagline: "Build a text-to-SQL tool that blocks destructive queries and runs only on a read-only copy."
+difficulty: advanced
+track: build
+prerequisites: [production-guardrails]
+next: []
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 15
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Can users ask the database questions in plain English without any chance of a DROP TABLE?
+
+## The idea in plain words
+
+The concept recapped in plain words, enough to follow the build, with the data we will use:
+a sales database and 30 questions, including 5 harmful ones. The concept page has the full explanation.
+
+## What you will build
+
+The finished project first: its real output with real numbers, what you need (all free, runs on a
+laptop), and the folder in `examples/` that holds the code.
+
+## The building blocks
+
+The tools and terms this build adds, each in four steps.
+
+### SQL parsing
+
+### Read-only replica
+
+### Confidence score
+
+:::tip[If you stop here]
+Three to five plain sentences on what the project does and what it showed.
+:::
+
+## Going deeper
+
+The question the measurements answer, and what makes this hard in practice.
+
+## Set up
+
+Versions, the install command, where the data comes from, and the one command that runs it all.
+
+## Build it, step by step
+
+### Step 1: Give the model the schema
+
+### Step 2: Parse the SQL and block writes
+
+### Step 3: Run on a read-only replica
+
+### Step 4: Score confidence
+
+### Step 5: Show the SQL for audit
+
+## Measure it
+
+A table of real numbers from running the project, each one worked out in words.
+
+## What breaks in production
+
+What goes wrong when this meets real traffic, data and users, and how to fix it.
+
+## Extend it yourself
+
+Three to five exercises, each with a hint and the result to expect.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Five or six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Library docs with the versions used, and the papers or posts behind the method, from 2020 or later.

@@ -1,0 +1,146 @@
+---
+# "Build it yourself" projects: one page per concept, in the `build` track. Copy to
+# src/content/docs/build/<slug>-lab.mdx and replace every value.
+# The TITLE is the concept's name (the same name as its concept page). The TAGLINE says what the
+# reader builds, in one plain sentence starting with "Build".
+title: Hybrid search
+description: Build a search over internal docs that combines BM25 keyword scores and vector similarity with reciprocal rank fusion, and measure the gain.
+tagline: Build a search over internal docs that combines BM25 and vectors with reciprocal rank fusion.
+difficulty: intermediate          # beginner | intermediate | advanced
+track: build
+prerequisites: [hybrid-search]    # the concept page first, then anything the build needs
+next: [reranking-lab, reranking]
+lastReviewed: 2026-11-10
+sidebar:
+  order: 6                        # position within the track, from CURRICULUM.md
+---
+
+import { Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/hybrid-search-lab/MentalModel.astro';
+
+{/*
+  A build page teaches ONE concept by building one small, working project with it.
+  The concept page explains the idea in depth; this page does not repeat it. It recaps the idea
+  in plain words, then builds, runs and measures it.
+  Every page has two parts (style-guide.md, "Owner's standing feedback"):
+  Part 1 "Understand it" (sections 1-5) says in plain words what the reader will build, why, and
+  what the finished thing does, with real output. Part 2 "Build it" (sections 6 onwards) builds it
+  step by step with code that was run.
+  Rules that apply to every build page:
+  - The whole project lives in examples/<slug>/ with a README, pinned dependencies and one command
+    that runs it end to end. It was run before publishing, and every output shown is real.
+  - It runs free on a laptop: local or open models and tools (FAISS, Qdrant, rank_bm25, open
+    cross-encoders, a small local model). A paid API may be an optional swap, never required.
+  - Every number in "Measure it" was produced by running the project, and the page says how.
+  - Reading budget: usually 35-55 minutes, 70 at most, with at most ~250 lines of code on the
+    page (style-guide.md, "Length"). The rest of the code stays in examples/<slug>/, linked.
+  Every new concept gets the four steps (style-guide.md, "Introducing a new concept").
+  Section order is fixed. Heading wording can be adapted. Delete every comment before publishing.
+*/}
+
+{/* ===================== PART 1: UNDERSTAND IT (8-12 minutes) ===================== */}
+
+{/* 1. THE QUESTION (40-100 words)
+    What the reader will be able to do at the end, asked as a question with the running example's
+    real data (300 docs, 40 queries). Only words the reader knows. No narrative. */}
+## The question
+
+{/* 2. THE IDEA IN PLAIN WORDS (300-600 words)
+    The concept recapped in plain words with the running example, enough that a reader who skipped
+    the concept page can follow the build. Link to the concept page for the depth.
+    The mental-model diagram here shows WHAT WE BUILD: the handful of boxes data passes through. */}
+## The idea in plain words
+
+<Figure caption="One sentence that repeats the key point of the diagram in words.">
+  <MentalModel />
+</Figure>
+
+{/* 3. WHAT YOU WILL BUILD (150-300 words)
+    The finished result first: real sample output (a table, a dashboard screenshot, a terminal run)
+    with real numbers, then a short list: what you need (all free), how long it takes, which
+    folder in examples/ holds it. */}
+## What you will build
+
+{/* 4. THE BUILDING BLOCKS (0-700 words)
+    Only the tools and terms this build adds beyond the concept page (a library, a metric, a file
+    format), each with the four steps. Skip if none. */}
+## The building blocks
+
+{/* 5. IF YOU STOP HERE
+    3-5 bullets: what the project does and what it showed. This closes Part 1. */}
+:::tip[If you stop here]
+- Bullet a fresher could repeat.
+:::
+
+{/* ===================== PART 2: BUILD IT ===================== */}
+
+{/* 6. GOING DEEPER (150-300 words)
+    The sharp question the build answers for experienced readers (does fusion beat either side
+    alone, and by how much, on which kinds of query?), and what makes it hard in practice. */}
+## Going deeper
+
+{/* 7. SET UP (100-250 words)
+    Python and package versions, install command, where the data comes from and its licence,
+    and the one command that runs the finished project. */}
+## Set up
+
+{/* 8. BUILD IT, STEP BY STEP (the longest section)
+    One H3 per step. For each: the goal in one sentence → the code (Python, with a JavaScript
+    tab only when the ecosystem supports it well) → run it → the real output → a "read it like
+    this" paragraph for anything a fresher would find hard. Each step leaves something that runs. */}
+## Build it, step by step
+
+### Step 1: Build a BM25 index
+
+```python title="bm25_index.py"
+# runnable version: examples/hybrid-search-lab/python/bm25_index.py
+```
+
+### Step 2: Build a vector index
+
+### Step 3: Fuse the results with RRF
+
+### Step 4: Compare all three
+
+{/* 9. MEASURE IT (200-400 words)
+    A table of real numbers from running the project (before vs after, A vs B), each number with
+    how it was produced, worked out in words (style-guide.md, "Numbers without maths for the
+    reader"). Then what the numbers mean, and where the method lost. */}
+## Measure it
+
+{/* 10. WHAT BREAKS IN PRODUCTION (300-500 words)
+    The 3-5 things that go wrong when this toy meets real traffic, data or users, each with a fix
+    or a pointer to the page that covers it. :::caution for mistakes, :::danger for risks. */}
+## What breaks in production
+
+{/* 11. EXTEND IT YOURSELF
+    3-5 exercises, each with a one-line hint and what result to expect. */}
+## Extend it yourself
+
+{/* 12. CHECK YOURSELF
+    4-5 questions. Answers hidden in <details>. Mix "why did step N do this" with "what would
+    happen if…". */}
+## Check yourself
+
+<details>
+<summary>1. Question text?</summary>
+
+Answer, with the reasoning.
+
+</details>
+
+{/* 13. RECAP
+    5-6 bullets. */}
+## Recap
+
+{/* 14. WHERE TO GO NEXT
+    The next build in the track and the concept pages it leads to. */}
+## Where to go next
+
+<NextTopics />
+
+{/* 15. FURTHER READING
+    Library docs (with the version used), papers or posts the method comes from, 2020 or later. */}
+## Further reading

@@ -1,0 +1,101 @@
+---
+title: "Prompt caching"
+description: "How model providers reuse work for the repeated start of your prompts, making calls cheaper and faster. Outline: the full article is coming soon."
+tagline: "How model providers reuse work for the repeated start of your prompts, making calls cheaper and faster."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [prompt-templates-and-versioning]
+next: [prompt-injection, rag-architecture]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 14
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Every request repeats the same long instructions. Why pay the model to read them again each time?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a chatbot with a 3,000-token system prompt answering 1,000 questions a day.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Prompt prefix
+
+### Cache hit and cache miss
+
+### Cache lifetime
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Why the KV cache makes this possible
+
+### Ordering a prompt for cache hits
+
+### Prices and limits by provider
+
+### Measuring the savings
+
+### Prompt caching vs semantic caching
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

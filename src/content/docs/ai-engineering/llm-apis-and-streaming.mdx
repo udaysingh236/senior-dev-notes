@@ -1,0 +1,103 @@
+---
+title: "LLM APIs, SDKs and streaming"
+description: "How an app talks to a model over an API, and how streaming shows the answer as it is written. Outline: the full article is coming soon."
+tagline: "How an app talks to a model over an API, and how streaming shows the answer as it is written."
+difficulty: beginner
+track: ai-engineering
+prerequisites: [rest-api-design, how-llms-generate-text]
+next: [model-selection-and-routing, llm-rate-limits]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 50
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+What actually travels between your app and a model provider when you call the API?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: one chat request and its streamed response, line by line.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### API request
+
+### SDK
+
+### Messages
+
+### Streaming
+
+### Server-sent events
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### A request and response, field by field
+
+### Usage and token counts
+
+### Streaming with server-sent events
+
+### Handling dropped connections
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

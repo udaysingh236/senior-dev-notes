@@ -1,0 +1,100 @@
+---
+title: "Semantic caching"
+description: "Build a cache layer that reuses answers for similar questions and reports the money it saved. Outline: the full article is coming soon."
+tagline: "Build a cache layer that reuses answers for similar questions and reports the money it saved."
+difficulty: intermediate
+track: build
+prerequisites: [semantic-caching]
+next: [text-to-sql-guardrails-lab]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 14
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Can you skip the model for repeat questions without serving a wrong answer?
+
+## The idea in plain words
+
+The concept recapped in plain words, enough to follow the build, with the data we will use:
+10,000 logged support questions replayed through the cache. The concept page has the full explanation.
+
+## What you will build
+
+The finished project first: its real output with real numbers, what you need (all free, runs on a
+laptop), and the folder in `examples/` that holds the code.
+
+## The building blocks
+
+The tools and terms this build adds, each in four steps.
+
+### Similarity threshold
+
+### Hit rate
+
+:::tip[If you stop here]
+Three to five plain sentences on what the project does and what it showed.
+:::
+
+## Going deeper
+
+The question the measurements answer, and what makes this hard in practice.
+
+## Set up
+
+Versions, the install command, where the data comes from, and the one command that runs it all.
+
+## Build it, step by step
+
+### Step 1: Embed each question
+
+### Step 2: Store answers in Redis or FAISS
+
+### Step 3: Pick the threshold
+
+### Step 4: Track hit rate and money saved
+
+### Step 5: Catch wrong hits
+
+## Measure it
+
+A table of real numbers from running the project, each one worked out in words.
+
+## What breaks in production
+
+What goes wrong when this meets real traffic, data and users, and how to fix it.
+
+## Extend it yourself
+
+Three to five exercises, each with a hint and the result to expect.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Five or six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Library docs with the versions used, and the papers or posts behind the method, from 2020 or later.

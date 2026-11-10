@@ -1,0 +1,101 @@
+---
+title: "Human-in-the-loop, guardrails and permissions"
+description: "How to make an agent ask a person before risky actions, and limit what it is allowed to do. Outline: the full article is coming soon."
+tagline: "How to make an agent ask a person before risky actions, and limit what it is allowed to do."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [computer-use-agents]
+next: [agent-reliability-and-tracing, eval-driven-development]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 37
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+An agent can send emails and issue refunds. Which actions should it do alone, and which should wait for a person?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a refund agent with a $50 limit and an approval step above it.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Human approval
+
+### Permission
+
+### Least privilege
+
+### Checkpoint
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Where approvals belong
+
+### Permission levels for tools
+
+### Pausing and resuming a run
+
+### Audit logs
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

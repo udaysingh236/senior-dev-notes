@@ -6,7 +6,7 @@ import { findCurriculumTopic, getTrack, readingMinutes, resolveTopic } from '../
 import TrackIcon from './TrackIcon.astro';
 
 const { entry, id } = Astro.locals.starlightRoute;
-const { title, tagline, difficulty, track, prerequisites, lastReviewed } = entry.data;
+const { title, tagline, difficulty, track, prerequisites, lastReviewed, outline } = entry.data;
 const isTopic = Boolean(track);
 
 if (isTopic) {
@@ -58,6 +58,9 @@ const reviewed = lastReviewed?.toLocaleDateString('en-GB', { day: 'numeric', mon
           </span>
           {difficulty}
         </span>
+        {outline ? (
+          <span class="outline-badge">Outline · article coming soon</span>
+        ) : (
         <span class="topic-meta-item">
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
             <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5" />
@@ -65,6 +68,7 @@ const reviewed = lastReviewed?.toLocaleDateString('en-GB', { day: 'numeric', mon
           </svg>
           {minutes} min read
         </span>
+        )}
         {reviewed && <span class="topic-meta-item">Reviewed {reviewed}</span>}
       </div>
 
@@ -192,6 +196,18 @@ const reviewed = lastReviewed?.toLocaleDateString('en-GB', { day: 'numeric', mon
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
+  }
+
+  .outline-badge {
+    padding: 0.2rem 0.7rem;
+    border: 1px dashed var(--note-margin);
+    border-radius: 999px;
+    font-family: var(--sl-font-mono);
+    font-size: 0.76rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--note-margin);
   }
 
   .difficulty-badge {

@@ -1,0 +1,102 @@
+---
+title: "LoRA fine-tuning"
+description: "Build a 4-bit LoRA fine-tuning pipeline, then merge the adapter and benchmark it. Outline: the full article is coming soon."
+tagline: "Build a 4-bit LoRA fine-tuning pipeline, then merge the adapter and benchmark it."
+difficulty: advanced
+track: build
+prerequisites: [lora-and-peft]
+next: [semantic-caching-lab]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 13
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Can you fine-tune an open model on one GPU and prove it got better at your task?
+
+## The idea in plain words
+
+The concept recapped in plain words, enough to follow the build, with the data we will use:
+a small open model trained on 1,000 support replies. The concept page has the full explanation.
+
+## What you will build
+
+The finished project first: its real output with real numbers, what you need (all free, runs on a
+laptop), and the folder in `examples/` that holds the code.
+
+## The building blocks
+
+The tools and terms this build adds, each in four steps.
+
+### 4-bit loading
+
+### Rank and alpha
+
+### Adapter merge
+
+:::tip[If you stop here]
+Three to five plain sentences on what the project does and what it showed.
+:::
+
+## Going deeper
+
+The question the measurements answer, and what makes this hard in practice.
+
+## Set up
+
+Versions, the install command, where the data comes from, and the one command that runs it all.
+
+## Build it, step by step
+
+### Step 1: Prepare the data
+
+### Step 2: Load the model in 4 bits
+
+### Step 3: Train the LoRA adapter
+
+### Step 4: Merge it
+
+### Step 5: Benchmark before and after
+
+## Measure it
+
+A table of real numbers from running the project, each one worked out in words.
+
+## What breaks in production
+
+What goes wrong when this meets real traffic, data and users, and how to fix it.
+
+## Extend it yourself
+
+Three to five exercises, each with a hint and the result to expect.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Five or six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Library docs with the versions used, and the papers or posts behind the method, from 2020 or later.

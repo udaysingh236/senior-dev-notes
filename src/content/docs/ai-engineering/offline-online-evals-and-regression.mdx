@@ -1,0 +1,105 @@
+---
+title: "Offline evals, online evals and regression tests"
+description: "How to catch quality drops before a release, and keep watching quality after it. Outline: the full article is coming soon."
+tagline: "How to catch quality drops before a release, and keep watching quality after it."
+difficulty: intermediate
+track: ai-engineering
+prerequisites: [agent-evals]
+next: [benchmarks-and-leaderboards, red-teaming]
+outline: true
+giscus: false
+pagefind: false
+head:
+  - tag: meta
+    attrs:
+      name: robots
+      content: noindex
+sidebar:
+  order: 42
+---
+
+import NextTopics from '../../../components/NextTopics.astro';
+
+:::note[This page is an outline]
+The article is not written yet. What you see is the structure it will follow: every heading below
+will be filled in, first in plain words for a fresher, then in depth.
+:::
+
+## The question
+
+Your evals passed, you shipped, and users complain anyway. What did testing before release miss?
+
+## The idea in plain words
+
+The whole idea, from start to finish, with one running example: a prompt change tested offline on 200 cases, then watched on live traffic.
+
+## The building blocks
+
+Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
+then the technical version.
+
+### Offline eval
+
+### Online eval
+
+### Regression test
+
+### A/B test
+
+### Sample size
+
+:::tip[If you stop here]
+Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+:::
+
+## Going deeper
+
+The hard question for readers who already know the basics, and the problem behind it in numbers.
+
+## The obvious fix, and why it breaks
+
+What people try first, and exactly where it fails.
+
+## How it works, piece by piece
+
+### Evals in CI
+
+### How many cases you need
+
+### Sampling live traffic for a judge
+
+### A/B testing prompts and models
+
+### Living with non-determinism
+
+## How real systems do it
+
+How real products, companies and open-source tools do it, with dates on anything that changes.
+
+## Gotchas and war stories
+
+The mistakes that hurt most in production, with real incidents where they exist.
+
+## Trade-offs and when not to use it
+
+What it costs, what it does not solve, and when to pick something else.
+
+## Interview corner
+
+How this comes up in interviews, and what a strong answer covers.
+
+## Check yourself
+
+Four or five questions with hidden answers.
+
+## Recap
+
+Six bullets to revise from.
+
+## Where to go next
+
+<NextTopics />
+
+## Further reading
+
+Every source used, from 2020 or later, each with a line on what it is good for.

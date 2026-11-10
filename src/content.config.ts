@@ -21,6 +21,11 @@ const topicFields = z.object({
   next: z.array(z.string()).optional(),
   /** Date a human last reviewed the page for accuracy. */
   lastReviewed: z.coerce.date().optional(),
+  /**
+   * The page shows only the planned structure of an article that is not written yet: its
+   * headings and what each will cover. Outlines link like other pages but count as planned.
+   */
+  outline: z.boolean().optional().default(false),
   /** Giscus comments under the page (starlight-giscus). On by default; off for non-topic pages. */
   giscus: z.boolean().optional().default(true),
 });

@@ -10,7 +10,7 @@ interface Props {
 
 const { limit = 3 } = Astro.props;
 const pages = [...(await getPages()).values()]
-  .filter((p) => p.data.track)
+  .filter((p) => p.data.track && !p.data.outline)
   .sort((a, b) => (b.data.lastReviewed?.getTime() ?? 0) - (a.data.lastReviewed?.getTime() ?? 0))
   .slice(0, limit);
 ---

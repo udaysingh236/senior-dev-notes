@@ -4,8 +4,9 @@ The master list of topics, in reading order within each track. This file is the 
 what exists, what is planned, and where each page lives. `/add-topic` reads and updates it.
 
 - **Path on disk:** `src/content/docs/<track>/<slug>.mdx`
-- **Post #:** the item number(s) from the original "Who's gonna tell vibe coders about…" list this page covers. `new` = added to fill a gap.
-- **Status:** `planned` → `pilot` → `published (YYYY-MM-DD)`. Use `merged → <slug>` if a topic was folded into another page.
+- **Post #:** the item number(s) from the original "Who's gonna tell vibe coders about…" list this page covers. `reel` = from the AI-engineer roadmap and project reels (November 2026). `new` = added to fill a gap.
+- **Status:** `planned` → `outline (YYYY-MM-DD)` → `pilot` → `published (YYYY-MM-DD)`. An outline page is live but shows only the article's planned headings (`outline: true` in its frontmatter); writing it replaces the outline. Use `merged → <slug>` if a topic was folded into another page.
+- **Sub-groups:** a track may split its table under sub-headings such as `### Agents — ` followed by the folder name in backticks. The sidebar shows one collapsible sub-group per heading; pages still live directly in the track folder.
 
 Some items from the original list are merged into one page where they are two halves of one idea
 (for example optimistic + pessimistic locking). Every one of the 111 original items is covered.
@@ -205,20 +206,160 @@ message-queues → replication → logging → slis-slos-error-budgets
 | 7 | Incident response and on-call | incident-response-and-on-call | 109, 110 | planned |
 | 8 | Postmortems | postmortems | 111 | planned |
 
-## 13. AI-era systems — `ai-systems`
+## 13. AI engineering — `ai-engineering`
 
-How the systems around AI models work: tool protocols, retrieval, vector search, caching and the limits of model APIs.
+Every concept an AI engineer works with, from how a model reads text to running it in production.
+Small concepts are taught inside the page they belong to, as building blocks or sections.
+
+### LLM foundations — `llms`
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Model Context Protocol (MCP): the big picture | mcp-overview | new | planned |
-| 2 | MCP authorization: OAuth 2.1, DCR and CIMD | mcp-authorization | new | planned |
-| 3 | Retrieval-augmented generation (RAG) | rag-architecture | new | planned |
-| 4 | Vector databases | vector-databases | new | planned |
-| 5 | Semantic caching | semantic-caching | new | planned |
-| 6 | LLM rate limits and token budgets | llm-rate-limits | new | planned |
+| 1 | Neural networks for engineers | neural-networks-basics | reel | outline (2026-11-10) |
+| 2 | Tokens, tokenization and context windows | tokens-and-context-windows | reel | outline (2026-11-10) |
+| 3 | How an LLM writes: one token at a time | how-llms-generate-text | new | outline (2026-11-10) |
+| 4 | Embeddings: meaning as numbers | embeddings | reel | outline (2026-11-10) |
+| 5 | Transformers and self-attention | transformers-and-attention | reel | outline (2026-11-10) |
+| 6 | How a model is trained: pretraining, SFT and RLHF | how-llms-are-trained | reel | outline (2026-11-10) |
+| 7 | Temperature, top-p and hallucinations | sampling-and-hallucinations | reel | outline (2026-11-10) |
+| 8 | The model landscape: reasoning, multimodal, open and closed | model-landscape | reel | outline (2026-11-10) |
 
-## 14. Case studies — `case-studies`
+### Prompt engineering — `prompting`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 9 | Prompt basics: system prompts, roles and instructions | prompt-basics | reel | outline (2026-11-10) |
+| 10 | Zero-shot vs few-shot vs chain-of-thought | prompting-techniques | reel | outline (2026-11-10) |
+| 11 | Structured outputs: JSON your code can trust | structured-outputs | reel | outline (2026-11-10) |
+| 12 | Prompt chaining and context engineering | prompt-chaining-and-context-engineering | reel | outline (2026-11-10) |
+| 13 | Prompt templates, versioning and testing | prompt-templates-and-versioning | reel | outline (2026-11-10) |
+| 14 | Prompt caching | prompt-caching | reel | outline (2026-11-10) |
+| 15 | Prompt injection | prompt-injection | reel | outline (2026-11-10) |
+
+### Retrieval (RAG) — `rag`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 16 | Retrieval-augmented generation (RAG) | rag-architecture | reel | outline (2026-11-10) |
+| 17 | Document parsing and chunking | document-parsing-and-chunking | reel | outline (2026-11-10) |
+| 18 | Choosing an embedding model | embedding-models | reel | outline (2026-11-10) |
+| 19 | Vector databases, HNSW and metadata filters | vector-databases | reel | outline (2026-11-10) |
+| 20 | Hybrid search: keywords plus vectors | hybrid-search | reel | outline (2026-11-10) |
+| 21 | Reranking | reranking | reel | outline (2026-11-10) |
+| 22 | Query rewriting | query-rewriting | reel | outline (2026-11-10) |
+| 23 | Citations and grounding | citations-and-grounding | reel | outline (2026-11-10) |
+| 24 | Ingestion pipelines: keeping a RAG index fresh | rag-ingestion-pipelines | new | outline (2026-11-10) |
+| 25 | Long context vs RAG | long-context-vs-rag | new | outline (2026-11-10) |
+| 26 | Agentic RAG vs GraphRAG | agentic-rag-vs-graphrag | reel | outline (2026-11-10) |
+| 27 | RAG evaluation | rag-evaluation | reel | outline (2026-11-10) |
+
+### Agents — `agents`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 28 | The agent loop and ReAct | agent-loop-and-react | reel | outline (2026-11-10) |
+| 29 | Workflows vs agents | workflows-vs-agents | reel | outline (2026-11-10) |
+| 30 | Function calling and tool design | function-calling-and-tools | reel | outline (2026-11-10) |
+| 31 | Planning, multi-agent systems and subagents | planning-and-multi-agent-systems | reel | outline (2026-11-10) |
+| 32 | Agent memory | agent-memory | reel | outline (2026-11-10) |
+| 33 | Model Context Protocol (MCP): the big picture | mcp-overview | reel | outline (2026-11-10) |
+| 34 | MCP authorization: OAuth 2.1, DCR and CIMD | mcp-authorization | new | outline (2026-11-10) |
+| 35 | Code execution and sandboxes | code-execution-sandboxes | new | outline (2026-11-10) |
+| 36 | Computer-use agents | computer-use-agents | reel | outline (2026-11-10) |
+| 37 | Human-in-the-loop, guardrails and permissions | human-in-the-loop-and-permissions | reel | outline (2026-11-10) |
+| 38 | Agent errors, retries and tracing | agent-reliability-and-tracing | reel | outline (2026-11-10) |
+
+### Evals — `evals`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 39 | Eval-driven development and golden datasets | eval-driven-development | reel | outline (2026-11-10) |
+| 40 | Code checks vs LLM-as-judge vs human review | eval-grading-methods | reel | outline (2026-11-10) |
+| 41 | Evaluating agents | agent-evals | reel | outline (2026-11-10) |
+| 42 | Offline evals, online evals and regression tests | offline-online-evals-and-regression | reel | outline (2026-11-10) |
+| 43 | Benchmarks and leaderboards | benchmarks-and-leaderboards | new | outline (2026-11-10) |
+| 44 | Red teaming AI systems | red-teaming | reel | outline (2026-11-10) |
+
+### Fine-tuning — `fine-tuning`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 45 | Prompting vs RAG vs fine-tuning | prompting-vs-rag-vs-fine-tuning | new | outline (2026-11-10) |
+| 46 | Preparing fine-tuning data | fine-tuning-data | new | outline (2026-11-10) |
+| 47 | LoRA, QLoRA and parameter-efficient fine-tuning | lora-and-peft | reel | outline (2026-11-10) |
+| 48 | Quantization | quantization | reel | outline (2026-11-10) |
+| 49 | Distillation and small models | distillation-and-small-models | new | outline (2026-11-10) |
+
+### LLMOps — `llmops`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 50 | LLM APIs, SDKs and streaming | llm-apis-and-streaming | reel | outline (2026-11-10) |
+| 51 | Model selection, routing and fallbacks | model-selection-and-routing | reel | outline (2026-11-10) |
+| 52 | LLM rate limits, retries and token budgets | llm-rate-limits | reel | outline (2026-11-10) |
+| 53 | Token cost management | llm-cost-management | reel | outline (2026-11-10) |
+| 54 | Latency optimisation for LLM apps | llm-latency | reel | outline (2026-11-10) |
+| 55 | Semantic caching | semantic-caching | reel | outline (2026-11-10) |
+| 56 | GPU fundamentals for AI engineers | gpu-fundamentals | reel | outline (2026-11-10) |
+| 57 | Serving models: vLLM, KV cache and batching | model-serving-vllm | reel | outline (2026-11-10) |
+| 58 | Self-hosted models vs model APIs | self-hosting-vs-model-apis | new | outline (2026-11-10) |
+| 59 | Observability for LLM apps | llm-observability | reel | outline (2026-11-10) |
+| 60 | Guardrails in production and PII redaction | production-guardrails | reel | outline (2026-11-10) |
+| 61 | The OWASP Top 10 for LLM applications | owasp-llm-top-10 | new | outline (2026-11-10) |
+| 62 | Model versions and migrations | model-versions-and-migrations | new | outline (2026-11-10) |
+| 63 | CI/CD for LLM apps | cicd-for-llm-apps | reel | outline (2026-11-10) |
+
+## 14. Build it yourself — `build`
+
+Hands-on projects. Each page is titled by the concept it teaches and builds one small, working
+project with it, using free tools that run on a laptop. Read the concept page first.
+
+### Prompting and tools — `prompting`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 1 | Structured outputs | structured-outputs-lab | new | outline (2026-11-10) |
+| 2 | Function calling | function-calling-lab | new | outline (2026-11-10) |
+| 3 | Model Context Protocol (MCP) | mcp-server-lab | new | outline (2026-11-10) |
+
+### Retrieval (RAG) — `rag`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 4 | Chunking strategies | chunking-lab | reel | outline (2026-11-10) |
+| 5 | Metadata filtering | metadata-filtering-lab | reel | outline (2026-11-10) |
+| 6 | Hybrid search | hybrid-search-lab | reel | outline (2026-11-10) |
+| 7 | Reranking | reranking-lab | reel | outline (2026-11-10) |
+| 8 | Citations and grounding | citations-lab | reel | outline (2026-11-10) |
+| 9 | RAG evaluation | rag-evaluation-lab | reel | outline (2026-11-10) |
+
+### Agents — `agents`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 10 | Agent orchestration | agent-orchestration-lab | reel | outline (2026-11-10) |
+
+### Evals — `evals`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 11 | Golden datasets | golden-datasets-lab | reel | outline (2026-11-10) |
+| 12 | LLM-as-a-judge | llm-judge-lab | new | outline (2026-11-10) |
+
+### Fine-tuning — `fine-tuning`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 13 | LoRA fine-tuning | lora-fine-tuning-lab | reel | outline (2026-11-10) |
+
+### LLMOps — `llmops`
+
+| # | Topic | Slug | Post # | Status |
+|---|---|---|---|---|
+| 14 | Semantic caching | semantic-caching-lab | reel | outline (2026-11-10) |
+| 15 | Guardrails | text-to-sql-guardrails-lab | reel | outline (2026-11-10) |
+
+## 15. Case studies — `case-studies`
 
 Each case study ties many concepts together and links back to their pages.
 

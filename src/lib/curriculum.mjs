@@ -14,12 +14,14 @@ import path from 'node:path';
  * @property {TopicStatus} status
  * @property {string} statusText the raw status cell, e.g. "published (2026-10-17)"
  * @property {string} track      folder name of the track
+ * @property {string} [group]    sub-group folder within the track, if the track has sub-groups
  *
  * @typedef {object} CurriculumTrack
  * @property {number} order
  * @property {string} title
  * @property {string} folder
  * @property {string} [intro]    paragraph under the track heading, if any
+ * @property {{title: string, folder: string}[]} groups  sub-groups (`### Title — `folder``), if any
  * @property {CurriculumTopic[]} topics
  *
  * @typedef {object} Curriculum
@@ -33,6 +35,7 @@ const CURRICULUM_PATH = path.join(ROOT, 'CURRICULUM.md');
 export const DOCS_DIR = path.join(ROOT, 'src', 'content', 'docs');
 
 const TRACK_HEADING = /^##\s+(\d+)\.\s+(.+?)\s+—\s+`([a-z0-9-]+)`\s*$/;
+const GROUP_HEADING = /^###\s+(.+?)\s+—\s+`([a-z0-9-]+)`\s*$/;
 const TOPIC_ROW = /^\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*([a-z0-9-]+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$/;
 
 /** @param {string} text @returns {TopicStatus} */
@@ -70,7 +73,7 @@ export function parseCurriculum(markdown) {
 
     const heading = line.match(TRACK_HEADING);
     if (heading) {
-      current = { order: Number(heading[1]), title: heading[2], folder: heading[3], topics: [] };
+      current = { order: Number(heading[1]), title: heading[2], folder: heading[3], topics: [], groups: [] };
       tracks.push(current);
       continue;
     }
@@ -79,6 +82,12 @@ export function parseCurriculum(markdown) {
       continue;
     }
     if (!current) continue;
+
+    const group = line.match(GROUP_HEADING);
+    if (group) {
+      current.groups.push({ title: group[1], folder: group[2] });
+      continue;
+    }
 
     const row = line.match(TOPIC_ROW);
     if (row) {
@@ -90,6 +99,7 @@ export function parseCurriculum(markdown) {
         status: parseStatus(row[5]),
         statusText: row[5],
         track: current.folder,
+        group: current.groups.at(-1)?.folder,
       });
     } else if (current.topics.length === 0 && line.trim() && !line.startsWith('|')) {
       current.intro = current.intro ? `${current.intro} ${line.trim()}` : line.trim();
@@ -108,6 +118,11 @@ export function getCurriculum() {
     cached = parseCurriculum(fs.readFileSync(CURRICULUM_PATH, 'utf8'));
   }
   return cached;
+}
+
+/** True when the page for a topic exists on disk. */
+export function topicHasPage(/** @type {string} */ folder, /** @type {string} */ slug) {
+  return ['mdx', 'md'].some((ext) => fs.existsSync(path.join(DOCS_DIR, folder, `${slug}.${ext}`)));
 }
 
 /** True when a track folder holds at least one page. Used to hide empty sidebar groups. */
