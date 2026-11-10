@@ -27,6 +27,7 @@ import path from 'node:path';
  * @typedef {object} Curriculum
  * @property {CurriculumTrack[]} tracks
  * @property {string[]} starterPath  slugs, in reading order
+ * @property {string[]} aiStarterPath  slugs of the AI starter path, in reading order
  */
 
 /** The project root. Builds and the dev server both run from it (Netlify included). */
@@ -54,19 +55,24 @@ export function parseCurriculum(markdown) {
   const tracks = [];
   /** @type {string[]} */
   let starterPath = [];
+  /** @type {string[]} */
+  let aiStarterPath = [];
   /** @type {CurriculumTrack | null} */
   let current = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (/^##\s+Suggested starter path/i.test(line)) {
+    const pathHeading = line.match(/^##\s+(Suggested starter path|AI starter path)/i);
+    if (pathHeading) {
       // The path is the first paragraph after the heading: slugs joined by arrows.
       let text = '';
       let j = i + 1;
       while (j < lines.length && lines[j].trim() === '') j++;
       while (j < lines.length && lines[j].trim() !== '') text += ' ' + lines[j++];
-      starterPath = text.split('→').map((s) => s.trim()).filter(Boolean);
+      const slugs = text.split('→').map((s) => s.trim()).filter(Boolean);
+      if (/^AI/i.test(pathHeading[1])) aiStarterPath = slugs;
+      else starterPath = slugs;
       current = null;
       continue;
     }
@@ -106,7 +112,7 @@ export function parseCurriculum(markdown) {
     }
   }
 
-  return { tracks, starterPath };
+  return { tracks, starterPath, aiStarterPath };
 }
 
 /** @type {Curriculum | undefined} */

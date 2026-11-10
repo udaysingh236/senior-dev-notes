@@ -1,8 +1,10 @@
 ---
-// The landing page's living diagram: three clients, a load balancer, two app servers, a cache and a
-// database, with requests flowing down and answers flowing back. Blue dots are requests on their
-// way; green dots are answers; the amber one is a slow query. The site's diagram colours mean the
-// same thing here as on every topic page.
+// The landing page's living diagram: three clients, a load balancer, two app servers, and four
+// things behind them: a cache, a database, a vector database and a model API. Blue dots are
+// requests on their way; green dots are answers; the amber one is a slow query. One request takes
+// the AI path: app 2 searches the vector database, then calls the model, and the answer comes back
+// as a stream of small green dots, one per token. The site's diagram colours mean the same thing
+// here as on every topic page.
 //
 // Motion is SMIL <animateMotion>, so it costs no JavaScript per frame. The script pauses it when the
 // hero is off screen, and freezes it on a still frame when the reader prefers reduced motion.
@@ -15,47 +17,76 @@ interface Trip {
 }
 
 // Anchor points, in viewBox units.
-const C = [80, 220, 360]; // client centres
-const LB = { x: 220, top: 150, bottom: 204 };
-const APP = [115, 325];
+const C = [80, 230, 380]; // client centres
+const LB = { x: 230, top: 150, bottom: 204 };
+const APP = [120, 340];
 const APP_TOP = 270;
 const APP_BOTTOM = 324;
-const STORE_TOP = 388; // cache under app 1, database under app 2
+const ROW = 392; // top of the bottom row
+const STORE = { cache: 56, database: 168, vectors: 280 };
+const MODEL = 400;
 
-const route = (client: number, app: number, store: number) =>
-  `M${C[client]} 74 L${LB.x} ${LB.top} L${LB.x} ${LB.bottom} L${APP[app]} ${APP_TOP} L${APP[app]} ${APP_BOTTOM} L${APP[store]} ${STORE_TOP}`;
+const toApp = (client: number, app: number) =>
+  `M${C[client]} 74 L${LB.x} ${LB.top} L${LB.x} ${LB.bottom} L${APP[app]} ${APP_TOP} L${APP[app]} ${APP_BOTTOM}`;
+const route = (client: number, app: number, store: number) => `${toApp(client, app)} L${store} ${ROW}`;
 
 const trips: Trip[] = [
-  { path: route(0, 0, 0), dur: 3.4, begin: 0, answer: 'ok' },
-  { path: route(1, 1, 1), dur: 4.4, begin: 0.9, answer: 'ok' },
-  { path: route(2, 1, 0), dur: 3.8, begin: 1.7, answer: 'ok' },
-  { path: route(1, 0, 1), dur: 4.2, begin: 2.6, answer: 'ok' },
-  { path: route(0, 1, 0), dur: 3.6, begin: 3.3, answer: 'ok' },
-  { path: route(2, 0, 1), dur: 6.2, begin: 4.1, answer: 'warn' },
+  { path: route(0, 0, STORE.cache), dur: 3.4, begin: 0, answer: 'ok' },
+  { path: route(1, 1, STORE.database), dur: 4.4, begin: 0.9, answer: 'ok' },
+  { path: route(2, 0, STORE.cache), dur: 3.8, begin: 1.7, answer: 'ok' },
+  { path: route(0, 1, STORE.database), dur: 3.6, begin: 3.3, answer: 'ok' },
+  { path: route(2, 0, STORE.database), dur: 6.2, begin: 4.1, answer: 'warn' },
 ];
 
+// The AI request: down to app 2, a search in the vector database and back, then on to the model.
+// The answer returns from the model as a stream of tokens.
+const AI = {
+  dur: 7,
+  begin: 2.2,
+  down: `${toApp(1, 1)} L${STORE.vectors} ${ROW} L${APP[1]} ${APP_BOTTOM} L${MODEL} ${ROW}`,
+  up: `M${MODEL} ${ROW} L${APP[1]} ${APP_BOTTOM} L${APP[1]} ${APP_TOP} L${LB.x} ${LB.bottom} L${LB.x} ${LB.top} L${C[1]} 74`,
+  tokens: 5,
+};
+// keyTimes for token k: hidden until it leaves the model, then 35% of the cycle to reach the client.
+const tokenTimes = (k: number) => {
+  const leave = 0.48 + k * 0.04;
+  return { leave, arrive: leave + 0.34 };
+};
+
 const box = 'stroke-width: 2';
+const stores = [
+  { x: STORE.cache, label: 'cache', note: '2 ms' },
+  { x: STORE.database, label: 'database', note: '40 ms' },
+  { x: STORE.vectors, label: 'vector DB', note: '8 ms' },
+];
 ---
 
 <figure class="hero-system" data-hero-system>
-  <svg viewBox="0 0 440 486" width="100%" role="img" aria-labelledby="hs-t hs-d">
-    <title id="hs-t">A small production system, live</title>
+  <svg viewBox="0 0 460 490" width="100%" role="img" aria-labelledby="hs-t hs-d">
+    <title id="hs-t">A small production system with an AI feature, live</title>
     <desc id="hs-d">
       Three clients, a phone, a laptop and a script, send requests to a load balancer, which spreads
       them across two app servers. The app servers read from a cache, which answers in about 2 ms,
       and a database, which answers in about 40 ms. Requests travel down as blue dots and answers
-      travel back up as green dots; one slow query comes back amber.
+      travel back up as green dots; one slow query comes back amber. One request from the laptop
+      takes the AI path: app 2 searches a vector database for matching documents, then calls a
+      model API, and the answer streams back to the laptop as a row of small green dots, one per
+      token.
     </desc>
 
     <defs>
       {trips.map((t, i) => <path id={`hs-route-${i}`} d={t.path} fill="none" />)}
+      <path id="hs-ai-down" d={AI.down} fill="none" />
+      <path id="hs-ai-up" d={AI.up} fill="none" />
     </defs>
 
     <!-- Wiring -->
     <g class="hs-wire" fill="none">
       {C.map((x) => <path d={`M${x} 74 L${LB.x} ${LB.top}`} />)}
       {APP.map((x) => <path d={`M${LB.x} ${LB.bottom} L${x} ${APP_TOP}`} />)}
-      {APP.map((x) => APP.map((s) => <path d={`M${x} ${APP_BOTTOM} L${s} ${STORE_TOP}`} />))}
+      {[STORE.cache, STORE.database].map((s) => <path d={`M${APP[0]} ${APP_BOTTOM} L${s} ${ROW}`} />)}
+      {[STORE.database, STORE.vectors].map((s) => <path d={`M${APP[1]} ${APP_BOTTOM} L${s} ${ROW}`} />)}
+      <path class="hs-wire-ai" d={`M${APP[1]} ${APP_BOTTOM} L${MODEL} ${ROW}`} />
     </g>
 
     <!-- Traffic: each dot goes down its route and comes back up, changing colour at the bottom. -->
@@ -91,6 +122,43 @@ const box = 'stroke-width: 2';
           )),
         )
       }
+
+      <!-- The AI request goes down as one blue dot... -->
+      <circle r="7" class="hs-dot hs-dot-flow">
+        <animateMotion dur={`${AI.dur}s`} begin={`-${AI.begin}s`} repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;0.44;1" calcMode="linear">
+          <mpath href="#hs-ai-down" />
+        </animateMotion>
+        <animate attributeName="opacity" dur={`${AI.dur}s`} begin={`-${AI.begin}s`} repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.44" values="1;0" />
+      </circle>
+      <!-- ...and the answer comes back as a stream of small token dots. -->
+      {
+        Array.from({ length: AI.tokens }, (_, k) => {
+          const { leave, arrive } = tokenTimes(k);
+          return (
+            <circle r="4.5" class="hs-dot hs-dot-ok" opacity="0">
+              <animateMotion
+                dur={`${AI.dur}s`}
+                begin={`-${AI.begin}s`}
+                repeatCount="indefinite"
+                keyPoints="0;0;1;1"
+                keyTimes={`0;${leave.toFixed(2)};${arrive.toFixed(2)};1`}
+                calcMode="linear"
+              >
+                <mpath href="#hs-ai-up" />
+              </animateMotion>
+              <animate
+                attributeName="opacity"
+                dur={`${AI.dur}s`}
+                begin={`-${AI.begin}s`}
+                repeatCount="indefinite"
+                calcMode="discrete"
+                keyTimes={`0;${leave.toFixed(2)};${arrive.toFixed(2)}`}
+                values="0;1;0"
+              />
+            </circle>
+          );
+        })
+      }
     </g>
 
     <!-- Boxes, drawn over the wiring so dots disappear into them and come out again. -->
@@ -104,9 +172,9 @@ const box = 'stroke-width: 2';
         ))
       }
 
-      <rect x="110" y={LB.top} width="220" height="54" rx="7" style={`fill: var(--viz-server-soft); stroke: var(--viz-server); ${box}`} />
-      <text x="220" y="184" font-weight="600" style="fill: var(--viz-ink)">load balancer</text>
-      <circle cx="312" cy="166" r="5" class="hs-led" />
+      <rect x={LB.x - 110} y={LB.top} width="220" height="54" rx="7" style={`fill: var(--viz-server-soft); stroke: var(--viz-server); ${box}`} />
+      <text x={LB.x} y="184" font-weight="600" style="fill: var(--viz-ink)">load balancer</text>
+      <circle cx={LB.x + 92} cy="166" r="5" class="hs-led" />
 
       {
         APP.map((x, i) => (
@@ -119,21 +187,28 @@ const box = 'stroke-width: 2';
       }
 
       {
-        [
-          { x: APP[0], label: 'cache', note: 'hit · 2 ms' },
-          { x: APP[1], label: 'database', note: 'query · 40 ms' },
-        ].map(({ x, label, note }) => (
+        stores.map(({ x, label, note }) => (
           <g>
             <path
-              d={`M${x - 70} ${STORE_TOP + 8} a70 11 0 0 1 140 0 v40 a70 11 0 0 1 -140 0 z`}
+              d={`M${x - 50} ${ROW + 8} a50 10 0 0 1 100 0 v40 a50 10 0 0 1 -100 0 z`}
               style={`fill: var(--viz-store-soft); stroke: var(--viz-store); ${box}`}
             />
-            <path d={`M${x - 70} ${STORE_TOP + 8} a70 11 0 0 0 140 0`} fill="none" style={`stroke: var(--viz-store); ${box}`} />
-            <text x={x} y={STORE_TOP + 42} font-weight="600" style="fill: var(--viz-ink)">{label}</text>
-            <text x={x} y={STORE_TOP + 92} class="hs-note">{note}</text>
+            <path d={`M${x - 50} ${ROW + 8} a50 10 0 0 0 100 0`} fill="none" style={`stroke: var(--viz-store); ${box}`} />
+            <text x={x} y={ROW + 42} font-weight="600" font-size="18" style="fill: var(--viz-ink)">{label}</text>
+            <text x={x} y={ROW + 88} class="hs-note">{note}</text>
           </g>
         ))
       }
+
+      <!-- The model API: an outside service, so a dashed border, with a spark for "AI". -->
+      <rect x={MODEL - 52} y={ROW} width="104" height="58" rx="12" class="hs-model" />
+      <path
+        class="hs-spark"
+        d={`M${MODEL - 33} ${ROW + 17}c.4 3 1.9 4.5 4.9 4.9-3 .4-4.5 1.9-4.9 4.9-.4-3-1.9-4.5-4.9-4.9 3-.4 4.5-1.9 4.9-4.9Z`}
+      />
+      <text x={MODEL + 7} y={ROW + 27} font-weight="600" font-size="18" style="fill: var(--viz-ink)">model</text>
+      <text x={MODEL} y={ROW + 48} font-size="15" style="fill: var(--viz-muted)">API</text>
+      <text x={MODEL} y={ROW + 88} class="hs-note">tokens</text>
     </g>
   </svg>
 </figure>
@@ -162,6 +237,18 @@ const box = 'stroke-width: 2';
     to {
       stroke-dashoffset: -20;
     }
+  }
+  .hs-wire .hs-wire-ai {
+    stroke: var(--viz-client);
+  }
+  .hs-model {
+    fill: var(--viz-client-soft);
+    stroke: var(--viz-client);
+    stroke-width: 2;
+    stroke-dasharray: 6 4;
+  }
+  .hs-spark {
+    fill: var(--viz-client);
   }
   .hs-dot-flow {
     fill: var(--viz-flow);
@@ -192,7 +279,7 @@ const box = 'stroke-width: 2';
   .hs-note {
     font-family: var(--note-font-display);
     font-style: italic;
-    font-size: 21px;
+    font-size: 18px;
     fill: var(--viz-muted);
   }
 </style>
@@ -206,9 +293,10 @@ const box = 'stroke-width: 2';
 
     const apply = () => {
       if (reduce.matches) {
-        // A still frame with dots spread along their routes, so the picture still tells the story.
+        // A still frame with dots spread along their routes and the token stream half way home, so the
+        // picture still tells the story.
         svg.pauseAnimations();
-        svg.setCurrentTime(5.2);
+        svg.setCurrentTime(2);
       } else if (onScreen) {
         svg.unpauseAnimations();
       } else {

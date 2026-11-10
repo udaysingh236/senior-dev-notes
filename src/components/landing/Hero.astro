@@ -15,6 +15,7 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
 
 <div class="note-hero">
   <div class="note-hero-bg note-grid" aria-hidden="true"></div>
+  <div class="note-hero-glow" aria-hidden="true"><span></span><span></span><span></span></div>
 
   <div class="note-hero-copy">
     <p class="note-eyebrow note-hero-in" style="--i: 0">Field notes from production</p>
@@ -34,14 +35,14 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
         </div>
       )
     }
-    <dl class="note-hero-stats note-hero-in" style="--i: 4">
+    <dl class="note-hero-stats note-glass note-hero-in" style="--i: 4">
       <div><dt>topics published</dt><dd>{published}</dd></div>
       <div><dt>on the roadmap</dt><dd>{total}</dd></div>
       <div><dt>tracks</dt><dd>{summaries.length}</dd></div>
     </dl>
   </div>
 
-  <div class="note-hero-art note-hero-in" style="--i: 2">
+  <div class="note-hero-art note-glass note-hero-in" style="--i: 2">
     <HeroSystem />
   </div>
 </div>
@@ -64,6 +65,86 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
     -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
   }
 
+  /* Soft colour glows behind the hero. The frosted panels in front of them blur these, which is
+     what makes the glass visible. Colours are the diagram tokens: clients, stores, requests. */
+  .note-hero-glow {
+    position: absolute;
+    inset: -4rem -10vw 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .note-hero-glow span {
+    position: absolute;
+    width: 26rem;
+    height: 26rem;
+    border-radius: 50%;
+    filter: blur(70px);
+    opacity: var(--glow-alpha, 0.28);
+  }
+  .note-hero-glow span:nth-child(1) {
+    top: 2rem;
+    right: 4%;
+    background: var(--viz-client);
+  }
+  .note-hero-glow span:nth-child(2) {
+    top: 16rem;
+    right: 24%;
+    width: 20rem;
+    height: 20rem;
+    background: var(--viz-store);
+  }
+  .note-hero-glow span:nth-child(3) {
+    top: 6rem;
+    left: -6rem;
+    width: 22rem;
+    height: 22rem;
+    background: var(--viz-flow);
+    opacity: calc(var(--glow-alpha, 0.28) * 0.6);
+  }
+  :global(:root[data-theme='light']) .note-hero-glow {
+    --glow-alpha: 0.2;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .note-hero-glow span {
+      animation: note-glow-drift 18s ease-in-out infinite alternate;
+    }
+    .note-hero-glow span:nth-child(2) {
+      animation-duration: 23s;
+      animation-direction: alternate-reverse;
+    }
+  }
+  @keyframes note-glow-drift {
+    to {
+      translate: -3rem 2rem;
+      scale: 1.12;
+    }
+  }
+
+  /* The glass: a translucent panel that blurs whatever is behind it, with a thin bright edge. */
+  .note-glass {
+    border: 1px solid color-mix(in srgb, var(--sl-color-white) 14%, transparent);
+    background: color-mix(in srgb, var(--viz-surface) 52%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
+      var(--note-shadow);
+  }
+  :global(:root[data-theme='light']) .note-glass {
+    border-color: color-mix(in srgb, white 70%, transparent);
+    background: color-mix(in srgb, var(--viz-surface) 58%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, white 80%, transparent),
+      var(--note-shadow);
+  }
+  /* Without backdrop blur the panel would be see-through and noisy, so make it solid. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .note-glass {
+      background: var(--viz-surface);
+    }
+  }
+
   .note-hero-copy {
     display: flex;
     flex-direction: column;
@@ -73,7 +154,7 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
 
   .note-hero h1 {
     margin: 0;
-    font-size: clamp(2.5rem, 1.6rem + 4.2vw, 4.4rem);
+    font-size: clamp(2.3rem, 1.5rem + 3.6vw, 3.9rem);
     font-weight: 600;
     line-height: 1.04;
     letter-spacing: -0.025em;
@@ -138,9 +219,11 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
     box-shadow: 0 4px 0 var(--note-margin);
   }
   .note-btn-quiet {
-    border: 1px solid var(--sl-color-gray-4);
+    border: 1px solid color-mix(in srgb, var(--sl-color-white) 22%, transparent);
     color: var(--sl-color-white);
-    background: color-mix(in srgb, var(--sl-color-black) 70%, transparent);
+    background: color-mix(in srgb, var(--sl-color-black) 45%, transparent);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
   }
   .note-btn-quiet:hover {
     border-color: var(--sl-color-white);
@@ -154,9 +237,10 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem 2rem;
+    align-self: flex-start;
     margin: 0.75rem 0 0;
-    padding-top: 1rem;
-    border-top: 1px dashed var(--sl-color-gray-5);
+    padding: 0.85rem 1.4rem;
+    border-radius: 1rem;
   }
   .note-hero-stats div {
     display: flex;
@@ -183,23 +267,22 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
     max-width: 30rem;
     width: 100%;
     margin-inline: auto;
-    padding: 1.25rem;
-    border: 1px solid var(--sl-color-hairline-shade);
-    border-radius: 1rem;
-    background: color-mix(in srgb, var(--viz-surface) 88%, transparent);
-    box-shadow: var(--note-shadow);
+    padding: 0.75rem;
+    border-radius: 1.25rem;
   }
-  /* A strip of tape holding the drawing to the page. */
+  @media (min-width: 40rem) {
+    .note-hero-art {
+      padding: 1.25rem;
+    }
+  }
+  /* A soft sheen across the top of the glass. */
   .note-hero-art::before {
     content: '';
     position: absolute;
-    top: -0.7rem;
-    left: 50%;
-    width: 6.5rem;
-    height: 1.4rem;
-    transform: translateX(-50%) rotate(-2deg);
-    background: color-mix(in srgb, var(--note-highlight-strong) 45%, transparent);
-    border-radius: 2px;
+    inset: 0 0 55%;
+    border-radius: inherit;
+    background: linear-gradient(to bottom, color-mix(in srgb, white 7%, transparent), transparent);
+    pointer-events: none;
   }
 
   @media (min-width: 60rem) {
@@ -207,10 +290,6 @@ const total = summaries.reduce((n, s) => n + s.publishedCount + s.plannedCount, 
       grid-template-columns: 1.15fr 1fr;
       gap: 3.5rem;
       padding-block: 3.5rem 2.5rem;
-    }
-    .note-hero-art {
-      /* `rotate`, not `transform`, so the entrance animation does not undo the tilt. */
-      rotate: 0.8deg;
     }
   }
 

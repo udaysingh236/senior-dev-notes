@@ -5,17 +5,24 @@
 import { getCurriculum } from '../lib/curriculum.mjs';
 import { resolveTopic } from '../lib/topics';
 
-const topics = await Promise.all(getCurriculum().starterPath.map((slug) => resolveTopic(slug, 'the starter path')));
+interface Props {
+  /** Which path from CURRICULUM.md: the main starter path or the AI starter path. */
+  path?: 'main' | 'ai';
+}
+const { path = 'main' } = Astro.props;
+const curriculum = getCurriculum();
+const slugs = path === 'ai' ? curriculum.aiStarterPath : curriculum.starterPath;
+const topics = await Promise.all(slugs.map((slug) => resolveTopic(slug, `the ${path} starter path`)));
 const half = Math.ceil(topics.length / 2);
 ---
 
 <ol class="route not-content" style={`--rows: ${half}`}>
   {
     topics.map((t, i) => {
-      const nextDone = topics[i + 1]?.href;
+      const nextDone = topics[i + 1]?.published;
       return (
         <li
-          class:list={['station', { 'is-done': t.href, 'line-done': t.href && nextDone, 'col-end': i === half - 1 }]}
+          class:list={['station', { 'is-done': t.published, 'line-done': t.published && nextDone, 'col-end': i === half - 1 }]}
           data-reveal
           style={`--reveal-i: ${i % 5}`}
         >
@@ -23,8 +30,12 @@ const half = Math.ceil(topics.length / 2);
             {i + 1}
           </span>
           <span class="station-body">
-            {t.href ? (
+            {t.published ? (
               <a href={t.href}>{t.title}</a>
+            ) : t.href ? (
+              <span class="station-title">
+                <a href={t.href}>{t.title}</a> <span class="chip-soon-label">outline</span>
+              </span>
             ) : (
               <span class="station-title">
                 {t.title} <span class="chip-soon-label">soon</span>
@@ -130,6 +141,14 @@ const half = Math.ceil(topics.length / 2);
   .station-title {
     font-weight: 500;
     color: var(--sl-color-gray-2);
+  }
+  /* An outline page: linked, but not written yet, so no green "done" underline. */
+  .station-body .station-title a {
+    font-weight: 500;
+    color: var(--sl-color-gray-2);
+    text-decoration-color: var(--sl-color-gray-4);
+    text-decoration-style: dashed;
+    text-decoration-thickness: 1px;
   }
   .station-track {
     margin-top: 0.15rem;

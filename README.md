@@ -1,6 +1,6 @@
 # Senior Dev Notes
 
-**System design and production engineering, explained the way a senior engineer mentors a junior.**
+**System design, production engineering and AI engineering, explained the way a senior engineer mentors a junior.**
 
 Read it at **[seniordevnotes.in](https://seniordevnotes.in)**.
 

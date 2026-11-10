@@ -46,7 +46,7 @@ export default defineConfig({
     starlight({
       title: 'Senior Dev Notes',
       description:
-        'System design and production engineering for beginners, explained the way a senior engineer mentors a junior.',
+        'System design, production engineering and AI engineering for beginners, explained the way a senior engineer mentors a junior.',
       favicon: '/favicon.svg',
       logo: { src: './src/assets/logo.svg', alt: '' },
       social: [{ icon: 'github', label: 'GitHub', href: REPO }],
