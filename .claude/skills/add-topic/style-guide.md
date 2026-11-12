@@ -64,6 +64,10 @@ and the old point has been rewritten here. Every new or rewritten page must meet
 14. **The author reads the whole page as a normal reader before publishing**, top to bottom, every
    word, on the built page, and fixes what a reader would trip on. Agent reports, checklists and
    a passing build are not a substitute (see "The publishing read").
+15. **Refresh school maths before using it** (November 2026, for the AI pages). Never assume the
+   reader remembers what a vector, a probability or a logarithm is. They met it in school, years
+   ago; give a short refresher with tiny numbers before the page leans on it (see "Maths
+   refreshers").
 
 No published page meets the November standard yet. Every page published before November 2026 will
 be rewritten with `/add-topic --update`, one page per session, starting with Google Authenticator
@@ -82,6 +86,9 @@ the reference.
   threads, hashing, encryption keys, bits and bytes, percentiles, locks, transactions, time zones
   and Unix time, caches, protocols. If unsure, explain it; a reader who knows it loses ten seconds,
   a reader who doesn't loses the page.
+- School maths is not on the "assume they know" list. Vectors, probabilities, percentages of
+  percentages, powers, logarithms and averages get a short refresher the first time a page uses
+  them (see "Maths refreshers").
 
 ## The voice: a senior engineer mentoring a junior
 
@@ -212,6 +219,44 @@ A reader should never have to stop and calculate to follow a sentence.
   raw figures when the point is the size, and give the exact figure after.
 - **Tables of numbers get one sentence saying what to notice.** The reader should not have to compare
   rows to find the point.
+
+## Maths refreshers
+
+AI pages lean on maths most readers last saw in school. Assume they have forgotten it. Before a
+page uses any of the ideas below, it gives a short refresher: two to five sentences in plain words
+with one tiny worked example, as a building block in Part 1 or a short paragraph right before the
+first use in Part 2. A reader who remembers loses ten seconds; one who doesn't can now follow.
+
+Refresh these the first time a page uses them:
+
+- **Vector:** a list of numbers, such as [2, 5]. Show it as an arrow or a point on a grid first.
+- **Dot product:** multiply matching numbers and add: [1, 2] · [3, 4] = 1 × 3 + 2 × 4 = 3 + 8 = 11.
+- **Length of a vector and cosine similarity:** how far the arrow reaches, and how close two arrows
+  point in the same direction, worked with 2- or 3-number vectors.
+- **Matrix:** a grid of numbers; multiplying one by a vector, worked on a 2 × 2 example.
+- **Probability:** a number from 0 to 1 for how likely something is; the chances of all outcomes
+  add up to 1. Show it with counts first (3 out of 10 = 0.3 = 30%).
+- **Average (mean) and weighted average.**
+- **Powers and exponentials** (2³ = 2 × 2 × 2 = 8, and what e is, roughly 2.718), before softmax.
+- **Logarithms:** "how many times do I multiply 10 to get this number?" (log₁₀ 1,000 = 3), before
+  BM25, perplexity or cross-entropy.
+- **Gradient or slope:** which way and how steeply a value changes, before training or gradient
+  descent.
+- **Bits and precision:** what 16 bits or 4 bits can store, before quantization.
+
+How to write them:
+
+- **Tiny first, real size after.** Work every idea on toy numbers (a 3-number vector, a 3-word
+  sentence, a 2 × 2 matrix). Only then say what the real size is (embeddings have 768 or 1,536
+  numbers; a model has 8 billion weights) and what changes at that size.
+- **Never a formula first.** Softmax, cosine similarity, attention, BM25 and LoRA's matrix sizes are
+  each worked by hand on the running example's numbers before the formula appears, and every
+  symbol is named in words next to it ("Numbers without maths for the reader" applies in full).
+- **A picture when the idea is spatial.** Vectors, angles and nearest neighbours get a small
+  diagram with two or three arrows on a grid.
+- **Refresh once per page, then use it.** Later sections build on the refresher instead of
+  repeating it. Another page may link back, but each page must stand alone, so it refreshes the
+  maths it needs again in a sentence or two.
 
 ## Say each thing once, without padding
 
@@ -357,6 +402,7 @@ none of the research in its context. List in `research/<slug>.md`:
 - every place a number or claim appears without where it comes from;
 - every diagram they would not understand from its caption and the sentence before it;
 - every jump where a step is missing ("so the server accepts it" — why?).
+- every maths idea (vector, probability, logarithm, matrix…) used without a refresher first.
 
 Fix every item, then read again until the list is empty. Also check: can the reader, after Part 1
 alone, explain the idea in three sentences to a friend? If not, Part 1 is not done.
