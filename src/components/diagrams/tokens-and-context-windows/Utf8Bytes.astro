@@ -1,0 +1,37 @@
+---
+// UTF-8: 1 byte for "a", 3 for the Hindi letter म, 4 for an emoji.
+const rows = [
+  { y: 20, ch: 'a', name: 'English letter a', bytes: ['61'] },
+  { y: 110, ch: 'म', name: 'Hindi letter म (ma)', bytes: ['e0', 'a4', 'ae'] },
+  { y: 200, ch: '😀', name: 'an emoji', bytes: ['f0', '9f', '98', '80'] },
+];
+---
+
+<svg viewBox="0 0 400 296" width="100%" role="img" aria-labelledby="tcw-u8-t tcw-u8-d">
+  <title id="tcw-u8-t">How many bytes UTF-8 uses for different characters</title>
+  <desc id="tcw-u8-d">
+    Three characters and their UTF-8 bytes, written in hex. The English letter a is one byte, 61. The Hindi
+    letter ma is three bytes, e0 a4 ae. A smiling emoji is four bytes, f0 9f 98 80.
+  </desc>
+  <defs>
+    <marker id="tcw-u8-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  {rows.map((r) => (
+    <g>
+      <text x="4" y={r.y} font-size="15" style="fill: var(--viz-muted)">{r.name}</text>
+      <rect x="4" y={r.y + 10} width="56" height="56" rx="8" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+      <text x="32" y={r.y + 48} font-size="28" text-anchor="middle" style="fill: var(--viz-ink)">{r.ch}</text>
+      <line x1="66" y1={r.y + 38} x2="100" y2={r.y + 38} stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tcw-u8-a)" />
+      {r.bytes.map((b, i) => (
+        <g>
+          <rect x={108 + i * 52} y={r.y + 18} width="46" height="40" rx="4" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+          <text x={108 + i * 52 + 23} y={r.y + 44} font-size="17" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{b}</text>
+        </g>
+      ))}
+      <text x="396" y={r.y + 44} font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink)">{r.bytes.length === 1 ? '1 byte' : `${r.bytes.length} bytes`}</text>
+    </g>
+  ))}
+  <text x="4" y="288" font-size="15" style="fill: var(--viz-muted)">each box is one byte, written as two hex digits</text>
+</svg>

@@ -1,0 +1,48 @@
+---
+// Three ways to cut "I love rereading books.": whole words, characters, word pieces (GPT-4o's o200k_base).
+const lay = (ws: number[], gap = 4) => ws.reduce<number[]>((acc, w, i) => (acc.push(i === 0 ? 4 : acc[i - 1] + ws[i - 1] + gap), acc), []);
+const words = [
+  { t: 'I', w: 40 }, { t: 'love', w: 70 }, { t: 'unknown', w: 120, bad: true }, { t: 'books', w: 80 }, { t: '.', w: 34 },
+];
+const wordsX = lay(words.map((c) => c.w), 8);
+const chars = [...'I love rereading books.'];
+const pieces = [
+  { t: 'I', w: 34 }, { t: '␣love', w: 70 }, { t: '␣rere', w: 70 }, { t: 'ading', w: 70 }, { t: '␣books', w: 80 }, { t: '.', w: 34 },
+];
+const piecesX = lay(pieces.map((c) => c.w));
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="tcw-3s-t tcw-3s-d">
+  <title id="tcw-3s-t">Three ways to cut the same sentence into tokens</title>
+  <desc id="tcw-3s-d">
+    The sentence "I love rereading books." cut three ways. Whole words: 5 tokens, but "rereading" is not on
+    the list and becomes "unknown", shown in red. Single characters: 23 tokens, nothing lost but four times
+    longer. Word pieces, as GPT-4o's tokenizer does it: 6 tokens, with "rereading" spelled from the pieces
+    "space rere" and "ading".
+  </desc>
+
+  <text x="4" y="20" font-size="16" font-weight="700" style="fill: var(--viz-ink)">whole words: 5, one word lost</text>
+  {words.map((c, i) => (
+    <g>
+      <rect x={wordsX[i]} y="30" width={c.w} height="36" rx="6" stroke-width="2" style={c.bad ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'} />
+      <text x={wordsX[i] + c.w / 2} y="54" font-size="15" text-anchor="middle" style={c.bad ? 'fill: var(--viz-bad); font-style: italic' : 'fill: var(--viz-ink); font-family: var(--sl-font-mono)'}>{c.t}</text>
+    </g>
+  ))}
+
+  <text x="4" y="112" font-size="16" font-weight="700" style="fill: var(--viz-ink)">characters: 23, four times longer</text>
+  {chars.map((ch, i) => (
+    <g>
+      <rect x={4 + i * 16.9} y="122" width="14.5" height="36" rx="3" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+      <text x={4 + i * 16.9 + 7.25} y="146" font-size="14" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{ch === ' ' ? '␣' : ch}</text>
+    </g>
+  ))}
+
+  <text x="4" y="204" font-size="16" font-weight="700" style="fill: var(--viz-ink)">word pieces: 6, nothing lost</text>
+  {pieces.map((c, i) => (
+    <g>
+      <rect x={piecesX[i]} y="214" width={c.w} height="36" rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+      <text x={piecesX[i] + c.w / 2} y="238" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{c.t}</text>
+    </g>
+  ))}
+  <text x="4" y="286" font-size="15" style="fill: var(--viz-muted)">the new word is built from pieces the list already has</text>
+</svg>

@@ -1,0 +1,51 @@
+---
+// The five merges from the toy corpus, applied to the word "reading", plus "thread" at the end.
+const rows = [
+  { pieces: ['r', 'e', 'a', 'd', 'i', 'n', 'g'], note: 'start: single bytes' },
+  { pieces: ['re', 'a', 'd', 'i', 'n', 'g'], note: '1: r + e, seen 18×' },
+  { pieces: ['rea', 'd', 'i', 'n', 'g'], note: '2: re + a, seen 15×' },
+  { pieces: ['read', 'i', 'n', 'g'], note: '3: rea + d, seen 15×' },
+  { pieces: ['readi', 'n', 'g'], note: '4: read + i, seen 4×' },
+  { pieces: ['readin', 'g'], note: '5: readi + n, seen 4×' },
+];
+const U = 22; // width per letter
+const lay = (ps: string[]) => ps.reduce<number[]>((acc, p, i) => (acc.push(i === 0 ? 4 : acc[i - 1] + ps[i - 1].length * U + 3), acc), []);
+const thread = ['t', 'h', 'read'];
+---
+
+<svg viewBox="0 0 400 372" width="100%" role="img" aria-labelledby="tcw-ml-t tcw-ml-d">
+  <title id="tcw-ml-t">Five BPE merges applied to the word reading</title>
+  <desc id="tcw-ml-d">
+    The word reading starts as 7 single-letter tokens. Merge 1 joins r and e, seen 18 times: 6 tokens.
+    Merge 2 joins re and a, seen 15 times: 5 tokens. Merge 3 joins rea and d: 4 tokens. Merge 4 joins read
+    and i, seen 4 times: 3 tokens. Merge 5 joins readi and n: 2 tokens, readin and g. A new word, thread,
+    is encoded with the same merges as t, h and read.
+  </desc>
+  {rows.map((r, j) => {
+    const xs = lay(r.pieces);
+    const y = 8 + j * 46;
+    return (
+      <g>
+        {r.pieces.map((p, i) => (
+          <g>
+            <rect x={xs[i]} y={y} width={p.length * U} height="32" rx="5" stroke-width="2" style={p.length > 1 ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'} />
+            <text x={xs[i] + (p.length * U) / 2} y={y + 22} font-size="16" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{p}</text>
+          </g>
+        ))}
+        <text x="396" y={y + 22} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">{r.note}</text>
+      </g>
+    );
+  })}
+  <line x1="4" y1="290" x2="396" y2="290" stroke-width="1" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" />
+  <text x="4" y="316" font-size="15" style="fill: var(--viz-muted)">a word never seen in training:</text>
+  {thread.map((p, i) => {
+    const x = lay(thread)[i];
+    return (
+      <g>
+        <rect x={x} y="326" width={p.length * U} height="32" rx="5" stroke-width="2" style={p.length > 1 ? 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)' : 'fill: var(--viz-flow-soft); stroke: var(--viz-flow)'} />
+        <text x={x + (p.length * U) / 2} y="348" font-size="16" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{p}</text>
+      </g>
+    );
+  })}
+  <text x="396" y="348" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">thread: 3 tokens</text>
+</svg>

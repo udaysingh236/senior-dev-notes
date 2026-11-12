@@ -222,7 +222,7 @@ Small concepts are taught inside the page they belong to, as building blocks or 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | Neural networks for engineers | neural-networks-basics | reel | outline (2026-11-10) |
-| 2 | Tokens, tokenization and context windows | tokens-and-context-windows | reel | outline (2026-11-10) |
+| 2 | Tokens, tokenization and context windows | tokens-and-context-windows | reel | published (2026-11-12) |
 | 3 | How an LLM writes: one token at a time | how-llms-generate-text | new | outline (2026-11-10) |
 | 4 | Embeddings: meaning as numbers | embeddings | reel | outline (2026-11-10) |
 | 5 | Transformers and self-attention | transformers-and-attention | reel | outline (2026-11-10) |
