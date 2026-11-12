@@ -1,103 +1,1052 @@
 ---
-title: "Neural networks for engineers"
-description: "How a neural network turns numbers into a prediction, and how it learns from its mistakes. Outline: the full article is coming soon."
+title: "Neural Networks for Engineers"
+description: "How a neural network turns numbers into a prediction, and how it learns from its mistakes. From one neuron worked by hand to backpropagation, gradient descent, why GPUs run AI, overfitting, and the mistakes that hurt in production, with one spam email followed all the way through."
 tagline: "How a neural network turns numbers into a prediction, and how it learns from its mistakes."
 difficulty: beginner
 track: ai-engineering
 prerequisites: []
 next: [tokens-and-context-windows, how-llms-generate-text]
-outline: true
-giscus: false
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+lastReviewed: 2026-11-12
 sidebar:
   order: 1
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
-
-:::note[This page is an outline]
-The article is not written yet. What you see is the structure it will follow: every heading below
-will be filled in, first in plain words for a fresher, then in depth.
-:::
+import MentalModel from '../../../components/diagrams/neural-networks-basics/MentalModel.astro';
+import Neuron from '../../../components/diagrams/neural-networks-basics/Neuron.astro';
+import Sigmoid from '../../../components/diagrams/neural-networks-basics/Sigmoid.astro';
+import LossValley from '../../../components/diagrams/neural-networks-basics/LossValley.astro';
+import ForwardPass from '../../../components/diagrams/neural-networks-basics/ForwardPass.astro';
+import Backprop from '../../../components/diagrams/neural-networks-basics/Backprop.astro';
+import MatrixMultiply from '../../../components/diagrams/neural-networks-basics/MatrixMultiply.astro';
+import TrainSim from '../../../components/sims/neural-networks-basics/TrainSim.astro';
 
 ## The question
 
-How can a program that nobody wrote rules for learn to tell a spam email from a real one?
+Nobody sits at Google writing a rule for every spam email in the world. Spammers change their tricks
+every week, and no list of `if` statements keeps up. Yet your inbox catches most spam, and the same
+idea, scaled up a million times, writes text in ChatGPT. How can a program learn to tell spam from a
+real email when nobody wrote the rules?
+
+The short answer: instead of writing rules, we write a calculation full of adjustable numbers, called
+**weights**, and let the computer tune them. The calculation is a **neural network**. We show it
+thousands of emails whose right answer we already know. Each time it guesses, we measure how wrong
+the guess was and nudge every weight a little in the direction that would have made it less wrong.
+After enough emails, the weights hold the rules, even though nobody wrote them down.
 
 ## The idea in plain words
 
-The whole idea, from start to finish, with one running example: a tiny network that reads three numbers about an email and scores how likely it is to be spam.
+We will follow one email through the whole page. It has **6 links**, uses **4 money words** such as
+"free", "winner", "cash" and "prize", and comes from a sender who is **not in your contacts**. It is
+spam.
+
+1. **Turn the email into numbers.** A network only works with numbers, so we describe the email with
+   three of them: 6 (links), 4 (money words) and 0 (sender known? 0 means no, 1 means yes). Real
+   systems use thousands of numbers per email, but three are enough to see every idea.
+2. **Give each number a weight.** A weight says how much a number counts. Say links count 0.5,
+   money words count 0.8, and a known sender counts −3 (a known sender makes spam much less likely,
+   so its weight is negative).
+3. **Multiply and add.** 6 × 0.5 = 3.0, then 4 × 0.8 = 3.2, then 0 × −3 = 0. Add them: 3.0 + 3.2 + 0
+   = 6.2. Then add one more adjustable number, the **bias**, here −4: 6.2 − 4 = 2.2. That 2.2 is the
+   email's **score**.
+4. **Squash the score into a chance.** A score can be any number, but we want a chance between 0
+   and 1. A fixed squashing formula turns 2.2 into 0.90: a 90% chance of spam. This whole unit (weights,
+   adding up, bias, squash) is one **neuron**.
+5. **Connect many neurons.** One neuron can only weigh evidence in one simple way. A network wires
+   neurons into **layers**: the first layer's answers become the next layer's inputs, so later
+   neurons can combine simple patterns into harder ones.
+6. **Start with random weights.** A new network knows nothing. Its weights are random, so its
+   guesses are random too.
+7. **Measure how wrong it was.** For an email we already know is spam (right answer: 1), a guess of
+   0.27 is badly wrong and a guess of 0.90 is nearly right. A number called the **loss** scores the
+   wrongness: bigger means worse.
+8. **Nudge every weight to reduce the loss.** For each weight, we work out which way a small change
+   would lower the loss, and move the weight a small step that way. This is **gradient descent**.
+9. **Repeat with thousands of emails.** Each email nudges the weights a little. Over many passes,
+   the network's guesses get better. This is **training**.
+10. **Freeze it and use it.** Once trained, the weights stop changing. Scoring a new email with the
+    frozen weights is **inference**, and it is all your inbox does when mail arrives. The trained
+    network, with its weights, is called a **model**.
+
+<Figure caption="An email becomes three numbers, a network of weighted connections turns them into a spam chance, and training compares that answer with the right one and nudges every weight, over and over.">
+  <MentalModel />
+</Figure>
+
+Look at the picture once more. The forward direction (top to bottom) is a calculation: numbers in,
+a chance out. The dashed loop is learning: it only exists during training, and its only job is to
+change the weights on the lines. Everything an AI model "knows" lives in those weights.
+
+An everyday picture: think of a sound mixing desk with hundreds of sliders, where you cannot see
+which slider does what. You play a song, listen to how wrong it sounds, and push each slider a tiny
+bit in whichever direction made it sound better. After thousands of songs, the desk sounds right.
+The picture stops working in one place: you do not need to listen to each slider separately.
+Backpropagation, in Part 2, works out the right direction for every slider at once.
 
 ## The building blocks
 
-Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
-then the technical version.
+Six ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, an example
+with numbers, and then the technical version. Three of them need a little school maths, and each of
+those starts with a short refresher.
 
-### Neurons and weights
+### Weights and the weighted sum
+
+**What it is.** A **weighted sum** multiplies each input by its weight and adds up the results.
+
+**Why it exists.** Some evidence matters more than other evidence. Four money words say more about
+spam than six links, and a known sender says a lot in the other direction. Weights let the network
+decide how much each input counts, and in which direction.
+
+**A maths refresher first.** A **vector** is a list of numbers, such as [6, 4, 0]. Our email is a
+vector of three numbers, and the weights are another vector of three numbers, [0.5, 0.8, −3]. The
+**dot product** of two vectors of the same length multiplies the matching numbers and adds the
+results. For [1, 2] and [3, 4]: 1 × 3 = 3, then 2 × 4 = 8, then 3 + 8 = 11.
+
+**Example.** Our email's weighted sum is the dot product of [6, 4, 0] and [0.5, 0.8, −3]:
+
+| Input | Value | Weight | Value × weight |
+|---|---|---|---|
+| links | 6 | 0.5 | 3.0 |
+| money words | 4 | 0.8 | 3.2 |
+| known sender | 0 | −3 | 0 |
+| **sum** | | | **6.2** |
+
+The thing to notice: the known-sender weight is the largest in size, but this email's known-sender
+value is 0, so it adds nothing. A weight only matters when its input is not zero.
+
+**The technical version.** With inputs x₁, x₂, x₃ (the three numbers describing the email) and
+weights w₁, w₂, w₃, the weighted sum is w₁x₁ + w₂x₂ + w₃x₃. Written with vectors, it is the dot
+product **w · x**. Real models do the same thing with longer vectors: an email described by 1,000
+numbers has 1,000 weights per neuron.
+
+### A neuron: weighted sum, bias and a squash
+
+**What it is.** A **neuron** is a weighted sum, plus one extra number called the bias, passed
+through a squashing step.
+
+**Why it exists.** The weighted sum alone has two problems. It is zero whenever every input is zero,
+so it cannot lean towards "not spam" by default; the **bias** is a starting value that fixes that.
+And the sum can be any number, like 6.2 or −40, while we want a chance between 0 and 1; the squash
+fixes that.
+
+**A maths refresher first.** A **power** means multiplying a number by itself: 2³ = 2 × 2 × 2 = 8.
+A negative power means dividing instead: 2⁻¹ = 1 ÷ 2 = 0.5, and 2⁻³ = 1 ÷ 8 = 0.125. Mathematicians
+like one particular base, the number **e**, which is about 2.718. Powers of e grow very fast:
+e² ≈ 7.39 and e⁶·⁵ ≈ 665. Negative powers of e shrink towards zero: e⁻² ≈ 0.135. A **probability**
+is a number from 0 to 1 for how likely something is: 0.9 means 90%, the way 9 out of 10 emails like
+this one would be spam.
+
+**Example.** The squash we use here is called the **sigmoid**. It takes the score, computes
+1 ÷ (1 + e^(−score)), and always lands between 0 and 1. For our email, step by step:
+
+1. Weighted sum 6.2, plus bias −4, gives a score of 6.2 − 4 = 2.2.
+2. e^(−2.2) ≈ 0.111.
+3. 1 + 0.111 = 1.111.
+4. 1 ÷ 1.111 ≈ 0.90. A 90% chance of spam.
+
+Now an email from a friend: 1 link, 0 money words, sender known. The weighted sum is 1 × 0.5 + 0 ×
+0.8 + 1 × (−3) = 0.5 + 0 − 3 = −2.5, and the score is −2.5 − 4 = −6.5. The formula needs
+e^(−score), and minus −6.5 is +6.5, so we need e^(6.5) ≈ 665. The chance is 1 ÷ (1 + 665) =
+1 ÷ 666 ≈ 0.0015. That is 0.15%: almost certainly not spam.
+
+<Figure caption="One neuron, worked on our email: each input is multiplied by its weight, the products and the bias are added into a score of 2.2, and the squash turns that score into a 90% spam chance.">
+  <Neuron />
+</Figure>
+
+The picture is the whole neuron: three multiplications, one addition, one squash. Every neural
+network, including the ones that write text, is built from this unit, repeated a very large number
+of times.
+
+<Figure caption="The sigmoid squash. Big negative scores land near 0, a score of 0 lands at exactly 0.5, and big positive scores land near 1. Our email (2.2) gets 0.90; the friend's email (−6.5) gets 0.0015.">
+  <Sigmoid />
+</Figure>
+
+Notice the shape: in the middle, a small change in score moves the chance a lot; at the ends, the
+curve is almost flat. That flatness comes back in Part 2, where it explains why one way of measuring
+mistakes learns much faster than another.
+
+**The technical version.** A neuron computes σ(**w** · **x** + b), where **w** is the weight vector,
+**x** the input vector, b the bias, and σ (the Greek letter sigma) the squashing function, here
+σ(z) = 1 ÷ (1 + e⁻ᶻ). The squash is called an **activation function**. The weights and biases
+together are the network's **parameters**: the numbers training is allowed to change. When you read
+that a model "has 8 billion parameters", these are what is being counted.
 
 ### Layers
 
+**What it is.** A **layer** is a group of neurons that all read the same inputs, side by side, and
+each produce one number.
+
+**Why it exists.** One neuron can only draw one simple dividing line through the data: "more links
+and more money words, more spam". Real patterns are not that simple. Suppose people you know send
+you newsletters full of links, and those are fine, while strangers who send many links are
+spammers. "Links count, but only from strangers" is a combination. A layer of neurons can each
+detect one simple pattern, and the next layer can combine those patterns.
+
+**Example.** Picture a layer of two neurons reading our three numbers. Neuron A might learn to fire
+for "a stranger sending money words". Neuron B might learn to fire for "a known sender". An output
+neuron then reads A's and B's answers instead of the raw email and decides: spam when A is high and
+B is low. Nobody tells A or B what to look for. Training finds whatever patterns lower the loss, and
+often they are not as tidy as these two.
+
+**The technical version.** The inputs are called the **input layer** (they are not neurons, they
+are the email's numbers). The layers in the middle are **hidden layers**, because you never see
+their outputs directly. The last layer is the **output layer**. When every neuron in a layer reads
+every output of the layer before, the layer is **fully connected**. A network with several such
+layers is a **multi-layer perceptron** (MLP; "perceptron" is the old name for a neuron), the plain kind of network this page is about. "Deep
+learning" means networks with many hidden layers. The largest model in Meta's Llama 3 family, an
+open language model, has 126 layers ([Meta, 2024](https://arxiv.org/abs/2407.21783)).
+
 ### Loss: how wrong a guess was
 
-### Gradient descent
+**What it is.** The **loss** is one number that says how wrong the network's guesses were: 0 is
+perfect, bigger is worse.
 
-### Training vs inference
+**Why it exists.** "Wrong" has to be a number before a computer can reduce it. It must also grow
+smoothly: a guess of 0.8 for a spam email should count as less wrong than 0.3, not as equally wrong.
+"Right or wrong" would not tell training which way to move.
+
+**Example.** The simplest choice is **squared error**: the gap between the guess and the right
+answer, multiplied by itself. Our email is spam, so the right answer is 1:
+
+| Guess | Gap from 1 | Squared error |
+|---|---|---|
+| 0.90 | 0.10 | 0.10 × 0.10 = 0.01 |
+| 0.62 | 0.38 | 0.38 × 0.38 ≈ 0.14 |
+| 0.27 | 0.73 | 0.73 × 0.73 ≈ 0.53 |
+
+The thing to notice: squaring makes big mistakes count much more than small ones. A gap seven times
+bigger (0.73 against 0.10) gives a loss over fifty times bigger (0.53 against 0.01).
+
+**The technical version.** For one email with right answer y and guess p, squared error is
+(y − p)². Over a set of emails, the loss is the average of the per-email losses. For yes-or-no
+questions like spam, real systems use a different loss, called log loss or cross-entropy, and Part 2
+explains why. The idea stays the same: one number, lower is better.
+
+### Gradient descent: learning by small nudges
+
+**What it is.** **Gradient descent** is the rule for learning: for each weight, find which direction
+lowers the loss, and move the weight a small step that way.
+
+**Why it exists.** A network has too many weights to try every combination. Even our tiny neuron
+has 4 parameters, and trying 100 values for each would be 100 × 100 × 100 × 100 = 100 million
+tries. Gradient descent never searches. It asks "which way is downhill from here?" and takes a step.
+
+**A maths refresher first.** The **slope** of a line says how much it goes up for each step to the
+right. If walking one step to the right takes you 2 metres up, the slope is 2. If it takes you 2
+metres down, the slope is −2. A **gradient** is the slope in every direction at once: one slope per
+weight.
+
+**Example.** Start with a different, untrained neuron: links weight 0.2, money words weight 0.2,
+known-sender weight 0, bias −3. For our email, the score is 6 × 0.2 + 4 × 0.2 + 0 × 0 − 3 = 1.2 + 0.8
+− 3 = −1.0, and the squash gives 0.27. The squared error is (1 − 0.27)² ≈ 0.53. Now we test one
+weight:
+
+1. Nudge the money words weight from 0.2 to 0.21 and run the email again. The score becomes −0.96,
+   the guess 0.277, and the loss 0.523.
+2. Measured to four decimal places, the loss went from 0.5344 down to 0.5229, a change of −0.0115, for a weight change of +0.01.
+3. Slope = change in loss ÷ change in weight = −0.0115 ÷ 0.01 ≈ −1.15. Negative: raising this weight
+   lowers the loss.
+4. The same test on the links weight (nudge it from 0.2 to 0.21, keep the rest) gives a slope of
+   about −1.73.
+5. The known-sender weight's slope is 0, because its input is 0: changing it changes nothing for
+   this email. The bias has a slope too; to keep the arithmetic short, we leave it alone here.
+6. Step each weight against its slope, scaled by a small number called the **learning rate**, here
+   0.1. Money words: 0.2 − 0.1 × (−1.15) = 0.2 + 0.115 = 0.315. Links: 0.2 − 0.1 × (−1.73) = 0.2 +
+   0.173 = 0.373.
+7. Run the email again: 6 × 0.373 = 2.24, plus 4 × 0.315 = 1.26, gives 3.50, minus 3 is 0.50. The
+   squash turns 0.50 into 0.62. The loss has fallen from 0.53 to (1 − 0.62)² ≈ 0.14 in one step.
+
+If we tried every possible value of one weight and plotted the loss for each, we would get a
+curve shaped like a valley, and gradient descent is a walk down it:
+
+<Figure caption="Gradient descent on one weight. The curve is the loss for every value of the weight; the lowest point is the best value. Small steps go downhill and get shorter as the slope flattens. Steps that are too big jump across the valley and never settle.">
+  <LossValley />
+</Figure>
+
+Two things to see in the picture. The step size shrinks on its own near the bottom, because the
+slope gets smaller there. And the learning rate decides the step length: too small and training
+crawls, too big and the weight jumps over the bottom, back and forth.
+
+**The technical version.** For every parameter w, gradient descent does w ← w − η × ∂L/∂w. Here η
+(the Greek letter eta) is the learning rate, and ∂L/∂w (read "the partial derivative of the loss
+with respect to w") is the slope of the loss L when only w changes. Nudging each weight and
+re-running the email, as we did, works but costs one extra run per weight. Part 2 shows how
+backpropagation gets every slope from one backward pass instead.
+
+### Training and inference
+
+**What it is.** **Training** is the phase where the weights change; **inference** is using the
+finished, frozen weights to answer new inputs.
+
+**Why it exists.** The two jobs have very different costs and happen at different times. Training
+needs the right answers, many passes over the data and a lot of computing. Inference needs one
+pass per input and no right answers, and it is what runs in production every time a request
+arrives.
+
+**Example.** Our gradient descent step above was training: it changed two weights. Scoring the
+friend's email at 0.15% was inference: nothing changed. The code in this page's examples trains a
+small network on 75 emails, and finding its weights takes a few hundred passes over all 75. Scoring
+one new email afterwards is one pass, a few dozen multiplications.
+
+**The technical version.** Training runs a **forward pass** (inputs to output, as in the neuron
+above), computes the loss, runs a **backward pass** to get the gradients, and updates the weights.
+Inference runs only the forward pass. One consequence matters to every AI engineer: a deployed model
+does not learn from its users. When you chat with an AI model, its weights are frozen; anything it
+"remembers" within a conversation comes from text the app sends along with each request, not from
+changed weights.
 
 :::tip[If you stop here]
-Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+- A neural network is a calculation full of adjustable numbers called weights. Each neuron
+  multiplies its inputs by weights, adds them up with a bias, and squashes the result.
+- Neurons are wired into layers, so later neurons can combine the simple patterns earlier ones
+  detect.
+- The loss is one number for how wrong the guesses are. Training nudges every weight in the
+  direction that lowers it (gradient descent), over thousands of examples.
+- Nobody writes the rules: they end up stored in the weights.
+- Training changes the weights; inference uses them frozen. A deployed model does not learn while
+  you use it.
 :::
 
 ## Going deeper
 
-The hard question for readers who already know the basics, and the problem behind it in numbers.
+Our nudge-and-rerun trick needed one extra run of the network for every weight. The smallest model
+in Meta's Llama 3 family has 8 billion parameters. One training step done our way would need
+8 billion extra runs, for every few pages of training text, for months. Yet real training updates every weight
+after every small group of examples. How does a network find the downhill direction for billions of weights at once?
+And once it can, what stops it from memorising its training data instead of learning anything?
+
+Here is the size of the first problem. One forward pass costs about two operations per parameter:
+one multiplication by the weight and one addition into the sum ([Kaplan et al.,
+2020](https://arxiv.org/abs/2001.08361)). For an 8-billion-parameter model, that is
+2 × 8 billion = 16 billion operations for every token (a token is a word or a piece of a word; the
+[tokens page](/ai-engineering/tokens-and-context-windows/) explains them). Nudging each weight
+separately would cost 8 billion forward passes per training step. Backpropagation gets every slope
+for the cost of about two more forward passes. Two passes at 2 operations each is 2 × 2 = 4, so a
+whole step costs about 2 + 4 = 6 operations per parameter per token instead. That is the difference between impossible and merely very expensive.
+
+The second problem is quieter and catches more teams: a network with enough weights can memorise
+its training examples, mistakes included, and then do badly on everything else. The rest of
+this part covers both: how the gradients are computed, how they are used, why the hardware matters,
+and how to tell learning from memorising.
 
 ## The obvious fix, and why it breaks
 
-What people try first, and exactly where it fails.
+Before neural networks, the obvious fix was to write the rules by hand. Our example emails come
+with a hidden rule: from a known sender, it is spam when there are 4 or more money words (a hacked
+account); from a stranger, it is spam when links plus money words reach 6. On top of that, 4 of the
+100 emails carry a wrong label, the way real data always has some. A person who read a few spam
+emails might write this:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="rules_filter.py (excerpt)"
+def looks_like_spam(links: int, money_words: int, known_sender: int) -> bool:
+    if known_sender:
+        return False                      # "people I know never send spam"
+    return links >= 5 or money_words >= 3  # "lots of links or lots of money talk"
+# rules right on 75% of 100 emails
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="rules-filter.mjs (excerpt)"
+function looksLikeSpam(links, moneyWords, knownSender) {
+  if (knownSender) return false;           // "people I know never send spam"
+  return links >= 5 || moneyWords >= 3;    // "lots of links or lots of money talk"
+}
+// rules right on 75% of 100 emails
+```
+  </TabItem>
+</Tabs>
+
+It gets 75 of the 100 emails right. Of its 25 mistakes, 16 are hacked accounts, which the first
+rule waves through, and 5 are strangers with almost no links and 3 or 4 money words, which the
+second rule flags too eagerly. The other 4 are the mislabelled emails. Each fix adds another rule, each rule interacts with the others, and
+next week the spammers change their wording. This is the problem the opening question asked about.
+
+The next idea is one neuron, trained with gradient descent instead of written by hand. We train it
+on 75 of the emails and keep the other 25 aside, unseen, to check it fairly; the overfitting
+section explains why. It does better: 81% of its 75 training emails and 84% of the 25 held-back
+emails, but it hits a ceiling. One neuron's dividing line is straight: it can only say "the more links, the more spam",
+with one weight for links, for everybody. It cannot say "links count for strangers but not for
+people I know", because that needs the links weight to change depending on another input.
+
+So we add a hidden layer, and here is the trap. Without a squash between the layers, extra layers
+add nothing. Take one input, links, a hidden neuron that computes 2 × links − 1, and an output that
+computes 3 × hidden + 1:
+
+1. Put the first formula into the second: 3 × (2 × links − 1) + 1.
+2. Multiply out: 6 × links − 3 + 1.
+3. Simplify: 6 × links − 2.
+
+That is one neuron with weight 6 and bias −2. Any stack of multiply-and-add layers collapses into a
+single multiply-and-add like this ([Dive into Deep Learning, ch. 5.1](https://d2l.ai/chapter_multilayer-perceptrons/mlp.html)).
+The squash between layers is what stops the collapse, and it is the reason the network can bend
+its dividing line. Our trained network with 8 hidden neurons, each followed by a squash, gets all
+25 held-back emails right.
 
 ## How it works, piece by piece
 
 ### A forward pass worked by hand
 
-### Backpropagation in plain steps
+The hidden layers of modern networks use a different squash from the sigmoid. It is worth knowing
+first.
 
-### Why GPUs: everything is matrix multiplication
+**What it is.** **ReLU** (rectified linear unit) is the simplest possible squash: negative numbers
+become 0, and positive numbers pass through unchanged.
+
+**Why it exists.** It is the cheapest squash there is: one comparison, no powers of e. And
+unlike the sigmoid, it never flattens out for large positive scores, so the slopes that training
+needs stay large through many layers. That is why ReLU and its close relatives are the default in
+hidden layers ([D2L, ch. 5.1](https://d2l.ai/chapter_multilayer-perceptrons/mlp.html)).
+
+**Example.** ReLU(2.2) = 2.2. ReLU(−0.9) = 0. ReLU(0) = 0.
+
+**The technical version.** ReLU(z) = max(0, z). Its slope is 1 when z is positive and 0 when z is
+negative. That slope matters in backpropagation below: a neuron whose score was negative passes no
+blame back.
+
+Now the forward pass. Our network has 3 inputs, 2 hidden neurons (A and B) with ReLU, and 1 output
+neuron with the sigmoid. Its parameters are already set to these values:
+
+| Neuron | Weights (links, money, known) | Bias |
+|---|---|---|
+| A | 0.2, 0.5, −1 | −1 |
+| B | −0.3, 0.1, 2 | 0.5 |
+| Output | 1.5 (from A), −2 (from B) | −2 |
+
+Step by step, for our email [6, 4, 0]:
+
+1. **A's score:** 0.2 × 6 + 0.5 × 4 + (−1) × 0 = 1.2 + 2.0 + 0 = 3.2. Add the bias: 3.2 − 1 = 2.2.
+2. **A after ReLU:** 2.2 is positive, so it passes: 2.2.
+3. **B's score:** −0.3 × 6 + 0.1 × 4 + 2 × 0 = −1.8 + 0.4 + 0 = −1.4. Add the bias: −1.4 + 0.5 = −0.9.
+4. **B after ReLU:** −0.9 is negative, so it becomes 0. B is "off" for this email.
+5. **Output score:** 1.5 × 2.2 + (−2) × 0 = 3.3 + 0 = 3.3. Add the bias: 3.3 − 2 = 1.3.
+6. **Output after the sigmoid:** e^(−1.3) ≈ 0.273, then 1 ÷ (1 + 0.273) = 1 ÷ 1.273 ≈ 0.786. A 78.6%
+   chance of spam.
+
+<Figure caption="The forward pass with real numbers. Neuron A scores 2.2 and stays on; neuron B scores −0.9 and ReLU switches it off. The output combines them into a score of 1.3, which the sigmoid turns into 0.786.">
+  <ForwardPass />
+</Figure>
+
+The thing to notice in the picture: B contributes nothing for this email, because ReLU turned it
+off. For another email, B might be the neuron doing all the work. Different inputs switch on
+different neurons, and that is how one network bends its dividing line in different places.
+
+### Log loss: a better ruler for yes-or-no answers
+
+The right answer is 1 and the guess is 0.786, so the loss should be small but not zero. Before
+using the loss real systems use, a refresher.
+
+**A maths refresher.** A **logarithm** answers "how many times do I multiply a base number to get
+this one?". With base 10: 10 × 10 × 10 = 1,000, so log₁₀ 1,000 = 3. The **natural logarithm**, ln,
+uses e (about 2.718) as the base: ln(e²) = 2. Two facts are all we need. ln(1) = 0, because you
+multiply e zero times to get 1. And the logarithm of a number between 0 and 1 is negative, more
+negative the closer the number gets to 0: ln(0.5) ≈ −0.693 and ln(0.01) ≈ −4.6.
+
+**What it is.** **Log loss** (also called **binary cross-entropy**) is the loss real systems use for
+yes-or-no answers: minus the logarithm of the chance the network gave to the right answer.
+
+**Why it exists.** Squared error learns very slowly from confident mistakes, which are the mistakes
+that matter most. A network that says 1% spam for a spam email is badly wrong, yet squared error
+barely pushes it. Log loss pushes hardest exactly there.
+
+**Example.** Our email is spam, so the loss is −ln(guess). For our guess: −ln(0.786) ≈ 0.241. Other
+guesses for the same email:
+
+| Guess for a spam email | Log loss | Squared error |
+|---|---|---|
+| 0.99 | −ln(0.99) ≈ 0.010 | 0.0001 |
+| 0.786 | −ln(0.786) ≈ 0.241 | 0.046 |
+| 0.5 | −ln(0.5) ≈ 0.693 | 0.25 |
+| 0.01 | −ln(0.01) ≈ 4.605 | 0.98 |
+
+The thing to notice: squared error can never go above 1, while log loss grows without limit as a
+confident guess gets more wrong. The 0.693 row also explains a number you will see when training
+starts: a network that knows nothing guesses 0.5 for every email, so its first log loss is about
+0.693.
+
+Now the speed of learning. What drives gradient descent is the slope of the loss with respect to
+the output score: how fast the loss changes as the score moves. Take the confident mistake, a guess
+of p = 0.01 for a spam email (y = 1):
+
+Calculus gives the formulas for these slopes; we take them as given and plug in the numbers.
+
+1. With the sigmoid and squared error, that slope is 2 × (p − y) × p × (1 − p). Here that is
+   2 × (0.01 − 1) × 0.01 × 0.99 = 2 × (−0.99) × 0.0099 ≈ −0.0196. The p × (1 − p) part is the flat
+   end of the sigmoid curve, and it almost cancels the push.
+2. With the sigmoid and log loss, the flat part cancels out in the maths, and the slope is
+   p − y = 0.01 − 1 = −0.99.
+3. −0.99 ÷ −0.0196 ≈ 50. Log loss pushes about 50 times harder on this mistake.
+
+**The technical version.** For a right answer y (1 or 0) and a guess p, log loss is
+−[y × ln(p) + (1 − y) × ln(1 − p)]. When y = 1 only the first half counts, −ln(p); when y = 0 only
+the second, −ln(1 − p). Combined with a sigmoid output, its slope with respect to the score is
+p − y: the guess minus the truth. That clean result is why the sigmoid and log loss are used
+together, and it is where backpropagation starts.
+
+### Backpropagation: handing the blame back
+
+**What it is.** **Backpropagation** computes the slope of the loss for every weight in one pass that
+runs backwards through the network, from the output to the inputs.
+
+**Why it exists.** Nudging weights one at a time costs one forward pass per weight. Backpropagation
+reuses the work: each layer's slopes are built
+from the next layer's, so the whole backward pass costs about two forward passes, whatever the
+number of weights.
+
+The rule it rests on is the **chain rule**: when one thing drives another, which drives a third,
+the rates multiply. Think of gears. If gear B turns 2 times for each turn of gear C, and gear A turns
+3 times for each turn of gear B, then A turns 3 × 2 = 6 times for each turn of C. In a network, a
+weight drives a neuron's score, which drives the output score, which drives the loss. Multiply the
+rates along that path and you get how much the loss moves when the weight moves.
+
+**Example.** We continue from the forward pass. Call each slope the **blame**: how much the loss
+would change if this number went up by a little. A negative blame means "raise this to lower the
+loss". We use the learning rate 0.1.
+
+1. **Blame at the output score.** With sigmoid and log loss, it is guess minus truth:
+   0.786 − 1 = −0.214.
+2. **Blame for the output's weight from A.** That weight multiplied A's value, 2.2. When a weight
+   multiplies 2.2, raising the weight by a little raises the score by 2.2 times as much, so the
+   weight's rate is 2.2, and the chain rule multiplies it in: −0.214 × 2.2 ≈ −0.471. The weight from B multiplied 0, so its blame is −0.214 × 0 = 0.
+3. **Blame passed back to A.** A's value reached the output through the weight 1.5, so A gets
+   −0.214 × 1.5 ≈ −0.321.
+4. **Through ReLU.** A was on (its score 2.2 was positive), and ReLU's slope there is 1, so A's
+   blame stays −0.321. B was off, its ReLU slope is 0, and B gets no blame at all.
+5. **Blame for A's weights.** Each weight multiplied one input, so its blame is A's blame times that
+   input. Links: −0.321 × 6 ≈ −1.93. Money words: −0.321 × 4 ≈ −1.28. Known sender: −0.321 × 0 = 0.
+6. **Update.** Each weight moves against its blame, scaled by 0.1. A's links weight:
+   0.2 − 0.1 × (−1.93) = 0.2 + 0.193 = 0.393. A's money weight: 0.5 − 0.1 × (−1.28) = 0.5 + 0.128 =
+   0.628. The output's weight from A: 1.5 − 0.1 × (−0.471) = 1.5 + 0.047 = 1.547. Each bias moves by
+   its own neuron's blame, because a bias is added straight into the score: A's bias goes from
+   −1 − 0.1 × (−0.321) = −0.968, and the output's from −2 − 0.1 × (−0.214) = −1.979. B and its
+   weights do not move.
+7. **Check.** Run the forward pass again with the new numbers: the chance of spam rises from 0.786
+   to 0.983, and the loss falls from 0.241 to 0.017.
+
+<Figure caption="Backpropagation on the same network. The blame starts at the output as guess minus truth (−0.214), flows back through the weight 1.5 to neuron A (−0.321), and is multiplied by each input to give the slope for each of A's weights. B was switched off, so no blame reaches it.">
+  <Backprop />
+</Figure>
+
+Read the picture right to left: every number is the number to its right times one more factor.
+Notice also what B teaches: a neuron that was off for an email learns nothing from that email. If a
+neuron is off for every email, it never learns again. That failure is called a **dead neuron**, and
+a learning rate that is too high is a common way to cause it.
+
+One update on one email moved the guess from 0.786 to 0.983, which is a big jump. Real training
+averages the blame over many emails before each step, so that no single email can drag the weights
+too far.
+
+**The technical version.** Backpropagation is the chain rule applied layer by layer, from the
+output back to the inputs, reusing each layer's result for the layer before it. A framework such as
+PyTorch records every operation of the forward pass in a graph and walks that graph backwards to
+compute the gradients ([PyTorch autograd
+tutorial](https://docs.pytorch.org/tutorials/beginner/basics/autogradqs_tutorial.html)). You never
+write backward passes by hand in practice. But when a loss turns into `NaN` (not a number) or stops
+falling, knowing that blame is a chain of multiplications tells you where to look: one huge factor
+makes the blame explode, and one zero factor stops it.
+
+### The training loop: epochs, batches and the learning rate
+
+A real training run repeats the forward pass, the loss, the backward pass and the update many
+times. Three settings control it, and you will meet all three in every training script.
+
+**An epoch** is one full pass over the training data. Our example network trains on 75 emails, so
+one epoch is 75 forward and backward passes.
+
+**A batch** is the group of examples whose blame is averaged before one update. Our example uses a
+batch of 1: it updates after every email. PyTorch's beginner tutorial uses batches of 64 ([PyTorch,
+optimizing model parameters](https://docs.pytorch.org/tutorials/beginner/basics/optimization_tutorial.html)).
+Bigger batches give a steadier direction and suit the hardware better; smaller ones update more
+often.
+
+**The learning rate** is the step size from Part 1. Google's crash course describes the two ways it
+goes wrong: too small, and training takes a very long time; too large, and the weights bounce around
+the bottom and never converge ([Google ML Crash
+Course](https://developers.google.com/machine-learning/crash-course/linear-regression/hyperparameters)).
+These three settings are **hyperparameters**: you choose them, while training chooses the
+parameters.
+
+In PyTorch, the whole loop is the same four steps we did by hand:
+
+1. Run the batch forward and compute the loss.
+2. `loss.backward()` runs backpropagation and stores a gradient next to every parameter.
+3. `optimizer.step()` moves every parameter against its gradient.
+4. `optimizer.zero_grad()` clears the stored gradients, because PyTorch adds new gradients to old
+   ones by default.
+
+Forgetting the fourth step is a classic bug: each batch's gradients pile on top of the last ones,
+and training goes wild.
 
 ### Overfitting and how to spot it
 
+**What it is.** **Overfitting** is when a network learns its training examples, noise included,
+instead of the pattern behind them, so it does well on those examples and worse on new ones.
+
+**Why it matters.** The training loss cannot show it: it keeps falling either way. A network with
+enough weights can drive its training loss to almost zero by memorising. Researchers showed that
+networks can even fit training labels that were assigned completely at random, which leaves nothing
+to learn but the labels themselves ([Zhang et al.,
+2021](https://cacm.acm.org/research/understanding-deep-learning-still-requires-rethinking-generalization/)).
+
+**Example.** The fix is to hold some data back. Our example keeps 25 of the 100 emails as a
+**validation set**: emails the network never trains on, used only to check it. After each epoch we
+measure the loss on both sets:
+
+| Epoch | Training loss | Validation loss |
+|---|---|---|
+| 1 | 0.515 | 0.496 |
+| 100 | 0.308 | 0.228 |
+| 337 | 0.184 | 0.076 (lowest) |
+| 600 | 0.189 | 0.094 |
+
+The thing to notice: the validation loss was lowest at epoch 337 and then started to rise. The
+program waits 300 more epochs to be sure it is not a blip, stops at epoch 637, and keeps the weights
+from epoch 337. This is **early stopping**. Those weights get 95% of the training emails and all 25
+validation emails right. All four mislabelled emails happen to be among the 75 training emails, and
+the four training emails it gets wrong are exactly those four. It learned the pattern instead of the noise.
+
+**The technical version.** Google's course describes the signature: the training and validation
+loss curves move together at first, then split, with training still falling and validation rising
+([Google ML Crash Course, interpreting loss
+curves](https://developers.google.com/machine-learning/crash-course/overfitting/interpreting-loss-curves)).
+The common remedies are more data, a smaller network, early stopping, and **regularization**:
+extra rules that keep the weights simple. Two common ones are **weight decay**, which shrinks every
+weight a little at every step so that only the weights the data keeps pushing stay large, and
+**dropout**, which switches off a random share of neurons during each training step (say 1 in 10)
+so that no neuron can rely on one particular partner. A third set of data, the **test set**, is
+used once at the very end. Choosing settings by looking at the validation set slowly fits them to
+that set too, so the test set is kept untouched.
+
+The simulation below shows all of this at once. It uses its own emails, described by two numbers
+instead of three so that they fit on a flat square: 120 training emails by default, plus 60
+validation emails. Each point is a training email placed by its number
+of links (across) and money words (up). The hidden rule is curved: the corner with few links and
+few money words is safe, everything far from it is spam, and a few labels are flipped.
+
+<TrainSim />
+
+What you saw: with no hidden neurons, the border can only be straight, so it cuts the corner.
+With hidden neurons, it bends. With many neurons and few emails, the border curls around single
+points, the training loss reaches almost zero, and the validation loss climbs. And with a learning
+rate of 30, the loss jumps around instead of settling, as the valley picture predicted.
+
+### Why GPUs: everything is matrix multiplication
+
+**A maths refresher first.** A **matrix** is a grid of numbers. Multiplying a matrix by a vector
+takes the dot product of each row with the vector. For the matrix with rows [1, 2] and [3, 4] and
+the vector [5, 6]: the first row gives 1 × 5 + 2 × 6 = 5 + 12 = 17, and the second row gives
+3 × 5 + 4 × 6 = 15 + 24 = 39. The result is the vector [17, 39].
+
+**What it is.** A whole layer of neurons is one matrix multiplication: each row of the matrix holds
+one neuron's weights.
+
+**Why it matters.** The rows do not depend on each other, so they can all be computed at the same
+time. A **GPU** (graphics processing unit, first built to draw video-game graphics) has thousands of
+small cores built to do exactly this: many multiply-and-add operations in parallel. A CPU has a few
+dozen powerful cores built to run one line of program after another, very quickly.
+
+**Example.** Our hidden layer, as a matrix with one row for A and one for B, times our email:
+
+<Figure caption="The hidden layer as one matrix multiplication. Each row is one neuron's weights; multiplying by the email's numbers gives 3.2 and −1.4, and adding the biases gives the scores 2.2 and −0.9 from the forward pass.">
+  <MatrixMultiply />
+</Figure>
+
+It is the same arithmetic as the forward pass, written as one operation. Now give the layer a batch
+of 64 emails instead of one: the vector of 3 numbers becomes a grid of 64 columns, one per email.
+Multiplying the matrix by that grid is the same matrix-times-vector step done once for each column,
+and it scores all 64 emails in one operation. NVIDIA's documentation for its
+GPUs makes the same point for training: the forward pass, the blame passed back to the inputs, and
+the gradients for the weights of a fully-connected layer are each one matrix multiplication ([NVIDIA
+Deep Learning Performance
+guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-fully-connected/index.html)).
+
+**Real numbers.** Here is what that means at the scale of a large model. Meta trained its largest
+Llama 3 model, with 405 billion parameters, on 15.6 trillion tokens of text, using up to 16,384
+NVIDIA H100 GPUs ([Meta, 2024](https://arxiv.org/abs/2407.21783)).
+
+1. Training costs about 6 operations per parameter per token: 2 for the forward pass and about 4 for
+   the backward pass.
+2. 6 × 405 billion parameters × 15.6 trillion tokens ≈ 38 trillion trillion operations. Numbers
+   this big are written with powers of ten: 10²⁵ means 1 followed by 25 zeros, so the total is
+   3.8 × 10²⁵. Meta reports the same total: 3.8 × 10²⁵ operations.
+3. Meta measured about 400 trillion operations per second per GPU when running on all 16,384,
+   about 40% of the roughly 989 trillion the chip can do on paper (the technical version below
+   explains that figure). Together: 16,384 × 400 trillion ≈ 6.55 × 10¹⁸
+   operations per second.
+4. Divide the work by the speed. Divide the front numbers: 3.8 ÷ 6.55 ≈ 0.58. Divide the powers
+   of ten by subtracting the zeros: 25 − 18 = 7, so 10⁷, which is 10 million. Together: 0.58 × 10
+   million = 5.8 million seconds. A day has 86,400 seconds, so that is 5.8 million ÷ 86,400 ≈
+   67 days of non-stop work for all 16,384 GPUs.
+
+That is our own arithmetic from Meta's figures, not a number Meta published, but it shows the
+order of size: months of computing on thousands of GPUs, for one training run. Inference is cheaper
+per token but runs for every user, forever, which is why serving costs matter as much as training
+costs (see [GPU fundamentals](/ai-engineering/gpu-fundamentals/)).
+
+**The technical version.** For a batch of B examples, a fully-connected layer with n inputs and
+m outputs computes **H** = activation(**XW** + **b**), where **X** is the B × n grid of inputs,
+**W** the n × m grid of weights, and **b** the m biases. That one product costs about 2 × B × n × m
+operations. GPUs also use smaller number formats to go faster: a **bit** is a single 0 or 1, and
+training today usually stores numbers in 16 bits instead of 32. 16 bits can hold 65,536 different
+values (2 multiplied by itself 16 times). Using 16 bits instead of 32 halves the memory and roughly
+doubles the speed on chips built for it. The H100's data sheet
+lists 1,979 trillion 16-bit operations per second, marked "with sparsity", a special case where
+half the weights are zero; ordinary work gets half that, about 989 trillion (as of November 2026,
+[NVIDIA H100](https://www.nvidia.com/en-us/data-center/h100/)).
+
+## Build it yourself
+
+The full programs are in
+[`examples/neural-networks-basics/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/neural-networks-basics),
+in Python and JavaScript, using only the standard library. All of them read the same 100 example
+emails from `emails.json` and print the same numbers in both languages. The rules filter is shown
+above; here are the two that learn.
+
+First, one neuron trained with gradient descent. It starts with every weight at 0, so every guess
+is 0.5 and the first loss is 0.693, as the log-loss table predicted.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="one_neuron.py (excerpt)"
+def predict(w: list[float], b: float, x: list[int]) -> float:
+    score = sum(wi * xi for wi, xi in zip(w, x)) + b  # weighted sum plus bias
+    return sigmoid(score)                              # chance of spam
+
+w, b = [0.0, 0.0, 0.0], 0.0   # start knowing nothing: every email scores 50%
+learning_rate = 0.05
+for epoch in range(1, 2001):
+    grad_w, grad_b, loss = [0.0, 0.0, 0.0], 0.0, 0.0
+    for *x, y in DATA["train"]:
+        p = predict(w, b, x)
+        loss += -math.log(p if y else 1 - p)  # log loss: big when confidently wrong
+        error = p - y                          # how far off, and in which direction
+        for i in range(3):
+            grad_w[i] += error * x[i]          # this weight's share of the blame
+        grad_b += error
+    n = len(DATA["train"])
+    w = [wi - learning_rate * g / n for wi, g in zip(w, grad_w)]  # step downhill
+    b -= learning_rate * grad_b / n
+# epoch    1: average loss 0.693
+# epoch 2000: average loss 0.372
+# right on 81% of training emails, 84% of validation emails
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="one-neuron.mjs (excerpt)"
+function predict(w, b, x) {
+  const score = w.reduce((sum, wi, i) => sum + wi * x[i], 0) + b; // weighted sum plus bias
+  return sigmoid(score);                                          // chance of spam
+}
+
+let w = [0, 0, 0], b = 0; // start knowing nothing: every email scores 50%
+const learningRate = 0.05;
+for (let epoch = 1; epoch <= 2000; epoch++) {
+  const gradW = [0, 0, 0];
+  let gradB = 0, loss = 0;
+  for (const [l, m, k, y] of DATA.train) {
+    const x = [l, m, k];
+    const p = predict(w, b, x);
+    loss += -Math.log(y ? p : 1 - p); // log loss: big when confidently wrong
+    const error = p - y;               // how far off, and in which direction
+    for (let i = 0; i < 3; i++) gradW[i] += error * x[i]; // this weight's share of the blame
+    gradB += error;
+  }
+  const n = DATA.train.length;
+  w = w.map((wi, i) => wi - (learningRate * gradW[i]) / n); // step downhill
+  b -= (learningRate * gradB) / n;
+}
+// epoch    1: average loss 0.693
+// epoch 2000: average loss 0.372
+// right on 81% of training emails, 84% of validation emails
+```
+  </TabItem>
+</Tabs>
+
+The line `error = p - y` is the "guess minus truth" blame from backpropagation, and multiplying it
+by each input is step 5 of the worked example. With one neuron there is only one layer to hand the
+blame through.
+
+Second, the network that gets the validation emails right: 3 inputs, 8 hidden ReLU neurons, one
+sigmoid output. It adds three production habits: inputs scaled to between 0 and 1, a validation set,
+and early stopping that keeps the best weights.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="tiny_network.py (excerpt)"
+def train_one_email(net, x, y, lr):
+    xs, z, h, p = forward(net, x)
+    d_out = p - y                                                   # blame at the output
+    for j in range(HIDDEN):
+        d_h = d_out * net["V"][j] if z[j] > 0 else 0.0              # back through ReLU
+        net["V"][j] -= lr * d_out * h[j]
+        for i in range(3):
+            net["W"][j][i] -= lr * d_h * xs[i]
+        net["bh"][j] -= lr * d_h
+    net["bo"] -= lr * d_out
+
+
+lr, patience = 0.2, 300
+best, best_epoch, best_net = float("inf"), 0, copy.deepcopy(net)
+for epoch in range(1, 20001):
+    for *x, y in DATA["train"]:
+        train_one_email(net, x, y, lr)
+    val = avg_loss(net, DATA["validation"])
+    if val < best:
+        best, best_epoch, best_net = val, epoch, copy.deepcopy(net)  # keep the best weights
+    elif epoch - best_epoch >= patience:
+        break                                                        # early stopping
+# stopped at epoch 637; kept the weights from epoch 337 (validation loss 0.076)
+# right on 95% of training emails, 100% of validation emails
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="tiny-network.mjs (excerpt)"
+function trainOneEmail(net, raw, y, lr) {
+  const { x, z, h, p } = forward(net, raw);
+  const dOut = p - y;                                        // blame at the output
+  for (let j = 0; j < HIDDEN; j++) {
+    const dH = z[j] > 0 ? dOut * net.V[j] : 0;               // back through ReLU
+    net.V[j] -= lr * dOut * h[j];
+    for (let i = 0; i < 3; i++) net.W[j][i] -= lr * dH * x[i];
+    net.bh[j] -= lr * dH;
+  }
+  net.bo -= lr * dOut;
+}
+
+const lr = 0.2, patience = 300;
+let best = Infinity, bestEpoch = 0, bestNet = structuredClone(net), epoch;
+for (epoch = 1; epoch <= 20000; epoch++) {
+  for (const [l, m, k, y] of DATA.train) trainOneEmail(net, [l, m, k], y, lr);
+  const val = avgLoss(net, DATA.validation);
+  if (val < best) {
+    [best, bestEpoch, bestNet] = [val, epoch, structuredClone(net)]; // keep the best weights
+  } else if (epoch - bestEpoch >= patience) {
+    break;                                                           // early stopping
+  }
+}
+// stopped at epoch 637; kept the weights from epoch 337 (validation loss 0.076)
+// right on 95% of training emails, 100% of validation emails
+```
+  </TabItem>
+</Tabs>
+
+`train_one_email` is the backpropagation walkthrough as code: blame at the output, passed back
+through each hidden neuron's weight, zeroed where ReLU was off, then every parameter steps against
+its blame. The folder also has `forward_backward.py` and `forward-backward.mjs`, which reproduce
+every number in the forward-pass and backpropagation walkthroughs above.
+
 ## How real systems do it
 
-How real products, companies and open-source tools do it, with dates on anything that changes.
+**Frameworks do the calculus.** Nobody writes `train_one_email` by hand in production. In PyTorch
+you describe the forward pass (layers such as `nn.Linear` for a fully-connected layer and `nn.ReLU`),
+and its automatic differentiation engine, autograd, records it and runs backpropagation for you,
+inside the four-step loop described in the training-loop section.
+For inference, PyTorch offers `torch.no_grad()`, which skips recording the graph because no backward
+pass will follow; it saves memory and time.
+
+**Gmail's spam filter is a neural network.** In November 2023, Google described replacing the part
+of Gmail's spam classifier that turns text into numbers with a new open-source component called
+RETVec. The classifier itself is a transformer, the network design that also powers language
+models (covered in its own page). The change raised the spam detection rate by 38% over the old version, cut false positives
+(real emails marked as spam) by 19.4%, and cut the processing hardware the model used by 83%. Google
+also names the tricks spammers use against text classifiers: look-alike characters, invisible
+characters, and stuffing in extra keywords ([Google Security
+Blog](https://security.googleblog.com/2023/11/improving-text-classification.html)). That is the
+"spammers change their tricks" problem from the opening, handled by retraining on new examples
+instead of writing new rules.
+
+**Language models are the same idea, very large.** A model like Llama 3 is a neural network whose
+input is a sequence of tokens and whose output, at each step, is a chance for every possible next
+token. It is trained exactly as on this page: forward pass, loss, backpropagation, gradient descent
+over trillions of tokens. The 405-billion-parameter version used up to 16,384 GPUs. During one
+54-day stretch of its training, the job was interrupted 466 times, and about 78% of the unexpected
+interruptions came from hardware such as failing GPUs ([Meta, 2024](https://arxiv.org/abs/2407.21783)).
+At that scale, saving the weights regularly so a crash costs hours instead of weeks is part of the
+design. The [transformers page](/ai-engineering/transformers-and-attention/) covers the layers
+that sit between the input and output, and [how LLMs are
+trained](/ai-engineering/how-llms-are-trained/) covers what the training data and loss look like.
+
+**What an AI engineer touches.** Most AI engineers never train a large model. They call one
+through an API or serve an open one, and they meet this page's ideas as numbers: parameter counts
+that decide memory and cost, a forward pass per token that decides speed, frozen weights that
+explain why a model cannot learn your company's data unless you give it that data in the request
+or fine-tune it (train it further on your own examples), and validation sets, which reappear as evaluation sets for model quality.
 
 ## Gotchas and war stories
 
-The mistakes that hurt most in production, with real incidents where they exist.
+**Inputs on very different scales.** If one input is an email's size in bytes (say 50,000) and
+another is a count of links (say 6), the bytes input dominates every weighted sum. Its gradients are
+thousands of times bigger, so a learning rate small enough for it barely moves the other weights,
+and one big enough for the others makes it explode. Scale every input to a similar range, as
+`tiny_network.py` does by dividing each by its largest value.
+
+:::caution[Accuracy lies when one class is rare]
+If 1 email in 100 is spam, a "network" that always answers "not spam" is 99% accurate and useless
+([Google ML Crash Course](https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall)).
+Count how many of the real spam emails it catches, and how many real emails it wrongly flags,
+separately. Google's Gmail numbers above are reported exactly that way.
+:::
+
+**The validation set leaks into training.** If the same email, or a near copy, appears in both
+sets, the validation score measures memory, not learning. Forwarded chains, templates and
+duplicated rows make this common. Remove duplicates before you split the data, and when the data
+has a time order, keep the newest examples for validation.
+
+**The world moves on.** A spam filter trained on last year's spam slowly gets worse as spammers
+change their wording, even though nothing in your code changed. Keep measuring the model on fresh,
+labelled examples, and retrain when the numbers drop. The weights hold the rules from the data they
+saw, and only that data.
+
+**A loss of `NaN` or a loss that jumps.** `NaN` (not a number) appears when a number overflows,
+for example a learning rate so high that the weights explode, or a log of exactly 0. The fixes, in
+order: lower the learning rate, check the input scaling, and guard the logarithm, as `tiny_network.py` does
+with `max(1e-12, p)` (1e-12 means 0.000000000001, a tiny number that is not zero). A loss that falls and then jumps up is the "steps too big" picture from the
+gradient descent figure.
+
+:::danger[A model does not learn from its users]
+Teams sometimes promise that a deployed model "gets smarter as people use it". Inference does not
+change weights. If you want the model to improve from real usage, you need a pipeline that collects
+examples, labels them, retrains, evaluates on a validation set, and ships a new version. Until then,
+the model makes the same mistake every time.
+:::
 
 ## Trade-offs and when not to use it
 
-What it costs, what it does not solve, and when to pick something else.
+A neural network buys you rules nobody had to write, at four costs. It needs a lot of labelled
+examples. It is expensive to train and to run compared with a handful of `if` statements. Its
+reasons are hard to read: the knowledge is spread across thousands or billions of weights, so
+"why was this email flagged?" has no simple answer. And it fails quietly: a wrong rule throws an
+error you can find, while a wrong weight produces a confident wrong answer.
+
+When not to use one:
+
+- **Rows and columns of business data.** For data that lives in a spreadsheet or a database table,
+  such as prices, ages and order counts, tree-based models such as XGBoost and random forests still
+  beat neural networks in a 2022 study across 45 datasets, and they are cheaper to train ([Grinsztajn
+  et al., NeurIPS 2022](https://arxiv.org/abs/2207.08815)). Try them first.
+- **Hard rules.** "Never email a user who unsubscribed" is a rule, not a pattern. Write it as code
+  and keep it outside the model.
+- **Little data.** With a few hundred examples, a single neuron (called logistic regression) or a
+  small tree model is usually as good and far easier to understand.
+- **When you must explain every decision.** Loans, medical triage and anything a regulator may
+  question need a reason you can show. Simpler models, or a network plus a human review, fit better.
+
+Neural networks win when the input is text, images, audio or code, where the useful patterns are too
+many and too subtle to write down. That is why every large language model is one.
 
 ## Interview corner
 
-How this comes up in interviews, and what a strong answer covers.
+Questions on this topic test whether you understand the loop, not whether you can derive formulas.
+
+- **"What does a neuron compute?"** A weighted sum of its inputs plus a bias, passed through an
+  activation function. Mention why the activation is needed: without it, layers collapse into one.
+- **"Explain backpropagation to a non-specialist."** It assigns blame for the error to every weight,
+  starting at the output and moving back, using the chain rule so each layer reuses the next layer's
+  work. Point out that it only computes gradients; gradient descent then uses them.
+- **"Your training loss keeps falling but the validation loss is rising. What is happening, and
+  what do you do?"** Overfitting. Use early stopping, more data, a smaller model, or regularization
+  such as weight decay or dropout, and check that the two sets do not share examples.
+- **"Your loss became NaN after a few hundred steps."** Usually a learning rate that is too high,
+  inputs on wildly different scales, or a logarithm of zero. Lower the rate, scale the inputs, guard
+  the log, and look at the gradients right before it happened.
+- **"Why are GPUs used for AI?"** A layer is a matrix multiplication; its rows are independent, so
+  thousands of simple cores can compute them at once.
+
+A strong answer ties each point to an effect you could measure, such as the loss curves or the
+validation score, rather than reciting definitions.
 
 ## Check yourself
 
-Four or five questions with hidden answers.
+<details>
+<summary>1. A neuron has weights 1 and −2, bias 0.5, and inputs 3 and 1. What is its score, and roughly what does the sigmoid give?</summary>
+
+1 × 3 = 3, then −2 × 1 = −2, then 3 + (−2) = 1, plus the bias 0.5 gives a score of 1.5. The sigmoid
+of 1.5 is 1 ÷ (1 + e^(−1.5)) = 1 ÷ (1 + 0.223) ≈ 0.82, an 82% chance.
+
+</details>
+
+<details>
+<summary>2. Why can't you build a deep network by stacking layers with no activation function?</summary>
+
+Each layer is multiply-and-add, and multiply-and-add applied to multiply-and-add is still one
+multiply-and-add. The whole stack collapses into a single layer and can only draw a straight
+dividing line. The activation between layers is what lets the network bend that line.
+
+</details>
+
+<details>
+<summary>3. The output of a network says 0.3 for an email that is spam. What is the blame at the output score, and which way do the weights feeding the output move?</summary>
+
+With sigmoid and log loss, the blame is guess minus truth: 0.3 − 1 = −0.7. Negative blame means
+raising the score lowers the loss, so each weight into the output whose input was positive moves up
+(its own blame is −0.7 times that input, and the update subtracts it).
+
+</details>
+
+<details>
+<summary>4. A hidden neuron's score was −2.0 for every email in a batch. What does it learn from that batch?</summary>
+
+Nothing. ReLU turned it off, its slope is 0, so no blame reaches it or its weights. If that is true
+for every email, it is a dead neuron that never learns again; a lower learning rate makes this less
+likely.
+
+</details>
+
+<details>
+<summary>5. A colleague reports 99.5% accuracy for a fraud model. Fraud is 0.5% of transactions. What do you ask?</summary>
+
+How many of the actual frauds it catches, and how many good transactions it flags. A model that
+always says "not fraud" also scores 99.5%. Ask too whether the accuracy was measured on held-out
+data the model never trained on, with no duplicates shared between the sets.
+
+</details>
 
 ## Recap
 
-Six bullets to revise from.
+- A neuron computes a weighted sum of its inputs plus a bias, then an activation: sigmoid for a
+  yes-or-no output, ReLU in hidden layers. Layers of neurons combine simple patterns into complex
+  ones; without activations they collapse into one layer.
+- The loss measures how wrong the guesses are. For yes-or-no answers, log loss (cross-entropy)
+  punishes confident mistakes hardest, and with a sigmoid its blame at the output is guess minus
+  truth.
+- Backpropagation hands that blame back layer by layer with the chain rule, giving every weight's
+  gradient for about the cost of two forward passes. Gradient descent then moves each weight a
+  learning-rate-sized step against its gradient.
+- Training repeats this over epochs and batches; inference runs only the forward pass with frozen
+  weights.
+- Watch training and validation loss together: when validation rises while training falls, the
+  network is memorising. Early stopping, more data, smaller models and regularization fight it.
+- Layers are matrix multiplications, which is why GPUs run AI; training costs about 6 operations
+  per parameter per token, and inference about 2.
 
 ## Where to go next
 
-<NextTopics />
+<NextTopics items={[
+  { slug: 'tokens-and-context-windows', why: 'How text becomes the numbers a language model reads, and why it can only see so many of them at once.' },
+  { slug: 'how-llms-generate-text', why: 'What a language model does with its output layer: a chance for every next token, picked one at a time.' },
+]} />
 
 ## Further reading
 
-Every source used, from 2020 or later, each with a line on what it is good for.
+**Specs and official docs**
+
+- [PyTorch: Optimizing model parameters](https://docs.pytorch.org/tutorials/beginner/basics/optimization_tutorial.html) (read November 2026). The training loop, epochs, batch size and learning rate, in code.
+- [PyTorch: Automatic differentiation with torch.autograd](https://docs.pytorch.org/tutorials/beginner/basics/autogradqs_tutorial.html) (updated 2024). How the forward pass is recorded as a graph and walked backwards; `torch.no_grad()` for inference.
+- [Google Machine Learning Crash Course](https://developers.google.com/machine-learning/crash-course/neural-networks/activation-functions) (2025–26). Activation functions, learning rates, loss curves, overfitting and imbalanced data, with interactive exercises.
+- [NVIDIA: Linear/fully-connected layers performance guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-fully-connected/index.html) (read November 2026). Why the forward and backward passes of a layer are matrix multiplications.
+- [NVIDIA H100 data sheet](https://www.nvidia.com/en-us/data-center/h100/) (read November 2026). Peak operations per second for each number format.
+
+**Papers and engineering posts**
+
+- [Meta: The Llama 3 herd of models](https://arxiv.org/abs/2407.21783) (2024). Model sizes, training compute, GPU counts, utilization and the interruption statistics.
+- [Kaplan et al.: Scaling laws for neural language models](https://arxiv.org/abs/2001.08361) (2020). Where the "about 2 operations per parameter forward, 6 for training" rule comes from.
+- [Google Security Blog: Improving text classification resilience and efficiency with RETVec](https://security.googleblog.com/2023/11/improving-text-classification.html) (2023). Gmail's spam classifier upgrade and the tricks spammers use.
+- [Zhang et al.: Understanding deep learning (still) requires rethinking generalization](https://cacm.acm.org/research/understanding-deep-learning-still-requires-rethinking-generalization/) (CACM 2021). Networks that fit random labels: memorisation capacity in one experiment.
+- [Grinsztajn, Oyallon and Varoquaux: Why do tree-based models still outperform deep learning on tabular data?](https://arxiv.org/abs/2207.08815) (NeurIPS 2022). When not to reach for a neural network.
+
+**Explainers**
+
+- [Dive into Deep Learning, chapter 5: Multilayer perceptrons](https://d2l.ai/chapter_multilayer-perceptrons/mlp.html) (2023). A free textbook with runnable code; the collapse of linear layers and ReLU explained properly.
+- [Andrej Karpathy: micrograd](https://github.com/karpathy/micrograd) (2020). Backpropagation for any network in about 100 lines of Python, the best next step after this page's examples.
