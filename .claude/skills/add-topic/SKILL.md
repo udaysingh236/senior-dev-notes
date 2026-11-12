@@ -171,6 +171,7 @@ Fix anything that fails. Don't publish with known failures.
 - [ ] Part 1 explains the whole idea in plain words with one running example, before any architecture, byte layout or production detail, and ends with "If you stop here"
 - [ ] Opens with a question a fresher understands, answered in plain words on the first screen; Part 2 opens with the sharp question; no narrative; nothing is said twice
 - [ ] No maths left to the reader: every derived number shows its working in words, every conversion is written out, formulas come after a worked example (style guide, "Numbers without maths for the reader")
+- [ ] Every school-maths idea the page uses (vector, dot product, matrix, probability, power, logarithm, slope, bits) gets a short refresher with tiny numbers before its first use (style guide, "Maths refreshers")
 - [ ] Tagline and description are one plain sentence a fresher understands: no riddles, no hidden numbers, no arithmetic (style guide, "The title line, tagline and description"); a human-style read of the first screen done before publishing
 - [ ] Every new concept gets the four steps before it is used: plain sentence, why, worked example with numbers, technical version (style guide, "Introducing a new concept")
 - [ ] One new idea per paragraph; no sentence uses two unexplained terms; every number shows where it comes from

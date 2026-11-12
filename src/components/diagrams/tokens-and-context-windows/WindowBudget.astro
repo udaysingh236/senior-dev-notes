@@ -1,0 +1,54 @@
+---
+// An 8,000-token window as a bar: 500 instructions, chat, 200-token question, 1,000 reserved for the answer.
+const X0 = 4;
+const W = 380; // 8,000 tokens
+const px = (t: number) => (t / 8000) * W;
+const rows = [
+  { y: 30, label: 'after 10 exchanges: fits', chat: 4000, q: 200, over: false, dropped: false },
+  { y: 118, label: 'question 17: 100 tokens too many', chat: 6400, q: 200, over: true, dropped: false },
+  { y: 206, label: 'drop exchange 1: fits again', chat: 6000, q: 200, over: false, dropped: true },
+];
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="tcw-wb-t tcw-wb-d">
+  <title id="tcw-wb-t">A chat filling an 8,000-token context window</title>
+  <desc id="tcw-wb-d">
+    Three bars, each 8,000 tokens wide. Each starts with 500 tokens of instructions and ends with 1,000 tokens
+    kept free for the answer. After 10 exchanges the chat takes 4,000 tokens and the new question 200, with
+    room to spare. At question 17 the chat is 6,400 tokens plus the 200-token question, and the total runs
+    100 tokens past the end of the window, marked in red. After dropping the first exchange, the chat is
+    6,000 tokens and everything fits again.
+  </desc>
+  {rows.map((r) => {
+    const a = X0;
+    const b = a + px(500);
+    const c = b + px(r.chat);
+    const d = c + px(r.q);
+    const ans = r.over ? d : X0 + W - px(1000);
+    return (
+      <g>
+        <text x={X0} y={r.y - 8} font-size="16" font-weight="700" style={r.over ? 'fill: var(--viz-bad)' : 'fill: var(--viz-ink)'}>{r.label}</text>
+        <rect x={X0} y={r.y} width={W} height="40" rx="4" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+        <rect x={a} y={r.y} width={px(500)} height="40" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="1.5" />
+        <rect x={b} y={r.y} width={px(r.chat)} height="40" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="1.5" />
+        <text x={b + px(r.chat) / 2} y={r.y + 26} font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">chat {r.chat.toLocaleString('en-US')}</text>
+        <rect x={c} y={r.y} width={px(r.q)} height="40" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="1.5" />
+        <rect x={ans} y={r.y} width={px(1000)} height="40" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" stroke-width="1.5" />
+        {!r.over && <text x={ans + px(1000) / 2} y={r.y + 26} font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">answer</text>}
+        {r.over && <rect x={X0 + W} y={r.y - 4} width={px(100) + 6} height="48" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" stroke-width="2" />}
+        {r.over && <text x={X0 + W - 2} y={r.y + 62} font-size="15" text-anchor="end" style="fill: var(--viz-bad)">500 + 6,400 + 200 + 1,000 = 8,100</text>}
+        {r.dropped && <text x={X0} y={r.y + 62} font-size="15" style="fill: var(--viz-muted)">500 + 6,000 + 200 + 1,000 = 7,700</text>}
+      </g>
+    );
+  })}
+  <g font-size="15" style="fill: var(--viz-ink)">
+    <rect x="4" y="296" width="16" height="16" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" stroke-width="1.5" />
+    <text x="26" y="309">instructions 500</text>
+    <rect x="172" y="296" width="16" height="16" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" stroke-width="1.5" />
+    <text x="194" y="309">new question 200</text>
+    <rect x="4" y="322" width="16" height="16" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="1.5" />
+    <text x="26" y="335">earlier exchanges</text>
+    <rect x="172" y="322" width="16" height="16" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" stroke-width="1.5" />
+    <text x="194" y="335">kept free for answer 1,000</text>
+  </g>
+</svg>
