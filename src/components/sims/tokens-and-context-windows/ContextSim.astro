@@ -1,0 +1,19 @@
+---
+// A chat filling a context window, with three ways to handle the edge. See context-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tcw-context"
+  title="A long chat in a fixed window"
+  description="At the top, a bar for the context window as it is used by the latest request: a slate block for 500 tokens of instructions, an amber summary block when there is one, blue for the earlier exchanges still sent in full with their question numbers, a small block for the new question, and a green block at the right end kept free for the answer. A line under the bar says which exchanges have been dropped or summarised. Below, a bar chart shows the input tokens each of the 40 questions sent, with a red dashed line at the window minus the answer's room. At the bottom, the total input tokens billed so far and how many times over the chat itself was paid for."
+  watchFor="At the defaults (8,000 tokens, 400 per exchange, drop oldest) the bars climb by 400 per question until question 16, then stay flat just under the red line: from question 17 on, every question pushes the oldest exchange out, and the line under the bar shows the start of the chat falling out of view. The total billed still keeps climbing. Switch to 'summarise oldest': the amber summary block appears and old exchanges survive in shortened form, at the cost of extra summary requests. Switch to 'refuse': the chat stops at question 17. Then make the window 16,000: the bars climb for twice as long and the bill grows much more."
+  viewBox="0 0 400 286"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createContextModel } from './context-model';
+
+  mountAll('tcw-context', createContextModel);
+</script>

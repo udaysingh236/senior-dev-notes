@@ -1,101 +1,1003 @@
 ---
-title: "Tokens, tokenization and context windows"
-description: "How a model reads text as small pieces called tokens, and why it can only see so many at once. Outline: the full article is coming soon."
+title: "Tokens, Tokenization and Context Windows"
+description: "How a language model reads text as small pieces called tokens, why the same sentence costs more tokens in Hindi than in English, and why a model can only look at a limited number of tokens at once. From zero to byte-pair encoding, context window limits, and how apps trim long chats."
 tagline: "How a model reads text as small pieces called tokens, and why it can only see so many at once."
 difficulty: beginner
 track: ai-engineering
 prerequisites: [neural-networks-basics]
-next: [how-llms-generate-text, embeddings]
-outline: true
-giscus: false
-pagefind: false
-head:
-  - tag: meta
-    attrs:
-      name: robots
-      content: noindex
+next: [how-llms-generate-text, embeddings, prompt-chaining-and-context-engineering, llm-cost-management]
+lastReviewed: 2026-11-12
 sidebar:
   order: 2
 ---
 
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
 import NextTopics from '../../../components/NextTopics.astro';
-
-:::note[This page is an outline]
-The article is not written yet. What you see is the structure it will follow: every heading below
-will be filled in, first in plain words for a fresher, then in depth.
-:::
+import MentalModel from '../../../components/diagrams/tokens-and-context-windows/MentalModel.astro';
+import SameSentence from '../../../components/diagrams/tokens-and-context-windows/SameSentence.astro';
+import WindowBudget from '../../../components/diagrams/tokens-and-context-windows/WindowBudget.astro';
+import ThreeSplits from '../../../components/diagrams/tokens-and-context-windows/ThreeSplits.astro';
+import Utf8Bytes from '../../../components/diagrams/tokens-and-context-windows/Utf8Bytes.astro';
+import MergeLadder from '../../../components/diagrams/tokens-and-context-windows/MergeLadder.astro';
+import PairGrid from '../../../components/diagrams/tokens-and-context-windows/PairGrid.astro';
+import BpeSim from '../../../components/sims/tokens-and-context-windows/BpeSim.astro';
+import ContextSim from '../../../components/sims/tokens-and-context-windows/ContextSim.astro';
 
 ## The question
 
-Why does an AI model charge by "tokens" instead of words, and why does it forget the start of a very long chat?
+When your code uses an AI model through its API (the web address your code sends requests to),
+the company running the model, the **provider**, does not bill by words or characters. It bills by
+**tokens**. The same sentence can cost five tokens in English and, depending on the model, up to
+almost thirty in Hindi. And if you chat with the model long enough, it starts to behave as if it
+has forgotten the first things you told it. What is a token, and why do these three things happen?
+
+The short answer: a model cannot read letters. Before your text reaches it, a program called a
+**tokenizer** cuts the text into small pieces, called tokens, and swaps each piece for a number
+from a fixed list. The list was built from huge amounts of text, mostly English, so English needs
+few pieces and many other languages need more. The model can only look at a fixed number of tokens
+at once, called its **context window**. When a long chat no longer fits, the app has to leave the
+oldest messages out, and the model never sees them again.
 
 ## The idea in plain words
 
-The whole idea, from start to finish, with one running example: one English sentence and one Hindi sentence, split into tokens and counted.
+We will follow one sentence through the whole page: **"I love reading books."** Later we will put
+its Hindi translation, **"मुझे किताबें पढ़ना पसंद है।"**, next to it.
+
+1. **The model only works with numbers.** A language model is a very large calculation that takes
+   a list of numbers in and gives numbers out. Letters have to become numbers first.
+2. **The tokenizer cuts the text into pieces.** It cuts "I love reading books." into five pieces:
+   `I`, `␣love`, `␣reading`, `␣books` and `.`. (The `␣` marks a space. The space before a word
+   travels with the word, so `␣love` is one piece, space included.)
+3. **Each piece becomes a number.** The tokenizer looks each piece up in its fixed list, its
+   **vocabulary**, and writes down the piece's position in that list. OpenAI, the company behind
+   ChatGPT, names its models GPT-4, GPT-4o and so on. With the tokenizer that GPT-4o uses, our
+   sentence becomes `[40, 3047, 6085, 7187, 13]`. Those five numbers are what the model actually
+   receives. Each piece, with its number, is a **token**.
+4. **Common words are one piece, rare words are several.** The list holds about 200,000 pieces:
+   common words, common word-parts, single letters and symbols. "reading" is common, so it is one
+   piece. A word the list has never seen, such as "rereading", is built from smaller pieces that
+   are on it: `␣rere` + `ading`. Nothing is ever unreadable; rare text costs more pieces.
+5. **The model answers in tokens too.** It writes its answer one token at a time, and the
+   tokenizer turns those numbers back into text for you.
+6. **You pay per token.** An API bill counts the tokens you sent in and the tokens the model wrote
+   out. Our sentence costs 5 tokens to send.
+7. **Other languages can cost more.** The list was built mostly from English text, so English words
+   got their own pieces. The Hindi sentence, which means the same thing, needs 29 pieces with the
+   tokenizer of GPT-4 (2023) and 9 with the newer one of GPT-4o (2024). Same meaning, more tokens,
+   bigger bill.
+8. **The model can look at only so many tokens at once.** That limit is the **context window**:
+   everything in one request, meaning your instructions, the whole chat so far, your new message,
+   and the answer being written, must fit inside it.
+9. **The model remembers nothing between requests.** A chat app sends the whole conversation again
+   with every new message. When the chat grows past the window, the app must drop or shorten the
+   oldest messages, and the model can no longer see them. That is the "forgetting".
+
+<Figure caption="The tokenizer cuts the sentence into five pieces and swaps each for its number in a fixed list. The model only ever sees the numbers, and everything in one request must fit in its context window.">
+  <MentalModel />
+</Figure>
+
+Look at the picture once more: text goes in at the top, numbers come out in the middle, and the
+model at the bottom works only inside its window. Each of the three surprises from the question
+lives in one of these boxes. The bill counts the pieces, the language changes how many pieces a
+sentence needs, and the window decides how many pieces can be in view at once.
+
+An everyday picture: think of the vocabulary as a box of printing stamps. A printer who prints
+mostly English has a stamp for every common English word, so "reading" is one stamp. For a word
+with no stamp, they set it from smaller stamps, a few letters at a time. A Hindi sentence printed
+with that English-heavy box takes many more stamps. The picture stops working in one place: real
+tokenizers do not choose stamps by hand. A program picks them by counting which pieces appear most
+often in huge amounts of text, and the byte-pair encoding section further down shows exactly how.
 
 ## The building blocks
 
-Each idea below gets four steps: what it is, why it exists, an example with real numbers, and only
-then the technical version.
+Four ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, an
+example with numbers, and then the technical version.
 
 ### Token
 
+**What it is.** A **token** is one piece of text, the smallest unit a language model reads or
+writes.
+
+**Why it exists.** A model needs every input to be a number from a fixed, limited set. Whole words
+are too many to list (and new ones appear every day), while single letters make texts very long.
+Pieces of words sit in between: a limited set that can still spell anything.
+
+**Example.** "I love reading books." is 21 characters, 4 words plus a full stop, and 5 tokens.
+Here is how they line up:
+
+| Piece | `I` | `␣love` | `␣reading` | `␣books` | `.` |
+|---|---|---|---|---|---|
+| Token ID (GPT-4o) | 40 | 3047 | 6085 | 7187 | 13 |
+
+The thing to notice: the space belongs to the word after it, and the full stop is a token of its
+own.
+
+**The technical version.** A token is an integer ID into the tokenizer's vocabulary. The model
+never sees text, only the sequence of IDs. A rule of thumb from OpenAI and Google: in English, one
+token is about 4 characters, or about three quarters of a word (as of November 2026, [OpenAI
+help](https://help.openai.com/en/articles/4936856),
+[Gemini docs](https://ai.google.dev/gemini-api/docs/tokens)). Turned around: if a token is three
+quarters of a word, a word is 1 ÷ 0.75 ≈ 1.33 tokens, so 100 English words come to roughly
+100 × 1.33 ≈ 133 tokens. The rule is for English only; later sections show why.
+
 ### Tokenizer and vocabulary
+
+**What it is.** A **tokenizer** is the program that turns text into token IDs and back, and its
+**vocabulary** is the fixed list of every piece it knows.
+
+**Why it exists.** The model and the app must agree, exactly, on which number means which piece.
+The tokenizer is that agreement, written down once and shipped with the model.
+
+**Example.** OpenAI publishes its tokenizers in a library called tiktoken. The one used by GPT-4
+and GPT-3.5 is called `cl100k_base` and has 100,277 pieces; the one used by GPT-4o and later
+models is `o200k_base` and has 200,019 pieces (counted in this page's research, November 2026).
+Turning text into IDs is **encoding**; turning IDs back into text is **decoding**, and it gives
+back exactly the original text, every space included.
+
+**The technical version.** Each model maker builds its own tokenizer from its own collection of
+text, so the same text gives different tokens and different counts on different models. A model
+can only be used with the tokenizer it was trained with, because during training it learned what
+each ID means: ID 3047 means `␣love` to GPT-4o, and something else entirely to any other model.
 
 ### Context window
 
-### Input tokens vs output tokens
+**What it is.** The **context window** is the largest number of tokens a model can look at in one
+request.
+
+**Why it exists.** For every token it writes, the model looks back over every token in the
+request, and it keeps working notes in memory for each of them. Both the work and the memory grow
+with the number of tokens, so every model has a ceiling it was built and tested for. The section
+on why the window has a limit shows the numbers.
+
+**Example.** Imagine a chat model with an 8,000-token window. (The first Llama 3 models from Meta,
+in April 2024, had 8,192.) The app's instructions to the model take 500 tokens. The app keeps
+1,000 tokens free for the answer. Each exchange is a 200-token question and its 200-token answer,
+so 400 tokens.
+
+- Room left for the chat: 8,000 − 500 − 1,000 = 6,500 tokens.
+- After 16 exchanges, the history holds 16 × 400 = 6,400 tokens, still under the 6,500 of room.
+- The 17th question adds 200 more: 6,400 + 200 = 6,600 tokens, which is 100 more than the 6,500 of
+  room. It does not fit.
+
+At that moment the app has to choose: refuse, or leave out the oldest exchange. Leaving out
+exchange 1 frees 400 tokens: 15 exchanges of history (6,000 tokens) plus the new question
+(200) make 6,200, and the request fits again. From now on the model never sees what you said first.
+
+<Figure caption="An 8,000-token window as a fixed bar. Instructions and room for the answer always take their share; the chat fills the rest. At question 17 the chat no longer fits, and the oldest exchange has to go.">
+  <WindowBudget />
+</Figure>
+
+**The technical version.** The window counts the input (system instructions, every message, tool
+descriptions, meaning the descriptions of functions your app lets the model call, documents and
+images, all as tokens) plus the output the model generates in that
+request. As of November 2026, Anthropic's current Claude models have a 1,000,000-token window and
+can write up to 128,000 tokens in one answer ([Claude docs](https://platform.claude.com/docs/en/build-with-claude/context-windows));
+many open models (models whose files anyone can download and run, such as Meta's Llama) have
+128,000.
+
+### Input tokens and output tokens
+
+**What it is.** **Input tokens** are the tokens you send in a request; **output tokens** are the
+tokens the model writes back.
+
+**Why it exists.** The two cost the provider very different amounts of work. Running the model
+once over its input, called a **pass**, is billions of multiplications on expensive chips. All
+input tokens are read together in one pass. Output tokens are written one at a time, and each one
+needs a pass of its own. So providers count the two separately and charge more for output.
+
+**Example.** With illustrative round prices of $3 per million input tokens and $15 per million
+output tokens, a request that sends 2,000 tokens and gets back 500 costs:
+
+- input: 2,000 × $3 ÷ 1,000,000 = $0.006
+- output: 500 × $15 ÷ 1,000,000 = $0.0075
+- total: $0.006 + $0.0075 = $0.0135, about one and a half US cents.
+
+The output was a quarter of the size of the input, yet it cost more. Real prices change often and
+differ by model, so check the provider's price page; the shape, output costing several times
+input, is common across providers.
+
+**The technical version.** The API response reports both counts, for example `usage.input_tokens`
+and `usage.output_tokens`. A request also sets `max_tokens`, the most output tokens it allows; if
+the model reaches that number, it stops mid-sentence and says so in a field of the response called
+the **stop reason**. Some newer models write hidden working notes before they answer, called
+**reasoning tokens**. These are billed as output and take up window space even though you never see them ([OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning)).
+Why writing is slower than reading is the subject of
+[how an LLM writes, one token at a time](/ai-engineering/how-llms-generate-text/).
 
 :::tip[If you stop here]
-Three to five plain sentences that sum up Part 1, so you could explain the idea to a friend.
+- A model never sees text. A tokenizer cuts text into pieces called tokens and replaces each with
+  a number from a fixed list, its vocabulary.
+- Common words are one token; rare words are split into several. In English, a token is about
+  4 characters, but other languages often need more tokens for the same meaning.
+- You pay per token: tokens in, and tokens out, which cost more.
+- The context window is how many tokens one request can hold: instructions, the whole chat, and
+  the answer, together.
+- The model remembers nothing between requests. Apps resend the chat each time, and when it no
+  longer fits they drop or shorten the oldest part. That is why long chats "forget" their start.
 :::
 
 ## Going deeper
 
-The hard question for readers who already know the basics, and the problem behind it in numbers.
+Here is the question for readers who already use these APIs: **if the vocabulary is a fixed list,
+how can a tokenizer handle any text at all, an emoji, a new product name, a language it barely saw,
+and never fail? And if a model accepts a million tokens, why does it still miss a fact you put on
+page 400?**
+
+The first half has a precise answer, and the price of that answer is what makes Hindi cost more.
+The second half is about what the window costs: memory and work that grow with every token, bills
+that grow faster than the chat, and models that use the middle of a long input less well than its
+start and end.
+
+These are not curiosities. Token counts decide your bill, your waiting time (more input tokens take
+longer to read) and whether a request is accepted at all. A team that budgets a feature at
+"about 4 characters per token" and then launches in Hindi, or moves to a model with a different
+tokenizer, finds its numbers off by a factor of two or more.
 
 ## The obvious fix, and why it breaks
 
-What people try first, and exactly where it fails.
+If you were designing a tokenizer from scratch, two ideas come first.
+
+**Try 1: one token per word.** Make a list of words, give each an ID, and look words up. It works
+until a word is missing from the list. Then the only thing you can do is replace it with a special
+"unknown" ID, and the model loses that word completely. "I love rereading books." becomes
+"I love [unknown] books." A whole Hindi sentence becomes five unknowns. Making the list bigger does
+not end the problem: every name, typo, new product and new slang word is another missing entry,
+and every word in every language would need its own row.
+
+**Try 2: one token per character.** Nothing is ever unknown, because every text is made of
+characters. But the texts get long: "I love reading books." becomes 21 tokens instead of 5. The
+model must now do the work of following 21 positions to understand 4 words, and since the window
+counts tokens, it holds about a quarter as much text (21 tokens instead of 5 is 21 ÷ 5 ≈ 4 times
+as many).
+
+The figure cuts a sentence with a new word in it, "I love rereading books.", all three ways.
+
+<Figure caption="Three ways to cut 'I love rereading books.' Whole words lose the new word; single characters never fail but give 23 tokens, about four times the 6 of word pieces; word pieces keep both: nothing is lost and common words stay one token.">
+  <ThreeSplits />
+</Figure>
+
+Here are both tries in code, so you can see them fail. The runnable twins are in
+[`examples/tokens-and-context-windows/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/tokens-and-context-windows).
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="naive_split.py"
+# Try 1: one ID per whole word, from a fixed word list built in advance.
+WORD_IDS = {"i": 0, "love": 1, "reading": 2, "books": 3, ".": 4}
+UNKNOWN = 5  # every word not on the list gets this one ID
+
+
+def split_words(text: str) -> list[int]:
+    words = text.lower().replace(".", " .").split()
+    return [WORD_IDS.get(w, UNKNOWN) for w in words]
+
+
+# Try 2: one ID per character (each character has a standard number). Nothing is ever unknown.
+def split_chars(text: str) -> list[int]:
+    return [ord(c) for c in text]
+
+
+for text in ["I love reading books.", "I love rereading books.", "मुझे किताबें पढ़ना पसंद है।"]:
+    print(f"{text!r}")
+    print(f"  words: {split_words(text)}")
+    print(f"  chars: {len(split_chars(text))} pieces")
+# 'I love rereading books.'
+#   words: [0, 1, 5, 3, 4]            <- "rereading" is lost: the model sees only "unknown"
+#   chars: 23 pieces
+# 'मुझे किताबें पढ़ना पसंद है।'
+#   words: [5, 5, 5, 5, 5]            <- a whole Hindi sentence becomes five "unknown"s
+#   chars: 27 pieces
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="naive-split.mjs"
+// Try 1: one ID per whole word, from a fixed word list built in advance.
+const WORD_IDS = { i: 0, love: 1, reading: 2, books: 3, '.': 4 };
+const UNKNOWN = 5; // every word not on the list gets this one ID
+
+const splitWords = (text) =>
+  text.toLowerCase().replaceAll('.', ' .').split(/\s+/).filter(Boolean).map((w) => WORD_IDS[w] ?? UNKNOWN);
+
+// Try 2: one ID per character (each character has a standard number). Nothing is ever unknown.
+const splitChars = (text) => [...text].map((c) => c.codePointAt(0));
+
+for (const text of ['I love reading books.', 'I love rereading books.', 'मुझे किताबें पढ़ना पसंद है।']) {
+  console.log(`'${text}'`);
+  console.log(`  words: [${splitWords(text).join(', ')}]`);
+  console.log(`  chars: ${splitChars(text).length} pieces`);
+}
+// 'I love rereading books.'
+//   words: [0, 1, 5, 3, 4]            <- "rereading" is lost: the model sees only "unknown"
+//   chars: 23 pieces
+// 'मुझे किताबें पढ़ना पसंद है।'
+//   words: [5, 5, 5, 5, 5]            <- a whole Hindi sentence becomes five "unknown"s
+//   chars: 27 pieces
+```
+  </TabItem>
+</Tabs>
+
+The fix every modern model uses sits between the two: **sub-word tokens**. Start from the
+smallest possible pieces so nothing is ever unknown, then learn which pieces appear together so
+often that they deserve a single token. The rest of this section is how that learning works.
 
 ## How it works, piece by piece
 
-### Byte-pair encoding step by step
+### Bytes: the pieces everything is made of
+
+**What it is.** A **byte** is a small number from 0 to 255, and every file, every string, every
+character in a computer is stored as a row of bytes.
+
+**Why it exists here.** A tokenizer that never fails needs a starting set of pieces that can spell
+any text in any language, emoji included. Characters will not do: Unicode, the standard list of
+characters, has over 150,000 of them and grows every year. Bytes are a set of exactly 256 values,
+and every text is made of them.
+
+**Example.** A byte is 8 bits (each bit a 0 or a 1), and 8 bits can be arranged in
+2 × 2 × 2 × 2 × 2 × 2 × 2 × 2 = 256 different ways, hence 0 to 255. We usually write bytes in
+**hexadecimal** (hex), base 16, where the digits run 0–9 and then a–f for 10 to 15, so every byte
+is exactly two hex digits. The left digit counts sixteens and the right one counts ones: `61` is
+6 × 16 + 1 = 97, and `ff` is 15 × 16 + 15 = 255. The way text is turned into bytes is called
+**UTF-8**, and it uses a different number of bytes for different characters:
+
+<Figure caption="UTF-8 stores the letter a in one byte, the Hindi letter म in three, and an emoji in four. A tokenizer that starts from bytes can read any text, but a Hindi sentence starts out several times as long in bytes as an English one.">
+  <Utf8Bytes />
+</Figure>
+
+The English sentence "I love reading books." is 21 characters and 21 bytes, because every English
+letter, digit and space takes one byte. The Hindi sentence is 27 characters: Hindi stores each vowel sign, such as the ु in मु, as a
+character of its own, so the count is higher than the letters you see. 4 of the 27 are spaces. The other 23 take three bytes each: 23 × 3 = 69 bytes, plus 4 bytes for the spaces, gives
+73 bytes. Before any learning happens, the Hindi sentence is already 73 ÷ 21 ≈ 3.5 times as long.
+
+**The technical version.** UTF-8 uses 1 byte for the first 128 characters (English letters,
+digits, basic punctuation), 2 bytes for many European and Middle Eastern scripts, 3 bytes for most
+Indian scripts, Chinese and Japanese, and 4 bytes for emoji. A **byte-level** tokenizer starts with
+a vocabulary of the 256 single bytes. Any text can be written as bytes, so any text can be
+tokenized, and decoding the bytes gives back the exact text. That is the first half of the answer
+to the question that opened "Going deeper": nothing is ever unknown because the floor is bytes.
+
+### Byte-pair encoding, step by step
+
+**What it is.** **Byte-pair encoding (BPE)** builds the vocabulary by starting from single bytes
+and repeatedly gluing together the two neighbouring pieces that appear together most often.
+
+**Why it exists.** We want frequent text to be few tokens and rare text to still be spellable. BPE
+gets both from one rule: whatever appears together most in the training text gets its own token
+first.
+
+**Example.** Train on a tiny made-up **corpus** (the collection of training text): the word "read" appearing 6 times, "reads" 3 times,
+"reading" 4 times, "bread" 2 times and "red" 3 times. Every word starts as single letters (in
+English, one letter is one byte).
+
+1. Count every pair of neighbours across the corpus. The pair `r` `e` appears in all five words:
+   6 + 3 + 4 + 2 + 3 = 18 times, more than any other pair. **Merge 1:** `r` + `e` → `re`.
+2. Count again with `re` as one piece. Now `re` + `a` appears in read, reads, reading and bread:
+   6 + 3 + 4 + 2 = 15 times. So does `a` + `d`. When two pairs tie, our code takes the one it
+   counted first while reading the corpus in order, which here is `re` + `a`. **Merge 2:**
+   `re` + `a` → `rea`.
+3. `rea` + `d` also appears 15 times. **Merge 3:** `rea` + `d` → `read`.
+4. Only "reading" has more after `read`: `read` + `i` appears 4 times, as do `i` + `n` and
+   `n` + `g`. The tie rule picks the first counted. **Merge 4:** `read` + `i` → `readi`.
+5. **Merge 5:** `readi` + `n` → `readin`.
+
+A byte-level vocabulary always starts with all 256 possible bytes, even the ones this tiny corpus
+never uses, so that any text can still be spelled. With the 5 new pieces it now has
+256 + 5 = 261 entries. The list of
+merges, in order, is the tokenizer.
+
+<Figure caption="The five merges applied to the word reading: it shrinks from 7 single-letter tokens to 2, readin and g (five merges were not enough to join the g). A new word like thread splits into t, h and the learned piece read.">
+  <MergeLadder />
+</Figure>
+
+To **encode** new text, the tokenizer starts from its bytes and replays the merges in the order
+they were learned. "bread" becomes `b` + `read`: 5 bytes, 2 tokens. "ready", never seen in
+training, becomes `read` + `y`. "thread" becomes `t` + `h` + `read`. The Hindi word "पढ़ना"
+(reading) is 5 characters of 3 bytes each, 5 × 3 = 15 bytes, and none of the merges touch it, so it stays 15 tokens of one byte each,
+none of them even a whole letter.
+
+**The technical version.** Here is the trainer and encoder, about forty lines in each language. It
+prints the five merges above.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="bpe.py"
+from collections import Counter
+
+CORPUS = {"read": 6, "reads": 3, "reading": 4, "bread": 2, "red": 3}
+
+
+def train(word_counts: dict[str, int], num_merges: int) -> list[tuple[bytes, bytes]]:
+    """Learn merges: repeatedly join the most frequent pair of neighbouring pieces."""
+    words = {w: [bytes([b]) for b in w.encode("utf-8")] for w in word_counts}
+    merges = []
+    for _ in range(num_merges):
+        pairs: Counter[tuple[bytes, bytes]] = Counter()
+        for w, pieces in words.items():
+            for a, b in zip(pieces, pieces[1:]):
+                pairs[(a, b)] += word_counts[w]  # once per time the word appears
+        if not pairs:
+            break
+        best = max(pairs, key=pairs.get)  # ties: the pair seen first wins
+        merges.append(best)
+        words = {w: merge_pair(p, best) for w, p in words.items()}
+    return merges
+
+
+def merge_pair(pieces: list[bytes], pair: tuple[bytes, bytes]) -> list[bytes]:
+    """Replace every neighbouring (a, b) in pieces with the single piece a + b."""
+    out, i = [], 0
+    while i < len(pieces):
+        if i + 1 < len(pieces) and (pieces[i], pieces[i + 1]) == pair:
+            out.append(pieces[i] + pieces[i + 1])
+            i += 2
+        else:
+            out.append(pieces[i])
+            i += 1
+    return out
+
+
+def encode(word: str, merges: list[tuple[bytes, bytes]]) -> list[bytes]:
+    """Start from bytes, replay the merges in the order they were learned."""
+    pieces = [bytes([b]) for b in word.encode("utf-8")]
+    for pair in merges:
+        pieces = merge_pair(pieces, pair)
+    return pieces
+
+# merge 1: 'r' + 'e' -> 're'  (seen 18 times)  ... merge 5: 'readi' + 'n' -> 'readin'
+# 'thread': 6 bytes -> 3 tokens ['t', 'h', 'read']
+# 'पढ़ना': 15 bytes -> 15 tokens ['<e0>', '<a4>', '<aa>', ...]
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="bpe.mjs"
+const CORPUS = { read: 6, reads: 3, reading: 4, bread: 2, red: 3 };
+const enc = new TextEncoder();
+const key = (bytes) => bytes.join(','); // compare byte arrays by value
+
+/** Learn merges: repeatedly join the most frequent pair of neighbouring pieces. */
+function train(wordCounts, numMerges) {
+  let words = Object.keys(wordCounts).map((w) => [w, [...enc.encode(w)].map((b) => [b])]);
+  const merges = [];
+  for (let m = 0; m < numMerges; m++) {
+    const pairs = new Map(); // in the order pairs are first seen
+    for (const [w, pieces] of words) {
+      for (let i = 0; i + 1 < pieces.length; i++) {
+        const k = key(pieces[i]) + '|' + key(pieces[i + 1]);
+        const entry = pairs.get(k) ?? { pair: [pieces[i], pieces[i + 1]], count: 0 };
+        entry.count += wordCounts[w]; // once per time the word appears
+        pairs.set(k, entry);
+      }
+    }
+    if (pairs.size === 0) break;
+    let best = null;
+    for (const e of pairs.values()) if (!best || e.count > best.count) best = e; // ties: first seen
+    merges.push(best.pair);
+    words = words.map(([w, p]) => [w, mergePair(p, best.pair)]);
+  }
+  return merges;
+}
+
+/** Replace every neighbouring (a, b) in pieces with the single piece a + b. */
+function mergePair(pieces, [a, b]) {
+  const out = [];
+  for (let i = 0; i < pieces.length; i++) {
+    if (i + 1 < pieces.length && key(pieces[i]) === key(a) && key(pieces[i + 1]) === key(b)) {
+      out.push([...pieces[i], ...pieces[i + 1]]);
+      i++;
+    } else out.push(pieces[i]);
+  }
+  return out;
+}
+
+/** Start from bytes, replay the merges in the order they were learned. */
+function encode(word, merges) {
+  let pieces = [...enc.encode(word)].map((b) => [b]);
+  for (const pair of merges) pieces = mergePair(pieces, pair);
+  return pieces;
+}
+
+// merge 1: 'r' + 'e' -> 're'  (seen 18 times)  ... merge 5: 'readi' + 'n' -> 'readin'
+// 'thread': 6 bytes -> 3 tokens ['t', 'h', 'read']
+// 'पढ़ना': 15 bytes -> 15 tokens ['<e0>', '<a4>', '<aa>', ...]
+```
+  </TabItem>
+</Tabs>
+
+A production tokenizer is this same loop with three differences. It trains on terabytes of text (a terabyte is a million million bytes)
+instead of five words. It learns 100,000 to 200,000 merges instead of five. And before BPE runs,
+it splits the text into rough chunks with a fixed pattern (words with their leading space,
+numbers, runs of punctuation), so a token never crosses from one word into the next. That
+pre-splitting is why `␣love` carries its space, and why, in OpenAI's tokenizers, numbers are cut
+into groups of at most three digits: `12345678` becomes `123` + `456` + `78`
+([tiktoken](https://github.com/openai/tiktoken)). Real encoders also replay merges far faster than
+our loop, by always applying the earliest-learned merge that fits, but the result is the same idea.
 
 ### Why some languages cost more tokens
 
-### What happens at the edge of the context window
+Now we can explain the Hindi numbers from the start of the page. Two things stack up.
 
-### Counting tokens in code
+**First, Hindi starts longer.** As we worked out above, our Hindi sentence is 73 bytes and the
+English one is 21. Before any merge, Hindi is about 3.5 times as long.
+
+**Second, the merges are shared out by frequency.** BPE spends each merge on the most frequent pair
+in the training text. If most of that text is English, most merges go to English pairs, and
+English words end up as single tokens. A language that is a small share of the training text gets
+fewer merges, so its words stay in smaller pieces, sometimes in pieces smaller than one letter.
+
+Here is our sentence in OpenAI's two tokenizers (counted with tiktoken in November 2026):
+
+<Figure caption="The same meaning, three token counts. With the GPT-4 tokenizer the Hindi sentence needs 29 tokens, almost six times the English 5; many of its tokens are fragments of a letter. GPT-4o's larger vocabulary has whole Hindi word pieces and brings it down to 9.">
+  <SameSentence />
+</Figure>
+
+Work out the ratios. With `cl100k_base`, 29 ÷ 5 = 5.8, so the Hindi sentence costs almost six times
+as many tokens. With `o200k_base`, 9 ÷ 5 = 1.8, less than twice. OpenAI built the newer tokenizer
+partly for this: when it launched GPT-4o in May 2024 it reported its Hindi sample text needing 2.9
+times fewer tokens than before, and its Gujarati sample 4.4 times fewer ([OpenAI](https://openai.com/index/hello-gpt-4o/)).
+The o200k pieces show why: `␣किताब` (book), `␣पढ़` and `␣पसंद` (like) are whole word pieces now,
+where cl100k needed several byte fragments for each.
+
+The gap is not only a cost problem. A 2023 study measured the same texts translated into many
+languages and found token counts differing by up to 15 times between languages, with three
+effects: users of those languages pay more, wait longer for answers, and fit less text in the same
+context window ([Petrov et al., NeurIPS 2023](https://arxiv.org/abs/2305.15425)). An Indian app
+that budgets its context window for English and then serves Tamil or Telugu users runs out of room
+several times sooner.
+
+The simulation below runs real BPE in your browser. Its training text is a small mix of English and
+Hindi words, and you choose how much of it is Hindi and how many merges to learn. Two sentences,
+"I love reading books" and its Hindi translation, are tokenized with the merges learned so far.
+Each coloured chip is one token, drawn as wide as its bytes, so the Hindi row starts more than three
+times as long.
+
+<BpeSim />
+
+What to take from it: the merges go wherever the pairs are most frequent. With little Hindi in the
+training text, almost every merge shortens the English row, and the Hindi row barely moves. Give
+Hindi a fair share and its row shrinks too, but it starts from 3.5 times as many bytes, so it
+needs more merges to catch up. A bigger vocabulary, like the jump from 100,000 to 200,000 pieces,
+leaves room for both.
+
+### Messages, special tokens and everything else that counts
+
+A chat request is not only your text. The API wraps every message with **special tokens**: reserved
+IDs, never produced by encoding ordinary text, that mark where a message starts and ends and who
+wrote it. Each message therefore costs a few tokens on top of its text. Tool descriptions (the
+lists of functions the model may call) are turned into tokens too, and so are images and documents
+you attach ([Claude docs](https://platform.claude.com/docs/en/build-with-claude/context-windows)).
+This is why a count of your text alone always comes out lower than the `input_tokens` on the bill.
+
+For exact numbers, use the counter that matches the model. For OpenAI models, tiktoken counts
+locally: `tiktoken.get_encoding("o200k_base").encode(text)` returns the list of IDs. Anthropic
+offers a free endpoint, `POST /v1/messages/count_tokens`, which takes the same body as a real
+request (system prompt, messages, tools, images) and returns the input count, described in its
+docs as an estimate; Gemini has a similar count-tokens call
+([Anthropic token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting)).
+For a quick check without calling anything, our example code uses UTF-8 bytes ÷ 4, the average
+of about 4 bytes per token that the tiktoken README reports, rounded up. For the English sentence,
+21 ÷ 4 = 5.25, rounded up to 6 (real: 5). For the Hindi one, 73 ÷ 4 = 18.25, rounded up to 19
+(real: 9 on o200k, 29 on cl100k), which tells you how rough "a quick check" is.
+
+### What happens at the edge of the window
+
+Now the second half of the question from "Going deeper": the window. Three things happen as a request
+approaches it: the provider enforces it, the app has to make room, and the bill grows faster than
+the chat.
+
+**What the API does.** The window is input plus output. If the input alone is larger than the
+window, the request is rejected before the model runs; Claude's API, for example, returns HTTP 400
+with "prompt is too long". If the input fits but the answer runs out of room, the model stops
+writing and the response says why: on recent Claude models the stop reason is
+`model_context_window_exceeded`, and when the answer hits your own `max_tokens` setting first, it
+is `max_tokens` (as of November 2026, [Claude docs](https://platform.claude.com/docs/en/build-with-claude/context-windows)).
+Either way, you get back half an answer. Code that does not check the stop reason will treat half
+a JSON object as a whole one.
+
+**What the app does.** Since the app builds every request itself, it decides what each one
+contains. When a chat outgrows the window, there are four common choices:
+
+1. **Refuse.** Tell the user the conversation is too long and start a new one. Honest, but abrupt.
+2. **Drop the oldest messages.** Keep the instructions, keep as many recent messages as fit, leave
+   the rest out. Cheap and predictable. This is the "forgetting" from the opening question.
+3. **Summarise the oldest messages.** Ask a model to write a short summary of the old part, and
+   send the summary instead. Anthropic calls this **compaction** and uses it in its own coding
+   agent (a program where the model works in a loop, calling tools such as file reading): near the limit, the history is summarised, keeping decisions and open problems and
+   dropping long tool outputs, and the work continues in a fresh window
+   ([Anthropic, 2025](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)).
+   The summary loses detail, and writing it costs an extra request.
+4. **Fetch only what is needed.** Keep the full history or documents outside the model, in a
+   database, and pull in the few relevant pieces for each question. That is called **retrieval**, covered in
+   [long context vs RAG](/ai-engineering/long-context-vs-rag/).
+
+Whatever you choose, two rules hold. Never drop the instructions: they are what makes your app
+behave like your app. And always reserve room for the answer, plus room for hidden reasoning on
+models that think; OpenAI suggests reserving at least 25,000 tokens for reasoning and output when
+you start with its reasoning models ([OpenAI](https://developers.openai.com/api/docs/guides/reasoning)).
+
+**What the bill does.** Because the app resends the whole chat every time, each new question costs
+more input tokens than the last. Take the chat from the context window example: 500 tokens of instructions, exchanges of
+200 tokens of question and 200 of answer.
+
+- Question 1 sends the instructions and the question: 500 + 200 = 700 input tokens.
+- Question 2 also resends exchange 1: 500 + 400 + 200 = 1,100.
+- Each question after that sends 400 more than the one before. Question 16 comes 15 questions
+  after question 1, so it sends 700 + 15 × 400 = 6,700.
+
+Add up all sixteen requests. Pair the first with the last: 700 + 6,700 = 7,400. Pair the second
+with the second-to-last: 1,100 + 6,300 = 7,400. Every pair adds up to 7,400, so the average
+request is 7,400 ÷ 2 = 3,700. Sixteen requests at an average of 3,700 make
+16 × 3,700 = 59,200 input tokens billed. The conversation itself is only 16 × 400 = 6,400 tokens. You paid for it more than nine times over (59,200 ÷ 6,400 ≈ 9.25), and the
+longer the chat, the bigger that multiple gets. [Prompt caching](/ai-engineering/prompt-caching/)
+exists largely because of this pattern.
+
+The simulation below plays a chat of 40 questions into a window you choose. The bar at the top is
+the window; the chart under it shows how many input tokens each request sends, and the running
+total billed.
+
+<ContextSim />
+
+What to take from it: with "drop oldest", the request size climbs until it hits the window and then
+stays flat, because every new exchange pushes an old one out, and the line under the bar shows which
+exchanges have fallen out of view. With "summarise", the oldest messages shrink into an amber summary block, so more
+of the conversation survives, at the cost of an extra summary request each time it compacts. With "refuse", the chat
+ends at the first request that does not fit. In every mode the total billed keeps climbing much
+faster than the chat itself.
+
+Here is the "drop oldest" strategy written properly: keep the instructions, reserve room for the
+answer, walk back from the newest message, never cut a message in half, and make sure the kept
+history starts with a question. It takes the token counter as a parameter, so production code can
+pass the provider's real counter.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="fit_history.py"
+import math
+from typing import Callable
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough count: about 4 bytes of UTF-8 per token. Use the provider's counter when it matters."""
+    return math.ceil(len(text.encode("utf-8")) / 4)
+
+
+def fit_history(system: str, messages: list[dict], window: int, reserve_output: int,
+                count: Callable[[str], int] = estimate_tokens) -> tuple[list[dict], int]:
+    """Return (the newest messages that fit, tokens used by system + kept messages)."""
+    budget = window - reserve_output - count(system)
+    newest = count(messages[-1]["text"])
+    if newest > budget:
+        # Never cut the user's new message silently: tell the caller.
+        raise ValueError(f"new message needs {newest} tokens, only {budget} available")
+    kept, used = [], 0
+    for msg in reversed(messages):           # walk from newest to oldest
+        cost = count(msg["text"])
+        if used + cost > budget:
+            break                             # this message and everything older is dropped
+        kept.append(msg)
+        used += cost
+    kept.reverse()
+    while kept and kept[0]["role"] != "user":  # a history should start with a question
+        used -= count(kept[0]["text"])
+        kept.pop(0)
+    return kept, count(system) + used
+
+# With the context window example's numbers (8,000 window, 500 instructions, 1,000 reserved),
+# 20 exchanges of 200 + 200 tokens and a new 200-token question:
+# messages in chat: 41, kept: 31, dropped: 10
+# oldest kept message starts with: q6
+# tokens sent: 6700, room left for the answer: 1300
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="fit-history.mjs"
+/** Rough count: about 4 bytes of UTF-8 per token. Use the provider's counter when it matters. */
+export const estimateTokens = (text) => Math.ceil(new TextEncoder().encode(text).length / 4);
+
+/** Returns { kept: the newest messages that fit, used: tokens for system + kept messages }. */
+export function fitHistory(system, messages, window, reserveOutput, count = estimateTokens) {
+  const budget = window - reserveOutput - count(system);
+  const newest = count(messages.at(-1).text);
+  if (newest > budget) {
+    // Never cut the user's new message silently: tell the caller.
+    throw new Error(`new message needs ${newest} tokens, only ${budget} available`);
+  }
+  const kept = [];
+  let used = 0;
+  for (const msg of [...messages].reverse()) { // walk from newest to oldest
+    const cost = count(msg.text);
+    if (used + cost > budget) break;            // this message and everything older is dropped
+    kept.unshift(msg);
+    used += cost;
+  }
+  while (kept.length && kept[0].role !== 'user') used -= count(kept.shift().text); // start with a question
+  return { kept, used: count(system) + used };
+}
+
+// With the context window example's numbers (8,000 window, 500 instructions, 1,000 reserved),
+// 20 exchanges of 200 + 200 tokens and a new 200-token question:
+// messages in chat: 41, kept: 31, dropped: 10
+// oldest kept message starts with: q6
+// tokens sent: 6700, room left for the answer: 1300
+```
+  </TabItem>
+</Tabs>
+
+Check the output against the arithmetic. The room for messages is 8,000 − 1,000 − 500 = 6,500
+tokens. The new question takes 200, leaving 6,300. Fifteen full exchanges take 15 × 400 = 6,000,
+which fits; a sixteenth would need 6,400, which does not. So the function keeps questions 6 to 20
+with their answers (30 messages) plus question 21: 31 messages. It drops exchanges 1 to 5, which
+is 10 messages. Tokens sent: 500 + 200 + 6,000 = 6,700, leaving 8,000 − 6,700 = 1,300 for the
+answer, more than the 1,000 reserved.
+
+### Why the window has a limit, and why the middle gets lost
+
+The building blocks said every token costs memory and work. Here are the numbers, and then the
+part that surprises people: fitting in the window does not mean being used well.
+
+**Memory: the model's notes per token.** When the model reads a token, it saves a set of numbers
+about it, so that later tokens can look back at it without reading everything again. These saved
+numbers are called the **key-value cache** (KV cache). They exist because without them, writing
+each new token would mean re-reading the entire input from scratch. How big are they? For Meta's
+Llama 3 8B model (8B means 8 billion learned numbers), the published design is a stack of 32
+**layers**, rounds of calculation that each token passes through in turn. Each layer saves 8 groups of 128 numbers
+twice per token (once as a "key", once as a "value"), each number taking 2 bytes
+([Llama 3 paper, 2024](https://arxiv.org/abs/2407.21783)). Step by step:
+
+- numbers saved per token: 32 × 8 × 128 × 2 = 65,536
+- bytes per token: 65,536 × 2 bytes = 131,072 bytes, which is 128 KB (1 KB is 1,024 bytes)
+- for an 8,192-token window: 8,192 × 128 KB = 1,048,576 KB, which is 1 GB (1,024 KB is 1 MB, and
+  1,024 MB is 1 GB)
+- for Llama 3.1's 131,072-token window (written "128K"): 131,072 ÷ 8,192 = 16 times as many
+  tokens, so 16 × 1 GB = 16 GB
+
+The model itself, its 8 billion learned numbers (called **weights**) at 2 bytes each, takes
+8,000,000,000 × 2 = 16,000,000,000 bytes, about 15 GB counted the 1,024 way as above: close to
+the 16 GB of notes. Both have to sit in the memory of
+the graphics chip (**GPU**) that runs the model, which is fast but small and expensive. So one
+conversation at full length needs about as much of that memory for its notes as the whole model does, and a server
+running many conversations at once has to share that memory between them. How the KV cache is
+used during writing is covered in [how an LLM writes](/ai-engineering/how-llms-generate-text/).
+
+**Work: every token looks at every other token.** The basic design of these models, the
+transformer, lets each token look at each earlier token to decide what matters. A quick refresher
+on squaring first: a number "squared", written n², is the number times itself, so 4² = 4 × 4 = 16.
+With n tokens, there are about n × n = n² pairs of tokens to compare
+([Anthropic, 2025](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)).
+
+<Figure caption="Each square is one pair of tokens the model compares. 4 tokens make 16 pairs; doubling to 8 tokens makes 64, four times as many. The work grows much faster than the text.">
+  <PairGrid />
+</Figure>
+
+Doubling the input from 4 tokens to 8 doubles the text but makes 8 × 8 = 64 pairs instead of 16,
+four times the work. At 1,000 tokens it is 1,000 × 1,000 = one million pairs. Real models use many
+engineering tricks to keep this affordable, but the pressure is real, and it is one reason long
+inputs are slow, and why some providers charge more per token for very long prompts. The details belong to
+[transformers and attention](/ai-engineering/transformers-and-attention/).
+
+**Quality: the middle gets lost.** A 2023 study gave models 10, 20 or 30 documents with only one of
+them holding the answer, and moved that one document around. Models answered best when the useful document was at the start or
+the end of the input, and noticeably worse when it was in the middle; accuracy also fell as inputs
+got longer ([Liu et al., "Lost in the Middle", TACL 2024](https://aclanthology.org/2024.tacl-1.9/)).
+In July 2025, Chroma tested 18 models on tasks that stayed equally hard while the input grew, and
+found their answers became less reliable as the input got longer, even on simple tasks and well
+before the window was full ([Chroma, "Context Rot"](https://research.trychroma.com/context-rot)). Anthropic's own docs now
+use that name, **context rot**: as the token count grows, accuracy and recall (finding facts that are in the input) fall.
+
+The practical rule that follows: the window is a hard limit, not a target. Put the instructions
+and the most important material at the start or the end, send what the task needs rather than
+everything you have, and test quality at the input sizes you will really use.
 
 ## How real systems do it
 
-How real products, companies and open-source tools do it, with dates on anything that changes.
+**OpenAI** publishes its tokenizers in tiktoken: `cl100k_base` for GPT-3.5 and GPT-4, and
+`o200k_base`, which arrived with GPT-4o in May 2024, for the models since.
+Counting locally with the right encoding gives exact text counts; the chat format adds a few tokens
+per message on top. Reasoning models add hidden reasoning tokens, billed as output.
+
+**Meta's Llama 3** (April 2024) moved from a 32,000-token vocabulary in Llama 2 to 128,000: about
+100,000 pieces taken from OpenAI's tiktoken vocabulary plus 28,000 more for other languages. Meta
+reports roughly 15% fewer tokens for the same text (15% fewer means 100 tokens become 85) and English compression rising from about 3.2 to
+4 characters per token. The first models had an 8,192-token window; Llama 3.1, three months
+later, had 128,000 ([Llama 3 paper](https://arxiv.org/abs/2407.21783)). The vocabulary trade is
+visible here: a bigger list means fewer tokens per sentence, at the cost of a bigger table inside
+the model, which holds one row of learned numbers for every vocabulary entry.
+
+**Anthropic's Claude** models have the 1,000,000-token window met earlier. Claude Opus 4.7 and later use a newer tokenizer that produces roughly 30%
+more tokens for the same text than earlier Claude models; 30% more means 1,000 tokens become 1,300.
+The docs translate the window: 1M tokens is about 555,000 English words on the new tokenizer,
+against about 750,000 before (750,000 ÷ 555,000 ≈ 1.35, in line with "roughly 30%"). The count-tokens endpoint is free, and long conversations are handled
+with server-side compaction ([Claude models overview](https://platform.claude.com/docs/en/about-claude/models/overview),
+[token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting)).
+
+**Google's Gemini** documents the same rule of thumb, about 4 characters per token and 60–80
+English words per 100 tokens, offers a count-tokens call, and reports the real counts in each
+response's usage data ([Gemini docs](https://ai.google.dev/gemini-api/docs/tokens)).
+
+The pattern across all four: each provider has its own tokenizer, counts change between model
+versions, and every API reports the real counts per request. Log those reported counts; do not
+rely on your own estimate for anything that matters.
 
 ## Gotchas and war stories
 
-The mistakes that hurt most in production, with real incidents where they exist.
+**The model cannot see letters.** Ask a model how many r's are in "strawberry", and in the question
+"How many r letters are in strawberry?" the word arrives as one token, `␣strawberry`, in both of
+OpenAI's tokenizers. The model is being asked about the letters inside a number. Numbers, as we
+saw, arrive in groups of up to three digits. Counting letters, reversing strings and long arithmetic are weak spots for this reason; give the model a tool (code)
+for them.
+
+:::caution[A token budget is only valid for one tokenizer]
+Limits written as tokens ("trim history to 6,500 tokens", "chunks of 500 tokens") silently change
+meaning when you change model. Moving to a Claude model with the newer tokenizer turns the same text
+into about 30% more tokens, so a prompt that used 80% of a budget now needs 80 × 1.3 = 104%. Recount
+with the new model's counter before switching, and keep a margin.
+:::
+
+**Estimates break outside English.** Our bytes ÷ 4 estimate said 19 tokens for the Hindi sentence;
+the real count is 9 on one OpenAI tokenizer and 29 on the other. A characters ÷ 4 estimate would say
+27 ÷ 4 = 6.75, about 7, and against cl100k's 29 that is 29 ÷ 7 ≈ 4 times too low. If your users write in Hindi, Tamil, Arabic or Chinese, count
+with the real tokenizer, and log the reported usage per language.
+
+:::danger[Check the stop reason]
+When the answer hits `max_tokens` or the window, the API still returns success, with a truncated
+answer and a stop reason saying so. Code that parses the text without checking the stop reason
+stores half a JSON object, half a SQL query or half a summary as if it were complete. Always check
+it, and either retry with more room or fail loudly.
+:::
+
+**Glitch tokens.** In February 2023, researchers found tokens such as `␣SolidGoldMagikarp`, a
+Reddit username, that made GPT-3 models produce nonsense or refuse to repeat them. The tokenizer had
+learned them from text where they were frequent, but the model's training data barely contained
+them, so the model never learned what they meant
+([Rumbelow and Watkins, 2023](https://www.lesswrong.com/posts/aPeJE8bSo6rAFoLqg/solidgoldmagikarp-plus-prompt-generation)).
+A 2024 study found such under-trained tokens in many open models and showed how to detect them from
+the model's weights ([Land and Bartolo, EMNLP 2024](https://aclanthology.org/2024.emnlp-main.649)).
+The lesson for engineers: the tokenizer and the model are trained separately, and odd behaviour on
+one strange string can be a tokenizer issue, not a prompt issue.
+
+**Agents fill the window with tool output.** An agent, a program where the model calls tools in a
+loop, that reads files and runs commands adds every
+result to its history. One large file or log can take tens of thousands of tokens and push the
+instructions and the original task toward the lost middle. Trim tool outputs to what is needed, and
+clear old ones; Anthropic describes clearing old tool results as the lightest form of compaction
+([Anthropic, 2025](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)).
 
 ## Trade-offs and when not to use it
 
-What it costs, what it does not solve, and when to pick something else.
+**Vocabulary size is a trade.** A bigger vocabulary makes texts shorter (cheaper, faster, more fits
+in the window) and treats more languages fairly. But every entry needs its own row of numbers in
+the model, and rare entries are seen less often in training, which is how glitch tokens happen.
+The field has moved from about 32,000 to 100,000–200,000 and more since 2023, which tells you which
+side has been winning.
+
+**A bigger window is not free.** Every extra token costs money, memory and time to read, and long
+inputs are used less reliably. A large window is the right tool when the task truly needs to see a
+whole document at once: reviewing a contract, finding a bug that spans files. It is the wrong tool
+when the answer depends on a few pages out of thousands; then retrieval sends those pages only.
+
+**When not to stuff the window.** Do not send the full chat history, every document and every tool
+result because it fits. Send what this request needs, summarise or drop the rest, and keep the
+instructions where the model uses them best, at the start. Choosing what goes into each request is
+the subject of [prompt chaining and context engineering](/ai-engineering/prompt-chaining-and-context-engineering/).
 
 ## Interview corner
 
-How this comes up in interviews, and what a strong answer covers.
+This topic shows up in AI-engineering interviews as warm-up questions and inside system design
+("design a chat assistant", "design a document Q&A bot").
+
+- **"What is a token, and why not use words?"** A strong answer: a sub-word piece with an ID from a
+  fixed vocabulary; words fail on anything not on the list, characters make inputs several times
+  longer; byte-level BPE gives both coverage and short sequences.
+- **"How does BPE work?"** Start from bytes, count neighbouring pairs, merge the most frequent,
+  repeat until the vocabulary is the size you want; encode by replaying merges in order. Mention
+  pre-splitting on words and numbers.
+- **"Your chatbot forgets things after a long chat. Why, and what would you do?"** The model is
+  memoryless between requests; the app resends history; past the window something must go. Options: drop oldest,
+  summarise (compaction), retrieve relevant past messages; always keep the instructions and reserve
+  room for the answer; check stop reasons.
+- **"Why is the same feature more expensive for Hindi users?"** Bytes per character plus merge
+  allocation by training-data frequency; numbers for one sentence; fix by measuring per-language
+  usage and choosing models with better multilingual tokenizers.
+- **"Why not always use the 1M-token window?"** Cost grows with every token and is paid again on
+  every turn, memory per token, latency, and lost-in-the-middle and context rot.
 
 ## Check yourself
 
-Four or five questions with hidden answers.
+<details>
+<summary>1. A sentence of 120 English words: about how many tokens, and why only "about"?</summary>
+
+At about three quarters of a word per token, 120 ÷ 0.75 = 160 tokens. Only "about" because the rule
+is an average for English. The real count depends on the model's tokenizer, on how common the words
+are, and on numbers and punctuation. Count with the model's own tokenizer when it matters.
+
+</details>
+
+<details>
+<summary>2. Why can a byte-level BPE tokenizer read any text, even an emoji it has never seen?</summary>
+
+Its vocabulary starts with all 256 bytes, and every text in every language is stored as bytes in
+UTF-8. In the worst case the emoji is written as its 4 single-byte tokens. Merges only make common
+byte sequences shorter; they never make anything unreadable.
+
+</details>
+
+<details>
+<summary>3. A model has a 128,000-token window. You send 125,000 tokens and set max_tokens to 8,000. What can happen?</summary>
+
+Input plus output can reach 125,000 + 8,000 = 133,000, which is more than the window. Depending on
+the provider and model, the request is rejected up front, or it is accepted and the answer stops
+when it reaches the window, after at most 128,000 − 125,000 = 3,000 tokens, with a stop reason
+saying so. Either way, check the stop reason and keep enough room for the answer.
+
+</details>
+
+<details>
+<summary>4. Your app trims chat history by dropping the oldest messages. A user complains the bot "forgot the rules". What went wrong?</summary>
+
+Most likely the trimming treated the instructions (the system prompt) as an ordinary old message and
+dropped it, or the instructions were part of the first user message. Keep instructions out of the
+trimming, always first in every request, and trim only the conversation after them.
+
+</details>
+
+<details>
+<summary>5. Doubling the input from 2,000 to 4,000 tokens. What happens to the number of token pairs the basic design compares?</summary>
+
+2,000 × 2,000 = 4,000,000 pairs before; 4,000 × 4,000 = 16,000,000 after. Twice the text, four times
+the pairs. That is one reason long inputs cost more time and money per token than short ones.
+
+</details>
 
 ## Recap
 
-Six bullets to revise from.
+- Models read and write token IDs, never text. A tokenizer cuts text into sub-word pieces from a
+  fixed vocabulary (100,000 to 200,000+ entries today) and back, losslessly.
+- Byte-level BPE starts from the 256 bytes and merges the most frequent neighbouring pairs, so
+  nothing is unknown and frequent text is short.
+- English is about 4 characters per token; scripts that take more bytes and less training text cost
+  more: our Hindi sentence is 29 tokens on GPT-4's tokenizer and 9 on GPT-4o's, against 5 in
+  English.
+- The context window holds instructions, history, tools, documents and the answer, all in tokens.
+  Past it, requests fail or answers stop, so check the stop reason.
+- Models remember nothing between requests: apps resend history, so the bill grows much faster than the chat, and long
+  chats need dropping, summarising (compaction) or retrieval.
+- Memory and work grow with every token, and models use the middle of long inputs less reliably:
+  the window is a limit, not a target.
 
 ## Where to go next
 
-<NextTopics />
+<NextTopics items={[
+  { slug: 'how-llms-generate-text', why: 'What the model does with the tokens: predicting the next one, again and again, and why writing is slower than reading.' },
+  { slug: 'embeddings', why: 'How each token ID becomes a list of numbers that carries meaning.' },
+  { slug: 'prompt-chaining-and-context-engineering', why: 'Deciding what goes into the window for each request, once you know it is a budget.' },
+  { slug: 'llm-cost-management', why: 'Turning input and output token counts into a cost per request, and cutting it.' },
+]} />
 
 ## Further reading
 
-Every source used, from 2020 or later, each with a line on what it is good for.
+**Specs and official docs**
+
+- [OpenAI Help: What are tokens and how to count them](https://help.openai.com/en/articles/4936856) (2025–26). The rules of thumb and what else adds tokens to a request.
+- [openai/tiktoken](https://github.com/openai/tiktoken) (2023–26). OpenAI's tokenizer library; the README's short BPE explanation and the encodings used on this page.
+- [Anthropic: Context windows](https://platform.claude.com/docs/en/build-with-claude/context-windows) (read November 2026). What counts toward the window, window sizes, overflow behaviour, and context rot.
+- [Anthropic: Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting) (read November 2026). The count-tokens endpoint and the note on the newer tokenizer.
+- [Anthropic: Models overview](https://platform.claude.com/docs/en/about-claude/models/overview) (read November 2026). Window and output sizes per model, and words per million tokens.
+- [Google: Gemini API, understand and count tokens](https://ai.google.dev/gemini-api/docs/tokens) (2025–26). Gemini's rules of thumb and counting for text and media.
+- [OpenAI: Reasoning models](https://developers.openai.com/api/docs/guides/reasoning) (2025–26). Hidden reasoning tokens, their billing, and how much room to reserve.
+
+**Papers and engineering posts**
+
+- [Anthropic: Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) (2025). Context as a budget, compaction, clearing tool results.
+- [OpenAI: Hello GPT-4o](https://openai.com/index/hello-gpt-4o/) (2024). The new tokenizer's token savings for 20 languages, including Hindi and Gujarati.
+- [Petrov et al.: Language model tokenizers introduce unfairness between languages](https://arxiv.org/abs/2305.15425) (NeurIPS 2023). Up to 15× token-count gaps between languages, and their effect on cost, speed and context.
+- [Tamang and Bora: Evaluating tokenizer performance across official Indian languages](https://arxiv.org/abs/2411.12240) (2024). Tokenizers compared on India's 22 official languages.
+- [Meta: The Llama 3 herd of models](https://arxiv.org/abs/2407.21783) (2024). The 128K vocabulary, window sizes, and the model shape used for the memory-per-token numbers.
+- [Liu et al.: Lost in the middle](https://aclanthology.org/2024.tacl-1.9/) (TACL 2024). Why position in a long input changes accuracy.
+- [Chroma: Context rot](https://research.trychroma.com/context-rot) (2025). 18 models tested as input length grows.
+- [Rumbelow and Watkins: SolidGoldMagikarp](https://www.lesswrong.com/posts/aPeJE8bSo6rAFoLqg/solidgoldmagikarp-plus-prompt-generation) (2023). The discovery of glitch tokens.
+- [Land and Bartolo: Fishing for Magikarp](https://aclanthology.org/2024.emnlp-main.649) (EMNLP 2024). Finding under-trained tokens automatically.
+
+**Explainers**
+
+- [Hugging Face LLM course: Byte-pair encoding tokenization](https://huggingface.co/learn/llm-course/chapter6/5) (2021–25). BPE trained step by step on a toy corpus, with code.
+- [Andrej Karpathy: minbpe](https://github.com/karpathy/minbpe) (2024), with the video "Let's build the GPT Tokenizer". A minimal, readable BPE that reproduces GPT-4's tokenizer.
+- Sennrich, Haddow and Birch, "Neural machine translation of rare words with subword units" (2016, kept as history). The paper that brought BPE to language models.

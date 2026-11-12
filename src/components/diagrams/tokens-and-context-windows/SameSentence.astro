@@ -1,0 +1,44 @@
+---
+// The same meaning in English and Hindi, counted with two OpenAI tokenizers (tiktoken 0.14, Nov 2026).
+const en = [
+  { x: 4, w: 40, t: 'I' }, { x: 50, w: 80, t: '␣love' }, { x: 136, w: 118, t: '␣reading' },
+  { x: 260, w: 92, t: '␣books' }, { x: 358, w: 38, t: '.' },
+];
+const sq = Array.from({ length: 29 }, (_, i) => 4 + i * 13.4);
+const hi = ['म', 'ुझे', '␣किताब', 'ें', '␣पढ़', 'ना', '␣पसंद', '␣है', '।'];
+const hiW = [26, 40, 62, 30, 46, 32, 54, 36, 24];
+const hiX = hiW.reduce<number[]>((acc, w, i) => (acc.push(i === 0 ? 4 : acc[i - 1] + hiW[i - 1] + 4), acc), []);
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="tcw-ss-t tcw-ss-d">
+  <title id="tcw-ss-t">The same sentence costs different numbers of tokens</title>
+  <desc id="tcw-ss-d">
+    Three rows. English, "I love reading books.": 5 tokens. The Hindi translation with the GPT-4 tokenizer
+    from 2023: 29 tokens, drawn as 29 small red squares, many of them fragments of a single letter. The
+    Hindi translation with the GPT-4o tokenizer from 2024: 9 tokens, including whole word pieces for book,
+    read and like.
+  </desc>
+
+  <text x="4" y="20" font-size="16" font-weight="700" style="fill: var(--viz-ink)">English: 5 tokens</text>
+  {en.map((c) => (
+    <g>
+      <rect x={c.x} y="30" width={c.w} height="34" rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      <text x={c.x + c.w / 2} y="53" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{c.t}</text>
+    </g>
+  ))}
+
+  <text x="4" y="106" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Hindi, GPT-4 tokenizer (2023): 29 tokens</text>
+  {sq.map((x) => (
+    <rect x={x} y="116" width="11" height="34" rx="3" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  ))}
+  <text x="4" y="174" font-size="15" style="fill: var(--viz-muted)">many tokens are fragments of one letter</text>
+
+  <text x="4" y="216" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Hindi, GPT-4o tokenizer (2024): 9 tokens</text>
+  {hi.map((t, i) => (
+    <g>
+      <rect x={hiX[i]} y="226" width={hiW[i]} height="38" rx="6" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+      <text x={hiX[i] + hiW[i] / 2} y="251" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">{t}</text>
+    </g>
+  ))}
+  <text x="4" y="290" font-size="15" style="fill: var(--viz-muted)">मुझे किताबें पढ़ना पसंद है। = I love reading books.</text>
+</svg>

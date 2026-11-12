@@ -1,0 +1,19 @@
+---
+// BPE in the browser: merges shared out between English and Hindi by frequency. See bpe-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="tcw-bpe"
+  title="Byte-pair encoding: who gets the merges?"
+  description="Two rows of coloured chips. The top row is the English sentence I love reading books, 20 bytes; the bottom row is its Hindi translation, 70 bytes. Each chip is one token, as wide as its bytes. As merges are learned, neighbouring chips join into wider ones and each row's token count drops. Below, a ratio shows how many times more tokens the Hindi sentence needs, and a bar shows how many of the merges learned so far came from English text (blue) and from Hindi text (amber)."
+  watchFor="At the defaults (10% Hindi, 80 merges) the English row shrinks to 5 tokens while the Hindi row ends near 34: almost 7 times as many, close to what GPT-4's tokenizer does to the real sentence. Set Hindi to 0%: no merge ever touches it and it stays 70 single bytes. Set it to 50%: the two rows shrink together. Then go back to 10% and raise the merges to 200: once the English words are whole, the extra merges go to Hindi too, and it reaches 5. That is the bigger vocabulary of GPT-4o, in miniature."
+  viewBox="0 0 400 256"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createBpeModel } from './bpe-model';
+
+  mountAll('tcw-bpe', createBpeModel);
+</script>

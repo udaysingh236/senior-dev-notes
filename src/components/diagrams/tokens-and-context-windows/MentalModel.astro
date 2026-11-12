@@ -1,0 +1,52 @@
+---
+// Part 1 mental model: text -> tokenizer -> pieces -> IDs -> model, all inside the context window.
+const chips = [
+  { x: 4, w: 40, t: 'I', id: '40' },
+  { x: 50, w: 80, t: '␣love', id: '3047' },
+  { x: 136, w: 118, t: '␣reading', id: '6085' },
+  { x: 260, w: 92, t: '␣books', id: '7187' },
+  { x: 358, w: 38, t: '.', id: '13' },
+];
+---
+
+<svg viewBox="0 0 400 402" width="100%" role="img" aria-labelledby="tcw-mm-t tcw-mm-d">
+  <title id="tcw-mm-t">From a sentence to the numbers a model reads</title>
+  <desc id="tcw-mm-d">
+    The text "I love reading books." goes into a tokenizer, which cuts it into five pieces: I, space love,
+    space reading, space books, and a full stop. Each piece is swapped for its number in the vocabulary:
+    40, 3047, 6085, 7187 and 13. Only these numbers go into the model. The model works inside a dashed box
+    labelled context window, which holds the instructions, the chat so far, the new message and the answer.
+  </desc>
+  <defs>
+    <marker id="tcw-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="392" height="44" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="200" y="32" font-size="18" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">I love reading books.</text>
+
+  <line x1="200" y1="50" x2="200" y2="78" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tcw-mm-a)" />
+  <text x="212" y="70" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">tokenizer cuts it into pieces</text>
+
+  {chips.map((c) => (
+    <g>
+      <rect x={c.x} y="84" width={c.w} height="36" rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      <text x={c.x + c.w / 2} y="108" font-size="16" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{c.t}</text>
+      <line x1={c.x + c.w / 2} y1="122" x2={c.x + c.w / 2} y2="140" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+      <text x={c.x + c.w / 2} y="160" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{c.id}</text>
+    </g>
+  ))}
+  <text x="4" y="186" font-size="15" style="fill: var(--viz-muted)">5 tokens: each piece's number in the vocabulary</text>
+
+  <line x1="200" y1="194" x2="200" y2="222" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#tcw-mm-a)" />
+  <text x="212" y="214" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">only the numbers go in</text>
+
+  <rect x="4" y="228" width="392" height="170" rx="10" stroke-width="2" stroke-dasharray="6 4" style="fill: none; stroke: var(--viz-warn)" />
+  <text x="16" y="252" font-size="16" font-weight="700" style="fill: var(--viz-warn)">context window</text>
+  <text x="16" y="274" font-size="15" style="fill: var(--viz-muted)">everything in one request must fit:</text>
+  <text x="16" y="296" font-size="15" style="fill: var(--viz-muted)">instructions + chat so far + new message + answer</text>
+  <rect x="110" y="314" width="180" height="66" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="200" y="342" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">model</text>
+  <text x="200" y="366" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">numbers in, numbers out</text>
+</svg>
