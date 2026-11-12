@@ -10,7 +10,7 @@ def split_words(text: str) -> list[int]:
     return [WORD_IDS.get(w, UNKNOWN) for w in words]
 
 
-# Try 2: one ID per character (its Unicode number). Nothing is ever unknown.
+# Try 2: one ID per character (each character has a standard number). Nothing is ever unknown.
 def split_chars(text: str) -> list[int]:
     return [ord(c) for c in text]
 

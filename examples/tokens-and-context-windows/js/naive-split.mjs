@@ -7,7 +7,7 @@ const UNKNOWN = 5; // every word not on the list gets this one ID
 const splitWords = (text) =>
   text.toLowerCase().replaceAll('.', ' .').split(/\s+/).filter(Boolean).map((w) => WORD_IDS[w] ?? UNKNOWN);
 
-// Try 2: one ID per character (its Unicode number). Nothing is ever unknown.
+// Try 2: one ID per character (each character has a standard number). Nothing is ever unknown.
 const splitChars = (text) => [...text].map((c) => c.codePointAt(0));
 
 for (const text of ['I love reading books.', 'I love rereading books.', 'मुझे किताबें पढ़ना पसंद है।']) {

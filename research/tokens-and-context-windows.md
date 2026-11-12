@@ -129,4 +129,15 @@ Derived: Llama 3 8B memory per token for the model's notes (keys and values): 32
 
 ## Fresher read
 
-(Filled in Phase 8; must be empty before publishing.)
+First pass (2026-11-12, fresh agent with no research context): 40 items. Terms used before being
+explained (API, provider, GPT-4o, pass, stop reason, reasoning tokens, tool descriptions, open
+models, Unicode, corpus, layers, weights, GPU, compression, agent, stateless, retrieval, recall,
+terabytes); missing working (exchange split 200 + 200 in Part 1, Hindi character count, 15 bytes,
+bytes ÷ 4 rounding, characters ÷ 4, 80 × 1.3, why 15 × 400, 555k vs 750k words, GB units);
+captions that did not match the text (ThreeSplits, MergeLadder, WindowBudget, Utf8Bytes); missing
+steps (why 256 entries, tie rule, why a pass costs, why IDs are model-specific); maths without a
+refresher (average of an even sequence, dividing by 0.75, percentages); repetition (vocabulary
+sizes, Claude window, 12345678, "remembers nothing"), and "Part 1/Part 2" references with no such
+headings.
+
+All fixed in the page. Second read by the publishing session: list empty.
