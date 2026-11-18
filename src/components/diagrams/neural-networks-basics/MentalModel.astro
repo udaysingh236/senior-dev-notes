@@ -1,0 +1,68 @@
+---
+// Part 1 mental model: an email becomes three numbers, a network of weighted connections turns them
+// into a spam chance, and training compares the guess with the right answer and nudges the weights.
+const inputs = [
+  { y: 196, v: '6', l: 'links' },
+  { y: 246, v: '4', l: 'money words' },
+  { y: 296, v: '0', l: 'known sender' },
+];
+const hidden = [{ y: 221 }, { y: 271 }];
+const out = { x: 300, y: 246 };
+---
+
+<svg viewBox="0 0 400 452" width="100%" role="img" aria-labelledby="nnb-mm-t nnb-mm-d">
+  <title id="nnb-mm-t">An email becomes numbers, the network turns them into a spam chance</title>
+  <desc id="nnb-mm-d">
+    At the top, an email with 6 links, 4 money words and a sender who is not in your contacts. It is turned into three
+    numbers: 6, 4 and 0. The numbers go into a small network of circles joined by lines; every line has a weight.
+    The network's answer is a spam chance of 90 percent. Below, a dashed loop labelled training: compare the
+    answer with the right one, then nudge every weight a little, and repeat for thousands of emails.
+  </desc>
+  <defs>
+    <marker id="nnb-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="nnb-mm-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="392" height="70" rx="14" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="200" y="32" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">An email</text>
+  <text x="200" y="58" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">6 links · 4 money words · sender unknown</text>
+
+  <line x1="200" y1="76" x2="200" y2="112" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#nnb-mm-a)" />
+  <text x="212" y="100" font-size="16" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">turned into numbers</text>
+
+  <rect x="4" y="122" width="392" height="216" rx="10" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="148" font-size="16" font-weight="700" style="fill: var(--viz-ink)">the network</text>
+  <text x="16" y="170" font-size="15" style="fill: var(--viz-muted)">every line has a weight: how much it counts</text>
+
+  {inputs.map((i) => hidden.map((h) => (
+    <line x1="74" y1={i.y} x2="186" y2={h.y} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  )))}
+  {hidden.map((h) => (
+    <line x1="214" y1={h.y} x2={out.x - 16} y2={out.y} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  ))}
+  {inputs.map((i) => (
+    <g>
+      <circle cx="60" cy={i.y} r="16" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      <text x="60" y={i.y + 6} font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{i.v}</text>
+    </g>
+  ))}
+  {hidden.map((h) => (
+    <circle cx="200" cy={h.y} r="15" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-server)" />
+  ))}
+  <circle cx={out.x} cy={out.y} r="16" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="60" y="330" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">inputs</text>
+  <text x="200" y="330" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">neurons</text>
+  <text x={out.x} y="330" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">output</text>
+  <line x1={out.x + 18} y1={out.y} x2="352" y2={out.y} stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#nnb-mm-a)" />
+  <text x="374" y={out.y - 6} font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">90%</text>
+  <text x="374" y={out.y + 14} font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">spam</text>
+
+  <path d="M 386 342 C 386 470, 14 470, 14 344" fill="none" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-warn)" marker-end="url(#nnb-mm-w)" />
+  <text x="200" y="372" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-warn)">training</text>
+  <text x="200" y="392" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">compare with the right answer,</text>
+  <text x="200" y="412" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">nudge every weight, repeat</text>
+</svg>

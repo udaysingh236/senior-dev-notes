@@ -406,7 +406,7 @@ sender:   5000 datagrams sent in 1667 ms, 0 send errors
 receiver: 5000 received, 0 lost (0%), 0 gaps, 0 out of order
 ```
 
-98% vanished, with no error on either side. The receiver handles one datagram every 0.2 ms, so at
+98% vanished, with no error on either side. The receiver handles one datagram every 0.2 ms, and a second has 1,000 ms, so at
 most 1,000 ÷ 0.2 = 5,000 a second, while the sender produced all 5,000 in 14 ms. The receiving socket's buffer filled
 within milliseconds, and the kernel dropped everything that did not fit. TCP's flow control would
 have slowed the sender down instead. Paced to 3,000 a second, below what the receiver can handle,
@@ -604,10 +604,13 @@ trip for the ACKs that let it send more. With a 4,000-byte window and a 100 ms r
 4,000 bytes every 0.1 s, and 4,000 ÷ 0.1 = 40,000 bytes, 40 KB, a second, even on a 1 Gbit/s link.
 
 Turn it around to ask how big the window must be. To keep a 100 Mbit/s link busy over a 100 ms
-round trip, you need 100,000,000 ÷ 8 × 0.1 = **1.25 MB** in flight at all times. That product of
+round trip, you need **1.25 MB** in flight at all times. Here is why: 100 Mbit/s is 100,000,000 bits
+a second, which is 100,000,000 ÷ 8 = 12,500,000 bytes a second, and a round trip of 100 ms is 0.1 s,
+so 12,500,000 × 0.1 = 1,250,000 bytes are on their way at any moment. That product of
 bandwidth and round-trip time is the **bandwidth-delay product** (BDP): the number of bytes that fit
 "inside the pipe" at once. The original window field has 16 bits, so it allows at most 65,535
-bytes, which caps that path at 65,535 × 8 ÷ 0.1 ≈ **5.2 Mbit/s**.
+bytes, which caps that path at about **5.2 Mbit/s**: 65,535 bytes is 65,535 × 8 = 524,280 bits, and
+the sender may send them once per 0.1 s round trip, so 524,280 ÷ 0.1 ≈ 5,200,000 bits a second.
 
 The window scale option ([RFC 7323](https://www.rfc-editor.org/rfc/rfc7323)) multiplies the field
 and lifts the limit to about 1 GB, and Linux grows socket buffers automatically up to the maximum in
@@ -730,7 +733,8 @@ the link.
 
 The same reasoning in general gives a long-run rate of about (MSS ÷ RTT) × 1.22 ÷ √*p*, where *p* is
 the loss rate and √*p* its square root. Check it on our numbers: (1,460 bytes ÷ 0.1 s) × 1.22 ÷ √0.01
-= 14,600 × 1.22 ÷ 0.1 ≈ 178,000 bytes a second, the same 1.4 Mbit/s. Halve the round trip and the rate doubles; cut the loss to 0.1% and it rises about three
+= 14,600 × 1.22 ÷ 0.1 ≈ 178,000 bytes a second (the square root of 0.01 is 0.1, because
+0.1 × 0.1 = 0.01). In bits that is 178,000 × 8 ≈ 1,424,000 a second, the same 1.4 Mbit/s. Halve the round trip and the rate doubles; cut the loss to 0.1% and it rises about three
 times (√10 ≈ 3.2). This is why a long-distance transfer over a slightly lossy link is slow even on
 a huge pipe.
 

@@ -660,8 +660,8 @@ against a limit of 100 a second.
 In general, during each write, `rate × round trip` more requests arrive and read the stale count, so
 the admitted count is about **limit × (1 + rate × round trip)**. Plugging in other loads:
 
-- 100 requests a second, 1 ms: 100 × 0.001 = 0.1, so 100 × 1.1 = 110. Barely visible.
-- 3,000 requests a second, 1 ms: 3,000 × 0.001 = 3, so 100 × 4 = 400. Four times the limit.
+- 100 requests a second, 1 ms (0.001 s): 100 × 0.001 = 0.1, so 100 × 1.1 = 110. Barely visible.
+- 3,000 requests a second, 1 ms (0.001 s): 3,000 × 0.001 = 3, so 100 × 4 = 400. Four times the limit.
 
 The race is not a rare corner case; it is a multiplier that grows with exactly the load the limiter
 exists for.
@@ -669,7 +669,7 @@ exists for.
 <RaceSim />
 
 The sim's defaults (1,000 requests a second, 1 ms) admit about 198 a second in the two-step lane,
-close to the 200 worked out above, against 100 in the atomic lane. At a 5 ms round trip the formula
+close to the 200 worked out above, against 100 in the atomic lane. At a 5 ms (0.005 s) round trip the formula
 gives 1,000 × 0.005 = 5, so 100 × 6 = 600, and the sim shows about 604. This is why a limiter can
 pass every test in staging (a test copy of production), where one laptop sends 50 requests a second, and fail on the first busy
 day.
@@ -1364,7 +1364,7 @@ write and read the same count. So 100 × (1 + 4) = 500. With `INCR` or a Lua scr
 <summary>3. Nodes count locally and sync to Redis every 500 ms. A client sends 300 req/s spread over all nodes against a limit of 100. Why does it get well over 100, and what are your two levers?</summary>
 
 After the shared total reaches 100, every node keeps admitting until its next sync shows it the
-others' counts, which can be up to 500 ms of the client's traffic: 300 × 0.5 = 150 requests. The
+others' counts, which can be up to 500 ms (0.5 s) of the client's traffic: 300 × 0.5 = 150 requests. The
 sim measured about 232 a second. Shorten the interval (more writes to Redis) or lower each node's
 local allowance between syncs.
 

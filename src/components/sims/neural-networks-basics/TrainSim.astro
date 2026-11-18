@@ -1,0 +1,19 @@
+---
+// A small network learning to separate spam from real emails. See model.ts and train-core.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="nnb-train"
+  title="Train a tiny spam network"
+  description="On the left, a square of emails placed by how many links they have (across) and how many money words (up). Red squares are spam and green circles are real emails; these are the training emails. The background shading is the network's answer at every spot: red where it says spam, green where it says not spam, stronger where it is more sure. On the right, a chart of loss over 3,000 epochs: a solid blue line for the training emails and a dashed amber line for 60 validation emails the network never trains on."
+  watchFor="At the defaults (6 hidden neurons, learning rate 1, 120 emails) the border between red and green bends into a curve around the bottom-left corner, and both loss lines fall together. Set hidden neurons to 0: one neuron can only draw a straight border, so it cuts the corner and the loss stays higher. Then set 12 hidden neurons and 15 training emails: the training loss falls to almost zero while the validation loss climbs. That gap is overfitting. Finally, try a learning rate of 30: the loss jumps around instead of falling."
+  viewBox="0 0 400 264"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createNnModel } from './model';
+
+  mountAll('nnb-train', createNnModel);
+</script>

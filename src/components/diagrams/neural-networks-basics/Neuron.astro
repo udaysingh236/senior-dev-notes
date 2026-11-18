@@ -1,0 +1,45 @@
+---
+// One neuron: multiply each input by its weight, add them up with the bias, squash into 0..1.
+const rows = [
+  { y: 40, x: '6', w: '0.5', p: '3.0', l: 'links' },
+  { y: 96, x: '4', w: '0.8', p: '3.2', l: 'money words' },
+  { y: 152, x: '0', w: '−3', p: '0', l: 'known sender' },
+];
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="nnb-ne-t nnb-ne-d">
+  <title id="nnb-ne-t">Inside one neuron</title>
+  <desc id="nnb-ne-d">
+    Three inputs with their weights: 6 links times 0.5 is 3.0; 4 money words times 0.8 is 3.2; known sender 0 times
+    minus 3 is 0. The three products and a bias of minus 4 are added: 3.0 plus 3.2 plus 0 minus 4 is 2.2. A squash step
+    turns the score 2.2 into 0.90, a 90 percent spam chance.
+  </desc>
+  <defs>
+    <marker id="nnb-ne-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+  <text x="4" y="16" font-size="14" style="fill: var(--viz-muted)">input × weight</text>
+  {rows.map((r) => (
+    <g>
+      <rect x="4" y={r.y - 18} width="150" height="44" rx="8" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+      <text x="16" y={r.y + 3} font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{r.x} × {r.w}</text>
+      <text x="142" y={r.y + 3} font-size="17" font-weight="700" text-anchor="end" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{r.p}</text>
+      <text x="16" y={r.y + 21} font-size="13" style="fill: var(--viz-muted)">{r.l}</text>
+      <line x1="156" y1={r.y + 4} x2="206" y2="100" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#nnb-ne-a)" />
+    </g>
+  ))}
+  <circle cx="246" cy="100" r="38" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="246" y="92" font-size="26" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Σ</text>
+  <text x="246" y="116" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">add up</text>
+  <text x="246" y="162" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">+ bias −4</text>
+  <line x1="286" y1="100" x2="322" y2="100" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#nnb-ne-a)" />
+  <rect x="326" y="78" width="70" height="44" rx="8" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="361" y="107" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">2.2</text>
+  <text x="361" y="70" font-size="13" text-anchor="middle" style="fill: var(--viz-muted)">score</text>
+
+  <rect x="4" y="198" width="392" height="96" rx="10" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="16" y="226" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">3.0 + 3.2 + 0 − 4 = 2.2</text>
+  <text x="16" y="254" font-size="16" style="fill: var(--viz-ink)">squash 2.2 into 0..1 → <tspan font-weight="700" style="font-family: var(--sl-font-mono)">0.90</tspan></text>
+  <text x="16" y="282" font-size="16" font-weight="700" style="fill: var(--viz-bad)">90% chance this email is spam</text>
+</svg>

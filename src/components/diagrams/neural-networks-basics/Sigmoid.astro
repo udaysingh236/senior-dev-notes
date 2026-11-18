@@ -1,0 +1,42 @@
+---
+// The sigmoid squash: any score in, a number between 0 and 1 out. Three emails marked on it.
+const X0 = 40, X1 = 384, Y0 = 210, Y1 = 30; // plot area: score -8..8 across, 0..1 up
+const sx = (z: number) => X0 + ((z + 8) / 16) * (X1 - X0);
+const sy = (p: number) => Y0 - p * (Y0 - Y1);
+const sig = (z: number) => 1 / (1 + Math.exp(-z));
+const pts: string[] = [];
+for (let z = -8; z <= 8.001; z += 0.25) pts.push(`${sx(z).toFixed(1)},${sy(sig(z)).toFixed(1)}`);
+const marks = [
+  { z: -6.5, p: 0.0015, label: "friend: −6.5 → 0.0015", dx: 2, dy: -34, anchor: 'start' },
+  { z: 0, p: 0.5, label: '0 → 0.5', dx: 10, dy: 18, anchor: 'start' },
+  { z: 2.2, p: 0.9, label: 'our email: 2.2 → 0.90', dx: -12, dy: -26, anchor: 'end' },
+];
+---
+
+<svg viewBox="0 0 400 260" width="100%" role="img" aria-labelledby="nnb-sg-t nnb-sg-d">
+  <title id="nnb-sg-t">The squash: any score becomes a number between 0 and 1</title>
+  <desc id="nnb-sg-d">
+    An S-shaped curve. Scores run across from minus 8 to plus 8; the output runs up from 0 to 1. Very negative scores
+    give almost 0, a score of 0 gives exactly 0.5, very positive scores give almost 1. Marked: the friend's email at
+    minus 6.5 gives 0.0015; our email at 2.2 gives 0.90.
+  </desc>
+  <line x1={X0} y1={Y0} x2={X1} y2={Y0} stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <line x1={sx(0)} y1={Y0} x2={sx(0)} y2={Y1 + 4} stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+  <line x1={X0} y1={sy(1)} x2={X1} y2={sy(1)} stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+  <line x1={X0} y1={sy(0.5)} x2={X1} y2={sy(0.5)} stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+  <text x={X0 - 6} y={sy(1) + 5} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">1</text>
+  <text x={X0 - 6} y={sy(0.5) + 5} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">0.5</text>
+  <text x={X0 - 6} y={sy(0) + 5} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">0</text>
+  {[-8, -4, 0, 4, 8].map((z) => (
+    <text x={sx(z)} y={Y0 + 20} font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{z}</text>
+  ))}
+  <text x={X1} y={Y0 + 42} font-size="15" text-anchor="end" style="fill: var(--viz-muted)">score →</text>
+  <text x={X0} y={Y0 + 42} font-size="15" style="fill: var(--viz-muted)">output: spam chance ↑</text>
+  <polyline points={pts.join(' ')} fill="none" stroke-width="3" style="stroke: var(--viz-flow)" />
+  {marks.map((m) => (
+    <g>
+      <circle cx={sx(m.z)} cy={sy(m.p)} r="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-bad)" />
+      <text x={sx(m.z) + m.dx} y={sy(m.p) + m.dy} font-size="15" text-anchor={m.anchor} style="fill: var(--viz-ink)">{m.label}</text>
+    </g>
+  ))}
+</svg>

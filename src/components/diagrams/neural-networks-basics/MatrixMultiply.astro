@@ -1,0 +1,32 @@
+---
+// Part 2: the hidden layer as one matrix-times-vector multiplication.
+---
+
+<svg viewBox="0 0 400 250" width="100%" role="img" aria-labelledby="nnb-mx-t nnb-mx-d">
+  <title id="nnb-mx-t">A whole layer is one matrix multiplication</title>
+  <desc id="nnb-mx-d">
+    The weights of neurons A and B are written as a grid of two rows and three columns: 0.2, 0.5, minus 1 for A, and
+    minus 0.3, 0.1, 2 for B. Multiplied by the input column 6, 4, 0, it gives 3.2 for A and minus 1.4 for B. Adding the
+    biases, minus 1 and 0.5, gives the scores 2.2 and minus 0.9.
+  </desc>
+  <text x="8" y="22" font-size="15" style="fill: var(--viz-muted)">weights (one row per neuron)</text>
+  <rect x="8" y="34" width="168" height="84" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="22" y="70" font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">0.2  0.5  −1</text>
+  <text x="22" y="102" font-size="17" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">−0.3 0.1   2</text>
+  <text x="188" y="84" font-size="22" style="fill: var(--viz-ink)">×</text>
+  <rect x="210" y="22" width="40" height="108" rx="6" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  {['6', '4', '0'].map((v, i) => (
+    <text x="230" y={52 + i * 32} font-size="17" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">{v}</text>
+  ))}
+  <text x="262" y="84" font-size="22" style="fill: var(--viz-ink)">=</text>
+  <rect x="284" y="34" width="62" height="84" rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="315" y="70" font-size="17" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">3.2</text>
+  <text x="315" y="102" font-size="17" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">−1.4</text>
+  <text x="356" y="70" font-size="14" style="fill: var(--viz-muted)">A</text>
+  <text x="356" y="102" font-size="14" style="fill: var(--viz-muted)">B</text>
+
+  <text x="8" y="166" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">A: 0.2×6 + 0.5×4 + (−1)×0 = 3.2</text>
+  <text x="8" y="190" font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">B: −0.3×6 + 0.1×4 + 2×0 = −1.4</text>
+  <text x="8" y="220" font-size="15" style="fill: var(--viz-ink)">add biases −1 and 0.5 → scores 2.2 and −0.9</text>
+  <text x="8" y="244" font-size="15" style="fill: var(--viz-muted)">every row is independent: all can run at once</text>
+</svg>
