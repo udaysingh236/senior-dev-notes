@@ -260,7 +260,8 @@ Timeouts sit next to four ideas they are often confused with:
   included, and the two must be designed together, because every retry needs time from the same
   budget. The [retries and backoff page](/resilience/retries-and-backoff/) covers it.
 - A **circuit breaker** stops calling a dependency that keeps failing, for a while, so you stop
-  paying even the timeout on every call.
+  paying even the timeout on every call. The [circuit breakers page](/resilience/circuit-breakers/)
+  covers it.
 - **Load shedding** refuses work at the door when your own server is full, before it takes a
   worker.
 - How timeouts must shrink from the outermost service inward, and how retries at each hop

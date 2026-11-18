@@ -1,0 +1,19 @@
+---
+// A page service with 20 workers calling a Reviews service through a circuit breaker. See breaker-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="circuit-breakers-breaker"
+  title="A circuit breaker in front of a Reviews service that stops answering"
+  description="A Product page service with 20 workers, drawn as a row of cells, calls a Reviews service for every page. Between them sits a circuit breaker, drawn as a pill marked CLOSED, OPEN or HALF-OPEN. A cell is blue while its worker waits on a call that will answer, amber and dashed while it waits on a call that will hang until the 300 ms timeout, and green while it builds a page without calling Reviews. Under the workers, a bar shows how many of the breaker's last calls failed, with a line at the threshold, or a countdown while the breaker is open. The bottom bar splits the last two seconds of pages into served with reviews (green), served without reviews (amber) and failed (red). A script stops Reviews at 3 s and brings it back at 20 s; the buttons replace the script."
+  watchFor="At the defaults, Reviews stops answering at 3 s. A third of a second later the breaker opens: stuck workers drop to 0, every page is served without reviews, and Reviews receives one trial call about every 5.3 s. Reviews recovers at 20 s, and the next trial, at about 24 s, closes the breaker. Now turn the breaker off and press Reset: all 20 workers stay stuck and about two pages in three fail until 20 s. Last, set the window to 100 and press '1 call in 4 hangs': the breaker never opens, about 15 workers are stuck and up to a fifth of pages fail. Lower the threshold to 20% and it opens: no page fails, but the 3 calls in 4 that would have worked get no reviews either."
+  viewBox="0 0 400 320"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createBreakerModel } from './breaker-model';
+
+  mountAll('circuit-breakers-breaker', createBreakerModel);
+</script>

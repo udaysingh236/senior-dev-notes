@@ -139,7 +139,7 @@ function-calling-and-tools → eval-driven-development
 |---|---|---|---|---|
 | 1 | Timeouts | timeouts | 10 | published (2026-11-06) |
 | 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | published (2026-11-06) |
-| 3 | Circuit breakers | circuit-breakers | 13 | pilot |
+| 3 | Circuit breakers | circuit-breakers | 13 | published (2026-11-18) |
 | 4 | Bulkheads | bulkheads | new | planned |
 | 5 | Rate limiting | rate-limiting | 2 | published (2026-10-17) |
 | 6 | Load shedding | load-shedding | new | planned |
