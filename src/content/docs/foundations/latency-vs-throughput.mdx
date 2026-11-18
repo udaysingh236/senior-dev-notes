@@ -6,7 +6,7 @@ difficulty: beginner
 track: foundations
 prerequisites: [how-the-web-works]
 next: [percentiles-and-tail-latency, back-of-the-envelope-estimation, load-balancing, connection-pooling, caching-strategies, load-shedding, backpressure, autoscaling]
-lastReviewed: 2026-11-07
+lastReviewed: 2026-11-18
 sidebar:
   order: 3
 ---
@@ -25,10 +25,10 @@ import BatchSim from '../../../components/sims/latency-vs-throughput/BatchSim.as
 
 ## The question
 
-Your server needs 5 milliseconds of work to answer one request. At 100 requests a second, users wait
-about 10 ms for an answer. Traffic grows to 180 requests a second. The code has not changed and the
-server still has 10% of its time free, yet users now wait about 50 ms: five times longer. Why does
-a server get slow long before it is full?
+Your server needs 5 milliseconds of work to answer one request. As traffic grows, users start
+waiting longer than that, and long before the server is full the wait gets out of hand. When the
+server is busy 90% of the time, with some room still to spare, a request takes about ten times its
+5 ms of work. The code has not changed. Why does a server get slow long before it is full?
 
 The short answer: requests do not arrive evenly. Sometimes several arrive close together, and all
 but one of them must wait in line. The busier the server, the more often that happens and the longer
@@ -38,7 +38,7 @@ requests the server finishes per second.
 
 ## The idea in plain words
 
-Follow one server through the morning. It runs a small API, and every request needs exactly the same
+Follow one server through the morning. It runs a small API, and every request needs
 5 ms of work on average. Call that the **work** per request.
 
 1. **What the server can carry.** One request takes 5 ms, and a second has 1,000 ms, so the server can
@@ -52,19 +52,19 @@ Follow one server through the morning. It runs a small API, and every request ne
    at 0, 1 and 2 ms. The first is served from 0 to 5 ms. The second must wait until 5 ms, so it waits
    4 ms and finishes at 10. The third waits until 10, so it waits 8 ms and finishes at 15. The server
    then sits idle until the next request arrives.
-5. **Averaged over many requests at 100 a second**, the waiting turns out to be about as long as the
-   work itself: 5 ms of waiting plus 5 ms of work, 10 ms in total. That matches the 10 ms in the
-   opening question.
-6. **A busy hour: 180 requests a second.** Now the server is busy 180 × 5 ms = 900 ms of every second:
-   90% of the time. Bunches still arrive, but there is very little idle time between them to work off
-   the line, so a line that forms now takes much longer to clear. On average a request waits 45 ms
-   before its 5 ms of work: 50 ms in total.
-7. **The pattern.** A handy rule for this kind of random traffic: the total time a request takes is
-   about the work divided by the fraction of time the server is free. Free half the time: 5 ÷ 0.5 =
-   10 ms. Free a tenth of the time: 5 ÷ 0.1 = 50 ms. Free a twentieth: 5 ÷ 0.05 = 100 ms. As the server
-   approaches full, the time per request has no upper limit.
+5. **The rule for random traffic.** Averaged over many requests, the total time a request takes
+   (waiting plus work) is about the work divided by the fraction of time the server is free. Part 2
+   shows where the rule comes from and checks it with a simulation.
+6. **Back to the quiet hour.** The server is free half the time, 0.5. So a request takes about
+   5 ÷ 0.5 = 10 ms: 5 ms of waiting plus 5 ms of work.
+7. **A busy hour: 180 requests a second.** Now the server is busy 180 × 5 ms = 900 ms of every
+   second: 90% of the time, so it is free 10%, or 0.1. Bunches still arrive, but there is very little
+   idle time between them to work off the line. A request takes about 5 ÷ 0.1 = 50 ms: 45 ms of
+   waiting plus 5 ms of work. That is ten times the work, the number in the opening question.
+8. **The pattern.** Free a twentieth of the time (0.05): 5 ÷ 0.05 = 100 ms. As the server approaches
+   full, the fraction free approaches zero, and the time per request has no upper limit.
 
-<Figure caption="One server and the line in front of it. Latency is the waiting plus the work; throughput is how many finish each second; utilisation is how busy the server is. At 180 requests a second the server is 90% busy and the waiting is nine times the work.">
+<Figure caption="One server and the line in front of it. Latency is the waiting plus the work; throughput is how many finish each second; utilisation is how busy the server is. At 180 requests a second the server is 90% busy, and a request waits 45 ms for 5 ms of work.">
   <MentalModel />
 </Figure>
 
@@ -75,9 +75,9 @@ making most requests wait.
 
 An everyday picture: a railway ticket counter with one clerk who takes a minute per passenger. If one
 passenger arrives every two minutes on average, the clerk is busy half the time, but passengers do not
-arrive every two minutes exactly: sometimes three walk up together and two of them wait. Make the
-average one passenger every 66 seconds and the clerk is 90% busy; a bunch at 10 AM is still being
-worked off at 10:20. The picture stops working in one place: a passenger can see the line and leave,
+arrive every two minutes exactly: sometimes three walk up together and two of them wait. Make it
+nine passengers every ten minutes on average: the clerk now works 9 minutes out of every 10, 90%
+busy, and a bunch that forms at 10 AM can still be working through at 10:20. The picture stops working in one place: a passenger can see the line and leave,
 while a request cannot see anything and waits its turn, holding memory and a connection the whole time.
 
 ## The building blocks
@@ -124,8 +124,8 @@ waits, so the line grows for as long as the overload lasts.
 **Why it exists as a measure.** It is the number that predicts waiting. CPU graphs show it, and
 autoscaling rules use it.
 
-**Example.** At 180 requests a second, each needing 5 ms, the server is asked for 180 × 0.005 s = 0.9
-seconds of work every second: 90% utilisation.
+**Example.** At 180 requests a second, each needing 5 ms, the server is asked for 180 × 5 ms =
+900 ms of work every second. 900 ms out of 1,000 ms is 0.9: 90% utilisation.
 
 **The precise version.** Utilisation u = arrival rate × service time, divided by the number of workers
 if there are several. It must stay below 1 (100%): at 1 or above, work arrives faster than it can be
@@ -169,8 +169,8 @@ one of the three from the other two.
   requests finish per second.
 - Requests arrive at random, so they bunch up, and the ones in a bunch wait in a **queue**.
 - The busier the server (its **utilisation**), the less idle time it has to clear the line, so waiting
-  grows much faster than traffic: about work ÷ (fraction of time free). At 90% busy, the waiting is
-  nine times the work.
+  grows much faster than traffic: a request takes about work ÷ (fraction of time free). At 90% busy,
+  that is ten times the work.
 - So "the server is only 80 or 90% busy" already means slow answers. To keep latency low, keep
   anything users wait on well below full.
 :::
@@ -195,8 +195,9 @@ The usual rules: add servers when CPU passes 80%; watch average latency; check w
 answer, and then sends the next one, imitating one person.
 
 Each rule quietly assumes latency stays close to the service time until the server is full, and each
-breaks because of the waiting from Part 1. At 80% utilisation, the rule from Part 1 says a request takes
-S ÷ 0.2 = 5 times its service time: four parts waiting, one part work. The CPU graph says "20% headroom";
+breaks because of the waiting from Part 1. At 80% utilisation the server is free 20% of the time,
+0.2, so the rule from Part 1 says a request takes S ÷ 0.2 = 5 times its service time: four parts
+waiting, one part work. The CPU graph says "20% headroom";
 users see a service five times slower than it could be.
 
 The 50-virtual-user test never sees this, because each virtual user waits for its answer before
@@ -222,7 +223,8 @@ the fraction of time the server is free. Plotting it shows its shape:
 
 Read it left to right. Up to about 50% busy, the waiting is at most as long as the work. Between 50%
 and 80%, it grows to four times the work. Past 80% the curve turns almost straight up: going from 90%
-to 95% busy doubles latency again, from 10 to 20 times the work. Engineers call this a "hockey stick"
+to 95% busy doubles latency again. At 90% the server is free 0.1 of the time, so latency is 1 ÷ 0.1 =
+10 times the work; at 95% it is free 0.05, so latency is 1 ÷ 0.05 = 20 times. Engineers call this a "hockey stick"
 for its shape. It is why "the server is only 80% busy" and "the service is five times slower than it
 should be" are both true at the same time.
 
@@ -248,10 +250,10 @@ until they run out.
 **The precise version.** The law needs the system to be in a **steady state**: on average, requests
 leave as fast as they arrive. Three uses, each one line of arithmetic:
 
-- **Sizing.** 1,000 requests a second at 200 ms each means 1,000 × 0.2 = 200 requests in flight, so 200
+- **Sizing.** 1,000 requests a second at 200 ms (0.2 s) each means 1,000 × 0.2 = 200 requests in flight, so 200
   threads, 200 coroutines (lightweight threads managed by the program) or 200 database connections busy on average, and more at peaks.
-- **Ceilings.** A pool of 50 database connections, with queries taking 20 ms each, can finish at most
-  50 ÷ 0.020 = 2,500 queries a second (throughput = L ÷ latency). Past that, requests wait for a
+- **Ceilings.** A pool of 50 database connections, with queries taking 20 ms (0.020 s) each, can
+  finish at most 50 ÷ 0.020 = 2,500 queries a second (throughput = L ÷ latency). Past that, requests wait for a
   connection, and the waiting shows up as latency, not as an error.
 - **Cost.** Requests in flight hold memory and connections, so latency *is* capacity: double the
   latency at the same traffic and you need twice the threads. Marc Brooker uses this to show that in
@@ -260,7 +262,8 @@ leave as fast as they arrive. Three uses, each one line of arithmetic:
   ([Brooker, 2026](https://brooker.co.za/blog/2026/07/29/lorenz-and-little.html)).
 
 Little's law is also a sanity check for dashboards: if your metrics say 1,000 requests a second at
-50 ms but 400 requests in flight, one of the three numbers is wrong (1,000 × 0.05 = 50, not 400).
+50 ms but 400 requests in flight, one of the three numbers is wrong: 50 ms is 0.05 s, and
+1,000 × 0.05 = 50 in flight, not 400.
 
 ### Queues, measured
 
@@ -291,7 +294,9 @@ about it. Here is the same queue running. Move utilisation and watch the measure
 ### Variability: same load, different waits
 
 The last column of that table is the same server with **fixed** service times: every request takes
-exactly 10 ms instead of 10 ms on average. At every utilisation it waits about half as long. So waiting
+exactly 10 ms instead of 10 ms on average. At every utilisation it waits about half as long. Take
+the 90% row: random work takes 99.9 ms, which is about 90 ms of waiting plus 10 ms of work; fixed
+work takes 55.1 ms, about 45 ms of waiting plus 10 ms of work. Half the waiting. So waiting
 depends on utilisation *and* on how unpredictable the arrivals and the service times are.
 
 **What variability is.** How much individual values spread around their average. Three requests taking
@@ -375,7 +380,8 @@ through. The **Universal Scalability Law** (USL) names two costs that grow as yo
 - **Contention** (written α): the fraction of the work that must happen one server at a time, such as
   holding a shared lock. Like the slowest stage of a pipeline, it caps the speed-up.
 - **Coherence** (written β): the cost of keeping servers in agreement, such as telling each other to
-  drop stale cache entries. With N servers there are N × (N − 1) ÷ 2 pairs that may need to talk, so
+  drop stale cache entries. With N servers there are N × (N − 1) ÷ 2 pairs that may need to talk
+  (4 servers: 4 × 3 ÷ 2 = 6 pairs; 8 servers: 8 × 7 ÷ 2 = 28), so
   this cost grows roughly with N²: past some point, adding a server makes the whole system *slower*.
 
 Throughput relative to one server is N ÷ (1 + α(N − 1) + βN(N − 1)). With a modest 5% contention
@@ -406,8 +412,8 @@ common ones: `fsync`, which forces data from memory onto the disk so it survives
 trip; and a database **commit**, which makes a transaction permanent.
 
 **Example.** If one disk flush costs 2 ms whatever it carries, then flushing after every write caps you
-at 1,000 ÷ 2 = 500 writes a second. One flush for 100 writes costs about the same 2 ms, so the same disk
-could take tens of thousands of writes a second.
+at 1,000 ÷ 2 = 500 writes a second. One flush for 100 writes costs about the same 2 ms, so the same
+500 flushes a second could carry 500 × 100 = 50,000 writes a second.
 
 **The precise version.** A batcher waits a short **window** to collect items, or until a size limit, and
 sends them together. The price is latency, but only some of the time. At low load, a write that arrives
@@ -447,6 +453,10 @@ up, plus the time to push the bytes through. The
 | A 10 KB API response | 300 ms | 0.08 ms | latency |
 | A 10 MB image | 300 ms | 80 ms | latency, mostly |
 | A 10 GB backup | 300 ms | 80 s | bandwidth |
+
+Where the middle column comes from: 1 Gbit/s is 1,000 million bits a second, and a byte is 8 bits,
+so the link carries 1,000 ÷ 8 = 125 MB a second. 10 KB is 0.01 MB, which takes 0.01 ÷ 125 =
+0.00008 s, or 0.08 ms. 10 MB is a thousand times more, 80 ms; 10 GB a thousand times more again, 80 s.
 
 For small responses, a 10 Gbit/s upgrade changes nothing users can feel; moving the server closer,
 reusing connections or removing round trips does. For bulk transfers it is the opposite. Most API
@@ -664,10 +674,10 @@ in one backend call and tells every waiting writer it is done.
 ```
 
 The three cases from the sim, with real code. At 100 writes a second batching costs about 2 ms at the
-median (p50). At 400, the unbatched writer queues and batching wins on both the median and the p99. At
+median (p50): 4.6 ms against 2.4 ms. At 400, the unbatched writer queues and batching wins on both the median and the p99. At
 1,000, the unbatched writer is past its capacity, finishes only 444 a second, and its latency grows for
-as long as the load lasts, while the batched writer serves the full rate with about four writes per
-call. Full code and run instructions:
+as long as the load lasts, while the batched writer serves the full rate: 987 writes a second for
+2 seconds is about 1,974 writes in 534 calls, close to four writes per call. Full code and run instructions:
 [`examples/latency-vs-throughput/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/latency-vs-throughput).
 
 ## How real systems do it
@@ -729,10 +739,11 @@ code for partial failure: one bad item in a batch of 100 must not fail the other
 **"What's the difference between latency and throughput?"** Latency is time per request, throughput is
 requests finished per unit time. A strong answer links them with Little's law and mentions that latency
 rises sharply with utilisation. The follow-up: *"How many threads do I need for 2,000 requests a second
-at 50 ms?"* 2,000 × 0.05 = 100 on average, with headroom for peaks and for the slowest requests.
+at 50 ms?"* 50 ms is 0.05 s, so 2,000 × 0.05 = 100 on average, with headroom for peaks and for the slowest requests.
 
 **"Why does latency spike before CPU hits 100%?"** Random arrivals bunch up; waiting grows as
-u ÷ (1 − u) times the service time, so at 80% a request waits four times its service time on average.
+u ÷ (1 − u) times the service time, so at 80% a request waits 0.8 ÷ 0.2 = 4 times its service time on
+average.
 Mention variability, and that averaged utilisation hides bursts.
 
 **"How would you increase the throughput of a write-heavy service?"** Find the bottleneck stage, then
@@ -749,7 +760,7 @@ did not reproduce production's variability (mixed request sizes, cache misses).
 <details>
 <summary>1. A service averages 40 ms per request and handles 500 requests a second. How many requests are in flight on average, and what happens if latency doubles at the same traffic?</summary>
 
-500 × 0.040 = 20 in flight. If latency doubles to 80 ms at the same 500 a second, 40 are in flight:
+40 ms is 0.040 s, so 500 × 0.040 = 20 in flight. If latency doubles to 80 ms at the same 500 a second, 40 are in flight:
 twice the threads, connections and memory, for the same throughput. That is why a slow dependency
 exhausts pools even when traffic is flat.
 
@@ -758,8 +769,10 @@ exhausts pools even when traffic is flat.
 <details>
 <summary>2. One server with random arrivals runs at 60% utilisation and 10 ms service time. You can either make the code 25% faster or add a second server behind a shared queue. Which lowers average latency more?</summary>
 
-Faster code: service 7.5 ms, utilisation 45%, latency 7.5 ÷ 0.55 ≈ 13.6 ms, down from 10 ÷ 0.4 = 25 ms.
-A second server at 30% each with a shared queue keeps service at 10 ms and almost removes waiting:
+Today: free 40% of the time, so latency is 10 ÷ 0.4 = 25 ms. Faster code: 25% faster means
+10 × 0.75 = 7.5 ms of work, and the same traffic now keeps the server busy 60% × 0.75 = 45% of the
+time, free 55%. Latency: 7.5 ÷ 0.55 ≈ 13.6 ms. A second server splits the 60% load into 30% each;
+with a shared queue it keeps service at 10 ms and almost removes waiting:
 latency a little above 10 ms. The second server wins on latency; the faster code is cheaper and also
 raises the ceiling. At higher utilisation the difference grows.
 

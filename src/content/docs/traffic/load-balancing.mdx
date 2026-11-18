@@ -438,7 +438,7 @@ requests are sent times the average time each one is in flight.
 balancer with few requests in flight has almost nothing to compare.
 
 **Example.** One of 50 balancers sends 513 ÷ 50 ≈ 10 requests a second. A typical answer in our
-simulation takes about 20 ms (the median with 50 balancers is 23 ms). So the balancer has
+simulation takes about 20 ms (the median with 50 balancers is 23 ms). 20 ms is 0.02 s, so the balancer has
 10 × 0.02 = 0.2 requests in flight on average. Even if answers took four times as long, that would
 be 0.8 requests spread over eight backends, about 0.1 per backend. Each count it sees is zero most
 of the time.
@@ -1010,7 +1010,7 @@ many backends instead of piling it on one.
 <details>
 <summary>2. A sidecar sends 20 requests a second with 25 ms average latency. How many requests does it have in flight, and what does that mean for least request?</summary>
 
-Little's law: 20 × 0.025 = 0.5 requests in flight on average, across all backends. Most of its
+Little's law, with 25 ms written as 0.025 s: 20 × 0.025 = 0.5 requests in flight on average, across all backends. Most of its
 per-backend counts are zero most of the time, so comparing them says little, and least request
 behaves almost like random. Latency estimates (peak EWMA) or backend-reported counts are needed.
 
