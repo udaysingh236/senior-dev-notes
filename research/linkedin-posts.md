@@ -3,6 +3,18 @@
 Plan: backfill one post per published page, in the starter-path order from `CURRICULUM.md`,
 before posting about new pages. Update this log after each post goes out.
 
+## Rules for every post (owner's feedback, November 2026)
+
+1. Use only words a student knows. Any other term is explained in plain words before it is used.
+2. Follow one concrete example from start to end.
+3. Never use a phrase that only makes sense after reading the page (for example "one old TTL",
+   "shop server").
+4. Give any fix or advice as numbered steps a beginner could follow.
+5. Before handing a post over, read it as a student who has never seen the page, and rewrite every
+   sentence they would have to stop and decode.
+
+The approved DNS post (#2) is the reference for tone and plainness.
+
 | # | Page | Status |
 |---|---|---|
 | 0 | Introduction to Senior Dev Notes | posted |
