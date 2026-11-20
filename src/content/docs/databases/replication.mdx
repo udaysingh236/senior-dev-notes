@@ -1,0 +1,996 @@
+---
+title: Replication
+description: How a database keeps live copies of its data on other machines, explained from zero with one shop's orders and measured on a real PostgreSQL leader and follower. The leader's numbered log, replication lag and stale reads, synchronous and asynchronous commits and what each loses when the leader crashes, read-your-writes, failover and split brain, multi-leader conflicts, leaderless quorums, and how PostgreSQL, MySQL, Aurora, DynamoDB and Cassandra do it.
+tagline: How a database keeps live copies of your data on other machines, why the copies are always a little behind, and what that costs you when the main machine dies.
+difficulty: intermediate
+track: databases
+prerequisites: [write-ahead-log, latency-vs-throughput]
+next: [read-replicas, failover, quorums, consensus-raft, cap-and-pacelc, backups-and-disaster-recovery]
+lastReviewed: 2026-11-20
+sidebar:
+  order: 9
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/replication/MentalModel.astro';
+import ReadYourWrites from '../../../components/diagrams/replication/ReadYourWrites.astro';
+import SplitBrain from '../../../components/diagrams/replication/SplitBrain.astro';
+import Quorum from '../../../components/diagrams/replication/Quorum.astro';
+import ReplicationSim from '../../../components/sims/replication/ReplicationSim.astro';
+
+## The question
+
+Your shop keeps every order in one database, on one machine. One night that machine's disk dies.
+Every order, every customer and every address is on that disk. How do you make sure a second
+machine already has all of it, so the shop keeps running in a minute instead of being gone for
+good?
+
+The short answer: keep live copies. Choose one machine, the **leader**, and send every write to
+it. The leader writes each change as the next numbered line in a list, its **log**, and streams
+that list to one or more other machines, the **followers**. Each follower makes the same changes
+in the same order, so it holds the same data a moment later. When the leader dies, you promote a
+follower and carry on. The catch is in "a moment later": the copies are always a little behind,
+and the orders written in that moment are the ones you can lose.
+
+## The idea in plain words
+
+We will follow one shop the whole way. Its database holds orders and customer addresses. At busy
+times it takes 100 new orders a second. It runs on three machines:
+
+- **The leader**, in a data centre in Chennai. Every write goes here.
+- **Follower A**, in the same building. A message from the leader reaches it in under 1 ms.
+- **Follower B**, in another city, for when the whole building fails. A message takes 40 ms to
+  get there.
+
+Here is what happens when a customer changes their delivery address from Pune to Mumbai.
+
+1. The app sends the change to the leader: "set the address of customer 42 to Mumbai".
+2. The leader records the change as the next line of its log, line 2001, and then makes it. A log
+   is a numbered list of every change, in the order they happened.
+3. The leader tells the app "saved", and the app tells the customer.
+4. At the same time, the leader sends line 2001 to both followers.
+5. Follower A gets it in under 1 ms and makes the same change. It now has the new address.
+6. Follower B gets it 40 ms later and makes the same change. Now all three machines agree.
+7. Because the lines are numbered and applied in order, the followers never miss a change and
+   never apply two changes in the wrong order. Each one can say exactly how far it has got:
+   "I have everything up to line 2001."
+
+<Figure caption="Every write goes to the leader, which records it as the next numbered entry in its log and sends the entries, in order, to each follower. A follower is always somewhere behind the leader: here A has everything, and B, 40 ms away, is two entries behind.">
+  <MentalModel />
+</Figure>
+
+In the picture, follower B is two lines behind. That gap is called **replication lag**, and it
+never goes away completely. At 100 orders a second, 40 ms of travel means about 4 orders are
+always on their way to B. Here is the working: 40 ms is 0.04 seconds, and 100 orders a second
+× 0.04 seconds = 4 orders.
+
+The copies are useful in two ways. First, **reads**: the app can send questions such as "show
+this customer's orders" to a follower, so the leader has more time for writes. Second, **survival**:
+if the leader dies, a follower already has (almost) everything, so you promote it to be the new
+leader, point the app at it, and the shop is back within a minute or so. That switch is called
+**failover**.
+
+Two problems come with the lag, and the rest of this page is about both.
+
+- **Reading your own change.** The customer saves Mumbai, the page reloads, and the reload asks
+  follower B, 5 ms after the save. B has not received line 2001 yet, so the page shows Pune. The
+  customer thinks the save failed. We measured this on a real PostgreSQL leader and follower
+  running on one laptop, where the network takes almost no time at all: <mark>of 1,000 reads made
+  right after a save, 988 did not see the change yet.</mark>
+- **Losing saved orders.** In step 3, the leader said "saved" before any follower had the change.
+  If the leader's machine dies right after step 3, the change exists only on its dead disk. You
+  promote follower B, and B has never heard of it. The customer was told "saved", and the order is
+  gone.
+
+The fix for the second problem is to change the order of steps 3 and 4: the leader waits until a
+follower confirms "I have line 2001" before it says "saved". Then no saved order can be lost,
+because one of the followers always has it. The price is time: if the confirming follower is B,
+every save now waits for the trip to B and back, 40 ms + 40 ms = 80 ms. Not waiting is called
+**asynchronous** replication; waiting is called **synchronous** replication. Choosing between
+them, and where to put the followers, is most of the design.
+
+An everyday picture: a teacher writes the day's notes on the board, line by line, and students
+copy them into their notebooks. The board is the leader, each notebook a follower. A student who
+looks up late is a few lines behind, which is lag. If someone wipes the board, the class keeps
+the notes from the best notebook. The picture breaks in one important place: students sometimes
+copy lines in the wrong order or skip one, and databases never do, because every line is numbered
+and the follower asks for the next number.
+
+## The building blocks
+
+Six ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A replica, a leader and a follower
+
+**What it is.** A **replica** is a full copy of a database kept on another machine and kept up to
+date. In the most common setup one replica, the **leader**, accepts all writes, and the others,
+the **followers**, copy the leader's changes. You will also see *primary* and *standby*, or
+*source* and *replica*; they mean leader and follower.
+
+**Why it exists.** One machine can fail, and one machine can only answer so many questions.
+Copies on other machines solve both: a copy can take over, and copies can share the reads. Letting
+only one machine accept writes keeps the copies from disagreeing, because every change has
+exactly one place where its order is decided.
+
+**Example.** The shop's leader takes 100 writes a second. Each follower receives the same 100
+changes a second, applies them, and meanwhile answers its share of the reads. If the shop gets
+1,000 reads a second, the two followers can take 500 each, and the leader handles only writes.
+
+**The technical version.** This setup is called **single-leader** (or leader-follower)
+replication, and it is the default in PostgreSQL, MySQL, SQL Server, MongoDB and Redis. A follower
+that accepts read queries is a **read replica** (PostgreSQL calls it a *hot standby*). Two other
+setups exist, several leaders and no leader at all; they appear in Part 2.
+
+### A commit: the moment a change counts
+
+**What it is.** A **commit** is the moment the database promises that a change is saved for
+good. Until then the change can still be undone; after it, the app is told "saved".
+
+**Why it exists.** A change can be several steps (take money from one account, add it to
+another), and a crash halfway must not leave half of it behind. The database groups the steps into
+a **transaction** and makes all of them count at one moment, the commit, or none of them.
+
+**Example.** The address change is one transaction with one step. When the app sends `COMMIT`, the
+leader makes sure the change is safely on its own disk and replies "done". Only then does the app
+show "Address saved".
+
+**The technical version.** "Safely on disk" means the database has written the change to its log
+and asked the operating system to force that write onto the disk (a call named `fsync`), so a
+power cut cannot lose it. On a laptop SSD a commit takes well under a millisecond: our PostgreSQL
+leader averaged 0.33 ms per commit. Transactions have their own page
+(ACID and isolation levels, coming soon); here we only need the moment
+of the commit, because replication decides *what has to be true* at that moment.
+
+### The log and its positions
+
+**What it is.** The **log** is the leader's numbered list of every change, written in order,
+before the change is made to the tables themselves. Each change has a **position** in the log,
+which only ever grows.
+
+**Why it exists.** The database writes the log first so it can recover after a crash: on restart,
+it replays the log to finish any changes the tables had not received yet. That same list is
+perfect for replication. A follower that replays the leader's log, line by line, ends up with the
+leader's data, and its position says exactly how far it has got.
+
+**Example.** The address change is line 2001. Follower B says "I have applied up to 1999". The
+leader knows B is 2 lines behind, and it knows what to send next: lines 2000 and 2001. If B is
+disconnected for a minute, it reconnects and says "send me everything after 1999", and nothing is
+skipped or doubled.
+
+**The technical version.** PostgreSQL calls it the **write-ahead log** (WAL), and a position is a
+**log sequence number** (LSN): how many bytes into the log the change sits, written like
+`0/305C0B0`. MySQL calls its replication
+log the **binary log**, and a position is a file name plus offset, or a **global transaction
+identifier** (GTID) such as `3e11fa47-…:23`. The write-ahead log (coming soon)
+has its own page; Part 2 of this one shows the different things a log can contain.
+
+### Replication lag
+
+**What it is.** **Replication lag** is how far a follower is behind the leader, measured either in
+log lines (or bytes) not yet applied, or in time: how old the oldest change it is missing is.
+
+**Why it matters.** Lag decides two things: how old the data is that a reader on that follower
+sees, and how many changes vanish if the leader dies and that follower takes over.
+
+**Example.** Follower B is 40 ms away, and the shop writes 100 changes a second. In 40 ms the
+leader writes 4 more changes (100 × 0.04 = 4), so B is normally about 4 changes, or 40 ms,
+behind. If a slow report runs on B and B stops applying changes for 5 seconds, B falls 500 changes
+behind (100 × 5 = 500), and every read on B shows data 5 seconds old.
+
+**The technical version.** In PostgreSQL the leader shows each follower's lag in
+`pg_stat_replication`, a built-in view (a table you can query), in three steps: `write_lag` (received), `flush_lag` (on the
+follower's disk) and `replay_lag` (applied, visible to queries). Lag in a healthy setup is
+milliseconds; it grows when the network is slow, when the follower's disk or CPU cannot keep up,
+or when the follower pauses replay for a long query.
+
+### Asynchronous and synchronous replication
+
+**What it is.** In **asynchronous** replication the leader says "saved" as soon as the change is
+on its own disk, and sends it to the followers in the background. In **synchronous** replication
+the leader waits until at least one follower confirms it has the change before saying "saved".
+
+**Why it exists.** It is a trade between speed and safety. Waiting costs a network round trip on
+every commit. Not waiting means the newest saved changes exist only on the leader for a moment,
+and a crash in that moment loses them.
+
+**Example.** With the shop's followers, a synchronous commit that waits for A costs about 1 ms
+more; one that waits for B costs 80 ms more (40 ms there, 40 ms back). An asynchronous commit costs
+nothing extra, and at 100 orders a second B is about 4 orders behind, so losing the leader and
+promoting B would lose about 4 saved orders. On our real PostgreSQL pair, waiting for the follower
+raised the average commit from 0.33 ms to 0.98 ms, about three times longer, even with both on
+one laptop.
+
+**The technical version.** There are levels in between: wait until the follower has *received*
+the change, until it is on the follower's *disk*, or until it is *applied* and visible to reads.
+MySQL's **semi-synchronous** replication waits for "received" from one replica. Part 2 goes
+through the levels and what each one protects.
+
+### Failover
+
+**What it is.** **Failover** is replacing a dead leader with one of its followers: promote the
+follower to leader, and send the app's writes to it.
+
+**Why it exists.** Copies are only useful if something switches to them when the leader fails.
+Doing it by hand at night takes a person many minutes; doing it automatically takes seconds to a
+minute.
+
+**Example.** Imagine the Chennai leader's machine dies. A watchdog program notices that the leader
+has not answered for 30 seconds. It compares the followers: A has everything up to line 9,880, B up to
+9,876. It promotes A, because A has more, and points the app's database connections at A. Writes start
+again about 40 seconds after the crash.
+
+**The technical version.** Automatic failover needs three things done right: deciding the leader
+is really dead (not only slow or cut off), choosing the follower with the most data, and making
+sure the old leader cannot keep accepting writes if it comes back. Getting the third one wrong
+gives two leaders at once, called **split brain**, covered in Part 2. In PostgreSQL the promotion
+itself is one command, `pg_ctl promote`; tools such as Patroni, a popular open-source failover
+manager for PostgreSQL, do the rest.
+
+:::tip[If you stop here]
+- Replication keeps live copies of a database on other machines. One **leader** takes every write
+  and records it in a numbered **log**; **followers** replay that log in order and end up with the
+  same data.
+- Followers are always a little behind. That **lag** means a read from a follower can return old
+  data, even a moment after you saved something yourself.
+- **Asynchronous**: the leader says "saved" without waiting, so commits are fast, and a leader crash
+  loses the changes the followers had not received yet.
+- **Synchronous**: the leader waits until a follower confirms, so no saved change is lost, and
+  every commit waits a round trip to that follower.
+- **Failover** promotes a follower when the leader dies. The dangerous part is not copying data;
+  it is making sure there is exactly one leader afterwards.
+:::
+
+## Going deeper
+
+PostgreSQL told the customer "saved". One second later the leader's disk died, the follower was
+promoted, and the order is not there. Nobody made a mistake: the database did exactly what it was
+configured to do. So what, exactly, did "saved" promise, and could you have had a stronger promise
+without making every order 80 ms slower?
+
+That question has three parts, and Part 2 takes them in order.
+
+- **What travels, and how a follower keeps up.** The log can carry SQL statements, raw disk
+  changes or row changes. Each choice decides what can go wrong, and what a follower must do after
+  a disconnect.
+- **When to say "saved".** There are five useful moments to reply, from "on the leader's disk" to
+  "visible on a follower". Each one protects against a different failure and costs a different
+  wait.
+- **What readers and failovers see.** Lag turns into stale reads, reads that go back in time, and
+  lost writes after failover. Failover itself can create two leaders.
+
+Then we look past the single leader: several leaders, no leader, and the rule that makes leaderless
+reads correct.
+
+## The obvious fix, and why it breaks
+
+Two fixes come to mind before replication.
+
+**Copy the database every night.** A backup is a copy, so why not keep a fresh one on a second
+machine? Because it is fresh once a day. If the disk dies at 6 PM, the nightly copy is missing 18
+hours of orders. Copying more often does not fix it either: copying a database's files while it is
+writing gives you files from different moments, which may not even open. Backups are still needed,
+for a different reason that comes up in the gotchas: they keep the past, while replicas keep the
+present.
+
+**Let the app write to two databases.** Every time the app saves a change, it sends it to database
+A and then to database B. This looks like replication without any database feature. It breaks the
+first time one of the two writes fails. The runnable example does exactly this: three changes,
+and the third write to B times out.
+
+```text
+1. Naive: the app writes to two databases
+  write 3 to db_b failed: timeout (db_a already has it)
+  db_a: {'order-1': 'Mumbai', 'order-2': 'Delhi'}
+  db_b: {'order-1': 'Pune', 'order-2': 'Delhi'}
+  copies agree? False
+```
+
+Now A and B disagree, and nothing will ever fix it. Retrying the write to B helps only if the app
+is still alive to retry. Worse, with two app servers, server 1 can write "Mumbai" to A then B
+while server 2 writes "Delhi" to A then B, and the two writes can reach B in the opposite order,
+so A ends with Delhi and B with Mumbai. Each database applied the changes in the order *it* saw
+them. Replication avoids both problems with the idea from Part 1: one place decides the order (the
+leader's log), and everyone else replays that one order.
+
+### Its neighbours: backup, sharding and caching
+
+Four ideas get mixed up because each "puts data on more machines". The difference is what each
+copy holds and why.
+
+| | What each machine holds | Kept up to date? | Main reason |
+|---|---|---|---|
+| Replication | all of the data | yes, continuously | survive a machine failure; share reads |
+| Backup | all of the data, as of a past moment | no, by design | undo mistakes; recover after disasters |
+| Sharding | a slice of the data | not needed: each slice lives in one place | more writes and more data than one machine can hold |
+| Caching | the most-read part, possibly old | loosely, with expiry | answer common reads faster |
+
+The row to notice is sharding: it splits the data so each machine owns a part, which is how you
+get *more write capacity*. Replication never adds write capacity, because every follower must
+apply every write the leader takes. Real systems combine them: each shard has its own leader and
+followers (partitioning and sharding, coming soon).
+
+## How it works, piece by piece
+
+### What travels: statements, disk changes or row changes
+
+A log line could describe a change in three ways, and databases have used all three.
+
+**Statements.** The leader sends the SQL it ran, such as
+`UPDATE customers SET address = 'Mumbai' WHERE id = 42`, and the follower runs the same
+statement. It is compact. It is also fragile: any statement whose result is not fixed gives a
+different answer on each machine. `UPDATE orders SET placed_at = now()` runs a little later on the
+follower, so the times differ. In MySQL, `DELETE ... LIMIT 10` without an `ORDER BY` can delete a
+different 10 rows. A random number differs everywhere. MySQL used this format by default long ago and moved
+to row changes; it is now a historical choice you will rarely meet.
+
+**Disk changes (physical replication).** A database stores each table on disk in fixed-size
+blocks called **pages**, 8 KB each in PostgreSQL. The leader sends its write-ahead log as it is:
+"in data file 16384, page 7, at byte 312, write these bytes". The follower makes the same byte
+changes to the same pages. Nothing is interpreted, so nothing can come out differently, and
+everything is copied: every table, every index, and the database's own internal tables that
+describe them. PostgreSQL's built-in streaming replication works this way.
+The cost is that the follower must be the same database version on the same kind of machine, and
+it must copy everything: you cannot replicate one table, or replicate from PostgreSQL 16 to 17.
+
+**Row changes (logical replication).** The leader sends what happened to each row: "in table
+`customers`, the row with id 42 now has address Mumbai". `now()` was already turned into a fixed
+time on the leader, so the follower gets exactly the same value. Row changes can be filtered to
+some tables, sent to a different database version, or sent to something that is not a database at
+all, such as a search index or Kafka (a log of messages other services read). MySQL's binary log uses row format by default, and
+PostgreSQL offers **logical replication** with *publications* and *subscriptions* alongside its
+physical replication. The same row-change stream is what **change data capture** (CDC) tools read to turn database
+changes into events for other systems.
+
+In practice I'd start with whatever the database does by default (physical in PostgreSQL, rows in
+MySQL), and reach for logical replication when the copy must differ from the original: a few
+tables, a newer version during an upgrade, or a different system.
+
+### Keeping up: positions, slots and starting from a copy
+
+A new follower cannot start by replaying the log from line 1, because the leader threw away old
+log lines long ago, once they were safely in the tables. So a follower starts in two steps.
+
+1. **Take a copy of the leader's data files**, while the leader keeps running. PostgreSQL's
+   `pg_basebackup` does this. The copy is taken over some minutes, so its files come from
+   different moments, which is fine because of step 2.
+2. **Replay the log from the position where the copy started.** The tool notes the log position at
+   the start of the copy. The follower replays everything from that position onwards, which fixes
+   any file that was copied mid-change and then catches up to the present.
+
+From then on, the follower keeps a connection open to the leader and receives log lines as they
+are written, which is called **streaming**. If the connection drops, the follower reconnects and
+says "send me everything after position X". This works only if the leader still has the log lines
+after X. That is the follower's weak point: a follower that is offline for long enough finds the
+lines it needs already deleted, and must be rebuilt from step 1.
+
+PostgreSQL's answer is a **replication slot**: a bookmark on the leader that records how far one
+follower has got, and stops the leader from deleting any log line that follower has not received.
+No follower ever finds its lines gone. The flip side, which belongs on every team's checklist, is
+that a follower that disappears for good leaves its slot behind, and the leader then keeps *every* log
+line forever, until its disk is full and it stops accepting writes. PostgreSQL 13 added
+`max_slot_wal_keep_size` to cap how much log a slot may hold; the default, `-1`, means no cap.
+
+### When to say "saved": the levels of waiting
+
+Part 1 described two choices, wait or don't wait. In practice there are several points along the
+follower's path at which the leader can reply, and they protect against different failures. Let
+us walk through one synchronous commit to see the path.
+
+<StepThrough
+  title="A synchronous commit"
+  actors={[
+    { id: 'app', label: 'App', kind: 'client' },
+    { id: 'leader', label: 'Leader', kind: 'store' },
+    { id: 'foll', label: 'Follower A', kind: 'store' },
+  ]}
+  steps={[
+    { from: 'app', to: 'leader', label: 'COMMIT', text: 'The app asks the leader to commit the address change.' },
+    { from: 'leader', to: 'leader', label: 'log line 2001', text: 'The leader writes the change to its own log and forces it onto its disk. A crash from now on cannot lose it on this machine.' },
+    { from: 'leader', to: 'foll', label: 'line 2001', text: 'The leader streams line 2001 to the follower, and the app keeps waiting.' },
+    { from: 'foll', to: 'foll', label: 'save, apply', text: 'The follower receives the line, writes it to its own disk, and later applies it so its readers can see it. Each of these three is a moment the leader could wait for.' },
+    { from: 'foll', to: 'leader', label: 'have 2001', text: 'The follower reports how far it has got. This reply takes another one-way trip.', tone: 'ok', dashed: true },
+    { from: 'leader', to: 'app', label: 'saved', text: 'Only now does the leader tell the app the commit succeeded.', tone: 'ok', dashed: true },
+  ]}
+  summary="A synchronous commit costs the leader's own disk write plus a round trip to the follower plus whatever the follower must do before replying. Which of the follower's three moments the leader waits for decides what is protected."
+/>
+
+PostgreSQL names these moments in its `synchronous_commit` setting. Here they are from fastest
+to safest, for a commit to a leader with one synchronous follower.
+
+| Setting | The leader replies "saved" when… | Survives a leader crash? | Visible on the follower at once? |
+|---|---|---|---|
+| `off` | the change is in the leader's memory | no: even the leader can lose the last fraction of a second | no |
+| `local` | the change is on the leader's disk | the leader can recover it, but a promoted follower may not have it | no |
+| `remote_write` | the follower has received it and handed it to its operating system | yes, unless the follower's machine also loses power | no |
+| `on` | the change is on the follower's disk | yes | no |
+| `remote_apply` | the follower has applied it | yes | yes |
+
+The thing to notice is the last column. Only `remote_apply` means a read from that follower,
+right after the commit, sees the change; `on`, which sounds like "fully synchronous", guarantees the
+change is safe on the follower's disk but not yet visible there. If no synchronous followers are
+named, `remote_write`, `on` and `remote_apply` all wait only for the leader's own disk: that is
+the default, asynchronous setup.
+
+We ran all of this on a real PostgreSQL 16 leader and follower on one laptop (the script is in
+`examples/replication/sql/`). For each test, the script commits a row on the leader and
+immediately reads it from the follower, 1,000 times.
+
+- **Asynchronous (the default):** commits averaged 0.33 ms, and 988 of the 1,000 reads did not
+  find the row yet. A fresh row was missing from the follower almost every time, even with zero
+  network distance, because the read starts the instant the commit returns, while the follower is
+  still receiving and replaying the line.
+- **`remote_apply`:** commits averaged 0.98 ms, about three times longer, and 0 of 1,000 reads
+  missed.
+- **`remote_apply` with a slow follower:** we told the follower to apply each change 200 ms late
+  (a setting named `recovery_min_apply_delay`, used here as a stand-in for a far or overloaded
+  follower). Every commit then took about 202 ms. <mark>A synchronous leader is exactly as fast as
+  the follower it waits for.</mark>
+
+**Which followers to wait for.** `synchronous_standby_names` lists the followers whose reply
+counts. `FIRST 1 (a, b)` waits for `a`, and switches to `b` only if `a` disconnects. `ANY 1 (a, b)`
+waits for whichever answers first, which is usually the closest one. The second form is a small
+**quorum**, a minimum number of answers that must arrive (more on quorums at the end of Part 2):
+with `ANY 1` and two followers, the commit is safe once *some* follower has it, and one
+slow or dead follower does not slow anything down. Waiting for one nearby follower (same city,
+another building) is the common compromise: about a millisecond per commit, and no saved write
+lost if the leader's building survives.
+
+**What happens when the follower you wait for is gone.** We stopped the follower and committed a
+row. The commit waited, and waited: PostgreSQL waits for a synchronous follower forever, because
+replying "saved" without the follower would break the promise. After two seconds we cancelled the
+wait, and PostgreSQL said:
+
+```text
+WARNING:  canceling wait for synchronous replication due to user request
+DETAIL:  The transaction has already committed locally, but might not have been replicated to the standby.
+```
+
+Read that detail carefully: the row was already committed on the leader, and stayed there. A
+cancelled synchronous commit is not rolled back. Your app saw an error, and the row exists anyway.
+This is why one synchronous follower is never enough: lose it, and every write stops. Name two and
+wait for `ANY 1`, or let a tool such as Patroni switch the setting off when the only follower dies,
+accepting a window without the guarantee.
+
+**MySQL's semi-synchronous replication** makes the other choice automatically. The leader waits
+until at least one replica confirms it has *received* the change (not applied it); if no replica
+answers within `rpl_semi_sync_source_timeout`, 10,000 ms by default (10 seconds), the leader falls
+back to asynchronous and carries on, and returns to waiting once a replica catches up (MySQL 8.4,
+as of November 2026). Writes never stall for more than 10 seconds, and during the fallback your
+"safe" setup is quietly asynchronous.
+
+### Replication lag: where it comes from and what readers see
+
+A follower falls behind for three reasons, and only the first is the network.
+
+1. **Travel time.** The change must reach the follower: under 1 ms in one data centre, tens of
+   milliseconds between cities. At 100 writes a second, every 10 ms of travel is one more change
+   behind (100 × 0.01 = 1).
+2. **Apply speed.** The follower must redo every write the leader did. A leader with many CPU cores
+   runs many writes at the same time. If the follower replays them one after another, it can fall
+   further behind every second until the busy period ends. MySQL can replay with several workers
+   at once (`replica_parallel_workers`, 4 by default in 8.4); PostgreSQL replays a physical log
+   with a single worker.
+3. **Paused replay.** A long query on a PostgreSQL follower can block replay. Suppose a report reads
+   a table for 5 minutes, and meanwhile the leader cleans away old versions of rows that the
+   report is still reading. The follower must either pause replay until the report finishes, or cancel the report.
+   It pauses for up to `max_standby_streaming_delay`, 30 seconds by default, and then cancels the
+   query with "canceling statement due to conflict with recovery". So a follower that serves long
+   reports can be 30 seconds behind by design.
+
+Whatever the cause, readers on a follower see the past. Part 1 showed the most common symptom:
+you save something and then do not see it.
+
+<Figure caption="The customer saves Mumbai at 0 ms. Their page reloads at 5 ms and reads from follower B, which will not receive entry 2001 until 40 ms, so it shows Pune. A read at 45 ms shows Mumbai.">
+  <ReadYourWrites />
+</Figure>
+
+The guarantee the customer expected has a name: **read-your-writes** (or read-after-write)
+consistency. After you change something, *your* later reads see the change. Other customers may
+see Pune for another 40 ms, which nobody will notice; the person who made the change notices
+immediately.
+
+A second symptom is subtler. The customer reloads twice. The first reload goes to follower A,
+which has the change: Mumbai. The second goes to follower B: Pune. The data went back in time. The
+guarantee that rules this out is **monotonic reads**: once you have seen a value, you never see an
+older one.
+
+There are three standard fixes, from crudest to most precise.
+
+- **Read from the leader for a short time after a write.** After a customer changes something, send
+  their reads to the leader for the next few seconds, longer than the lag usually is. It is
+  quick to build and wrong whenever lag is unusually high, which is when it matters.
+- **Stick each user to one follower.** Choose the follower from the user's ID (for example, even
+  IDs to A and odd IDs to B), so their reads always go to the same one. Reads can still be old, but never older than the last one, which
+  gives monotonic reads (until that follower fails).
+- **Remember the log position.** After a write, the leader tells the app the position of that
+  write (in PostgreSQL, `pg_current_wal_lsn()` after the commit). The app keeps it, for example in
+  the user's session. A read goes to a follower only if that follower has replayed past that
+  position (`pg_last_wal_replay_lsn()`); otherwise it waits briefly or goes to the leader. This is
+  exact, and the runnable example below does it. PostgreSQL 19 adds a `WAIT FOR LSN` command so a
+  follower can do the waiting itself (as of November 2026, see its development docs).
+
+Routing reads to followers safely is the subject of its own page,
+read replicas (coming soon). Here, the point is the mechanism: every one of these
+fixes works because positions in the log are comparable numbers.
+
+Now watch the whole thing move. The sim below has the shop's leader and its two followers.
+
+<ReplicationSim />
+
+Here is what to take from it. With no waiting, commits are instant and the cost is hidden in the
+bottom bar: whatever the best follower has not received is lost in a crash. Waiting for the first
+follower to reply costs the round trip to the *nearest* healthy follower, and when that one is cut
+off, the next one answers, more slowly. Waiting for both makes every commit as slow as the slowest
+follower, and a 5-second pause on one follower stops every commit for 5 seconds.
+
+### Failover: the dangerous part
+
+Copying the log is the well-understood, well-tested part of replication. Most replication outages happen
+during failover, because failover must make three decisions with incomplete information.
+
+**1. Is the leader dead?** The watchdog can only see that the leader has stopped answering. A
+dead machine, a machine too busy to answer, and a machine on the far side of a broken network
+switch all look the same. So the watchdog waits a timeout before acting. Patroni gives the leader a **lease**: permission
+to lead that runs out unless the leader renews it every few seconds. Its default `ttl`, how long
+the lease lasts without a renewal, is 30 seconds. A shorter timeout
+means faster failover and more false alarms; every false alarm is a failover you did not need, with
+all its risks.
+
+**2. Which follower?** The one with the highest log position, because it has lost the least.
+With asynchronous replication, even that one may be missing saved writes. Patroni refuses to
+promote a follower that was more than `maximum_lag_on_failover` behind at its last check, 1 MB of
+log by default, and prefers no leader to one that has lost too much. With synchronous replication,
+the tool promotes only a follower it knows was synchronous, which has every saved write.
+
+**3. Can the old leader still accept writes?** This is the one that hurts. Picture the network
+breaking between the old leader and everything else.
+
+<Figure caption="After a network cut, the failover tool cannot reach the old leader and promotes follower A. The old leader is still running, and app servers that can reach it keep writing to it. Both leaders now write entry 1044, with different orders: two histories that cannot be merged automatically.">
+  <SplitBrain />
+</Figure>
+
+Two leaders accepting writes at once is **split brain**. Each assigns the same log positions to
+different changes, so when the network heals, neither can follow the other. Someone must compare
+the two histories by hand and decide what each conflicting change should become. The fix is to
+**fence** the old leader before promoting the new one: make sure it cannot accept writes, by
+cutting its power through a management interface, removing its network access, or having it stop
+itself when it loses contact with the majority. Patroni does the last. It keeps the lease in a small
+separate database whose only job is to agree on who leads (etcd, Consul or ZooKeeper), and a
+leader that cannot renew its lease there in time demotes itself, so by the time a follower is promoted, the old leader has already stopped writing.
+
+The best-known public example is from 2018 and is kept here as history. On 21 October 2018,
+maintenance work broke the network link between a network hub and GitHub's main US East data centre for
+43 seconds. GitHub's failover tool promoted a database leader in US West. Writes made in the East
+during those seconds had not reached the West, and the West had started taking new writes on top
+of its older data. GitHub chose not to fail back automatically, because that would have thrown
+away the West's new writes. The site ran degraded for 24 hours and 11 minutes while the two sets
+of writes were reconciled.
+
+A newer example shows that the failover tool itself can be what fails. In November 2020, a
+network switch at Cloudflare started failing in a strange way: it passed some traffic and not
+other traffic. The etcd cluster that Cloudflare's database failover depended on could not keep a
+stable leader, and the failover system promoted new database leaders when the old ones were fine.
+Rebuilding the demoted followers took hours, and the API and dashboard were impaired for 6 hours
+and 33 minutes. The lesson both teams drew is the same one: automatic failover should be
+conservative, and its decisions should be clear for a person to see and override.
+
+:::danger[A failover can lose writes your users were told were saved]
+With asynchronous replication, every failover loses whatever the promoted follower had not
+received. That is usually a few milliseconds of writes, and it can be minutes if the follower was
+lagging. Know your number before the incident: it is your **recovery point objective** (RPO), the
+amount of recent data you accept losing, covered on the
+backups and disaster recovery page (coming soon).
+:::
+
+### Beyond one leader: several leaders, or none
+
+Single-leader replication has one limit nothing can tune away: every write, from every part of the
+world, goes to one machine. A customer in Frankfurt whose database leader is in Chennai waits for a
+round trip of well over 100 ms on every save. Two other designs remove the single leader, and each
+pays for it in a different way.
+
+**Several leaders (multi-leader).** Each region has its own leader, takes writes locally, and
+replicates them to the other regions asynchronously. Writes are fast everywhere, and a region can
+keep working when it is cut off from the others. The price is **write conflicts**: two regions can
+change the same row at the same moment, before either has heard of the other's change. Customer
+42 changes the address to Mumbai in the Chennai region while a support agent in Frankfurt changes
+it to Delhi. Each region accepts its own write; when they exchange changes, someone must decide.
+
+The common rule is **last writer wins** (LWW): each write carries a timestamp, and the later one
+replaces the earlier everywhere. It always ends with every region agreeing, and it silently throws
+the other write away. If the two clocks disagree by 50 ms, the write that really came second can
+lose. Amazon DynamoDB global tables, in their default mode, resolve conflicting writes to the same
+item (DynamoDB's word for a row) this way, by an internal timestamp (as of November 2026); they also offer a strongly
+consistent multi-Region mode that refuses a conflicting write instead. Other systems keep both
+versions and let the app merge them, or use data types designed to merge without conflicts. In
+practice, I'd avoid multi-leader for anything where a lost update matters, or route each record's
+writes to one "home" region so conflicts cannot happen.
+
+**No leader (leaderless).** Every copy accepts writes, and the client (or a coordinator acting for
+it) sends each write to several copies and each read to several copies. Apache Cassandra and
+ScyllaDB work this way. The key idea is a **quorum**: a minimum number of copies that must answer
+before an operation counts.
+
+Here is a worked example with 3 copies of every row. A write must be confirmed by 2 of the 3 copies.
+A read asks 2 of the 3 and takes the newer value it gets back.
+
+<Figure caption="With 3 copies, writing to 2 and reading from 2 means the two groups always share at least one copy, so every read reaches at least one copy that has the latest write.">
+  <Quorum />
+</Figure>
+
+Why must the groups overlap? There are only 3 copies, and the write touched 2 of them, so only 1
+copy can have missed it. A read asks 2 copies, and both cannot be that 1 copy, so at least one of
+them has the write. Written as a rule, with **n** the number of copies, **w** the copies that must
+confirm a write and **r** the copies that must answer a read: if w + r is greater than n, every
+read overlaps every write. Here 2 + 2 = 4, which is greater than 3. Cassandra lets each request
+choose its level: `QUORUM` means a majority, which is 2 when there are 3 copies; `ONE` means any
+single copy, fast and possibly old.
+
+Leaderless replication has no failover at all, since there is no leader to lose: with 3 copies and
+quorums of 2, one copy can be down and both reads and writes carry on. The price is that the
+overlap rule only says a read *reaches* the newest write; deciding which value is newest still
+relies on timestamps, so concurrent writes are settled by last writer wins, as above. Copies that
+missed a write are repaired in the background, or when a read notices they disagree.
+
+## Choosing between them
+
+| Design | Write speed | Lost writes when a machine dies | Stale reads | Conflicts | Typical use |
+|---|---|---|---|---|---|
+| One leader, asynchronous | fastest: leader's own disk | the changes on their way to followers (ms, or more if lagging) | yes, on followers | none | the default almost everywhere |
+| One leader, synchronous (wait for 1 nearby follower) | + one round trip, about 1 ms in the same region | none, if a synchronous follower is promoted | yes, unless `remote_apply` | none | money, orders, anything where "saved" must mean saved |
+| One leader, semi-synchronous (MySQL) | + one round trip | none, until the timeout makes it asynchronous | yes | none | MySQL setups that want safety without stalls |
+| Several leaders | fast in every region | the changes not yet sent between regions | yes | yes: must be resolved | users in many regions writing their own data |
+| Leaderless, quorums | as fast as the w-th copy to answer | none if w is a majority and copies survive | possible, unless w + r is greater than n | yes: usually last writer wins | high write volume, no single point of failure |
+
+How to choose: start with one leader and asynchronous followers, and add one synchronous follower
+in another building of the same region for any data where "saved" must hold through a crash. Put
+far followers on asynchronous replication for disaster recovery and local reads. Reach for several
+leaders or none only when a single region's leader cannot serve your writers, and then design your
+data so conflicts are rare and safe to resolve.
+
+## Build it yourself
+
+The runnable examples model a leader and followers in one process, with a simulated clock so every
+run prints the same numbers. The first piece is the leader's write: apply the change, send it to
+each follower with that follower's delay, and reply either at once or after the nearest follower's
+round trip. Then a crash test commits 5 orders with a follower 40 ms away and crashes the leader.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="replication_demo.py (excerpt)"
+# runnable version: examples/replication/python/replication_demo.py
+class Leader(Node):
+    def write(self, key: str, value: str, now: int) -> tuple[int, int]:
+        """Apply a change, send it to every follower, and return (log position, commit time)."""
+        entry = (key, value)
+        self.apply(entry)
+        for f in self.followers:
+            self.in_flight.append((now + f.one_way_ms, f, entry))
+        if not self.synchronous:
+            return self.position, now  # reply at once; the followers get it later
+        # Synchronous: wait until the nearest follower has it and its "got it" has come back.
+        nearest = min(f.one_way_ms for f in self.followers)
+        return self.position, now + 2 * nearest
+
+
+def crash_test(synchronous: bool) -> None:
+    follower = Node("follower", one_way_ms=40)
+    leader = Leader([follower], synchronous)
+    now, waited = 0, 0
+    for n in range(1, 6):
+        _, committed_at = leader.write(f"order-{n}", "placed", now)
+        waited += committed_at - now                     # time the customer waited for "saved"
+        now = committed_at + 1                            # the next order arrives 1 ms later
+        if synchronous:
+            leader.deliver_until(committed_at)
+    leader.deliver_until(now)                            # the leader crashes at this moment
+    lost = leader.position - follower.position
+    ...
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="replication-demo.mjs (excerpt)"
+// runnable version: examples/replication/js/replication-demo.mjs
+class Leader extends Node {
+  /** Apply a change, send it to every follower, and return [log position, commit time]. */
+  write(key, value, now) {
+    const entry = [key, value];
+    this.apply(entry);
+    for (const follower of this.followers) {
+      this.inFlight.push({ arrivesAt: now + follower.oneWayMs, follower, entry });
+    }
+    if (!this.synchronous) return [this.position, now]; // reply at once
+    // Synchronous: wait until the nearest follower has it and its "got it" has come back.
+    const nearest = Math.min(...this.followers.map((f) => f.oneWayMs));
+    return [this.position, now + 2 * nearest];
+  }
+}
+
+function crashTest(synchronous) {
+  const follower = new Node('follower', 40);
+  const leader = new Leader([follower], synchronous);
+  let now = 0;
+  let waited = 0;
+  for (let n = 1; n <= 5; n++) {
+    const [, committedAt] = leader.write(`order-${n}`, 'placed', now);
+    waited += committedAt - now; // time the customer waited for "saved"
+    now = committedAt + 1;
+    if (synchronous) leader.deliverUntil(committedAt);
+  }
+  leader.deliverUntil(now); // the leader crashes at this moment
+  const lost = leader.position - follower.position;
+  // ...
+}
+```
+  </TabItem>
+</Tabs>
+
+```text
+  asynchronous: waited   0 ms for 5 commits, leader crashes at t=5 ms, follower has 0 of 5, lost 5
+  synchronous : waited 400 ms for 5 commits, leader crashes at t=405 ms, follower has 5 of 5, lost 0
+```
+
+Read the two lines as the whole trade in miniature. Asynchronous: the customers waited 0 ms, and
+all 5 orders were still on their way when the leader died. Synchronous: each commit waited the 80
+ms round trip (40 ms there and 40 ms back), 5 × 80 = 400 ms in total, and nothing was lost.
+
+The second piece is read-your-writes by log position. The app keeps the position its write got,
+and sends a read to the follower only if the follower has reached it.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="replication_demo.py (excerpt)"
+def read(key: str, leader: Leader, follower: Node, min_position: int) -> tuple[str, str | None]:
+    if follower.position >= min_position:
+        return follower.name, follower.rows.get(key)
+    return leader.name, leader.rows.get(key)              # the follower is behind: ask the leader
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="replication-demo.mjs (excerpt)"
+function read(key, leader, follower, minPosition) {
+  if (follower.position >= minPosition) return [follower.name, follower.rows.get(key)];
+  return [leader.name, leader.rows.get(key)]; // the follower is behind: ask the leader
+}
+```
+  </TabItem>
+</Tabs>
+
+```text
+3. Read-your-writes, address changed from Pune to Mumbai at t=100 ms
+  t=105 ms: follower alone says 'Pune'    | with position check: 'Mumbai' from the leader
+  t=145 ms: follower alone says 'Mumbai'  | with position check: 'Mumbai' from the follower
+```
+
+At 105 ms the follower is behind, so the position check sends the read to the leader. At 145 ms
+the change has arrived (it was sent at 100 ms and takes 40 ms), so the follower serves the read.
+
+The numbers on this page from real PostgreSQL come from `examples/replication/sql/demo.sh`, which
+builds a leader and a follower on your laptop with `pg_basebackup`, then runs the five tests. The
+lines that turn on synchronous replication are two settings on the leader:
+
+```sql title="part of examples/replication/sql/demo.sh"
+ALTER SYSTEM SET synchronous_standby_names = 'follower1';
+ALTER SYSTEM SET synchronous_commit = 'remote_apply';
+SELECT pg_reload_conf();
+```
+
+Its last test cuts the follower off, commits 500 orders on the leader, kills the leader without a
+clean shutdown and promotes the follower. The new leader is missing all 500: every one of them was
+committed, and reported as saved, on the old leader.
+
+## How real systems do it
+
+**PostgreSQL** (versions 16 to 18, as of November 2026) ships its write-ahead log to followers
+over a streaming connection; followers can serve reads (hot standby). Replication is asynchronous
+unless `synchronous_standby_names` names followers, with `FIRST n` or `ANY n`, and
+`synchronous_commit` picks the level from the table above, per transaction if you like: an app can
+commit payments with `remote_apply` and page views with `local` on the same database. Logical
+replication adds publications and subscriptions for row-level copies. Failover is not built in:
+tools such as Patroni, using etcd or Consul for the lease, or managed services, do it.
+
+**MySQL** (8.4, as of November 2026) replicates its binary log, in row format by default, and
+identifies transactions with GTIDs so a replica can switch to a new source and continue from the
+right place. Replication is asynchronous by default; the semi-synchronous plugin waits for one
+replica to receive each transaction, falling back to asynchronous after the 10-second timeout.
+Group Replication and InnoDB Cluster add majority agreement and automatic failover.
+
+**Amazon Aurora** changes where the copies live. Its storage layer keeps six copies of the data
+across three Availability Zones (separate data centres in one region), and the database writes
+its log to that storage rather than to followers (AWS Aurora FAQ, as of November 2026). Aurora's
+2018 paper, kept as history, describes a write counted as durable once 4 of the 6 copies have it.
+Read replicas share the same storage, so they do not each keep a full copy, and their lag is
+usually far below that of a classic follower.
+
+**Amazon DynamoDB global tables** keep a full copy of a table in several AWS Regions, every one of
+which accepts writes. In the default eventually consistent mode, writes replicate asynchronously
+and conflicting writes to the same item are settled by last writer wins; the multi-Region strong
+consistency mode instead makes a write wait for other Regions and rejects conflicting writes (as of
+November 2026).
+
+**Apache Cassandra** is leaderless. Each keyspace (Cassandra's word for a database) sets a replication factor (often 3 per data
+centre), and each request sets a consistency level: `ONE`, `QUORUM`, `LOCAL_QUORUM` (a majority in
+the local data centre only, avoiding cross-region round trips), or `ALL`. `QUORUM` writes with
+`QUORUM` reads satisfy w + r greater than n.
+
+## Gotchas and war stories
+
+:::caution[A replica is not a backup]
+A replica copies your mistakes as faithfully as your data. Run `DELETE FROM orders` without a
+`WHERE` on the leader, and every follower deletes them too, within milliseconds. Only a backup
+(or a deliberately delayed follower, such as PostgreSQL with `recovery_min_apply_delay = '1h'`)
+lets you go back to before the mistake.
+:::
+
+**An abandoned replication slot fills the leader's disk.** A follower is shut down for good, and
+nobody deletes its slot. The leader keeps every log line for it, day after day, until the disk is
+full and the leader stops accepting writes. Alert on the size of retained log
+(`pg_replication_slots` shows each slot's position) and set `max_slot_wal_keep_size`.
+
+**Semi-synchronous quietly becomes asynchronous.** A replica slows down, the 10-second timeout
+passes once, and MySQL carries on without waiting, with only a log message and a status counter to
+show it. If you rely on semi-sync for safety, alert on `Rpl_semi_sync_source_status` being `OFF`.
+
+**A cancelled synchronous commit is still committed.** The app timed out waiting for "saved" and
+showed an error, but the row is on the leader and will reach the followers once they return. Apps
+that retry such a write can save it twice; give such writes an
+[idempotency key](/messaging/idempotency-keys/).
+
+**A long report on a follower is two problems.** It either delays replay (by up to 30 seconds by
+default in PostgreSQL), so everyone reading that follower sees old data, or it gets cancelled.
+Turning on `hot_standby_feedback` stops the cancellations by telling the leader to keep the old
+versions of rows the report is still reading, which makes the leader's tables grow while the report runs. Long analytical reports
+belong on a follower used only for reports, with a generous delay, or in a separate analytics
+system.
+
+**After failover, the app keeps talking to the old leader.** Connection pools hold open
+connections, and [DNS](/networking/dns/) answers are cached until their time-to-live runs out. An app can keep writing to a
+demoted machine, or fail for minutes, after the database layer has finished failing over. Test
+failover end to end, with the real app, before you need it; the [timeouts](/resilience/timeouts/)
+and [connection pooling](/databases/connection-pooling/) pages cover the app's side.
+
+## Trade-offs and when not to use it
+
+Replication costs a full extra copy of the data, and the hardware to replay every write, for every
+follower. It costs operational work: monitoring lag, managing slots, testing failover. Synchronous
+replication adds a round trip to every commit, and makes writes depend on followers being healthy.
+
+It does not solve several problems people expect it to.
+
+- **More writes.** Every follower repeats every write, so adding followers never adds write
+  capacity. For that you need sharding (coming soon), or a faster
+  machine.
+- **Mistakes and corruption.** They replicate. You still need backups.
+- **Consistency for free.** Reading from followers gives you old data unless you design for it.
+
+When not to use read replicas: if your database is small and the leader is not busy, sending reads
+to followers adds stale-read bugs for no gain. When not to go synchronous: for data you can
+rebuild or afford to lose a second of (page views, logs, caches), the round trip buys nothing.
+And when not to go multi-leader or leaderless: whenever "the last write silently wins" would be a
+bug in your business, such as stock counts, balances or seat bookings.
+
+## Interview corner
+
+Replication comes up in nearly every system design interview, usually as "how do you make the
+database highly available?" or "how do you scale reads?".
+
+**"How would you scale reads for a social feed?"** A strong answer adds read replicas, then
+immediately names the catch: replication lag and stale reads. It explains read-your-writes (route
+a user's reads to the leader, or to a follower that has reached their last write's position) and
+monotonic reads (stick a user to one follower). It notes that replicas do not help writes.
+
+**"Synchronous or asynchronous?"** A strong answer refuses to pick one for everything. Asynchronous
+for most data; one synchronous follower nearby for data where a lost "saved" is unacceptable; never
+a single synchronous follower without a fallback, because losing it stops all writes. Bonus: the
+difference between "on the follower's disk" and "visible on the follower".
+
+**"The leader dies. Walk me through what happens."** Detection by timeout, and why the timeout
+cannot be too short; choosing the most up-to-date follower; fencing the old leader to prevent split
+brain; moving clients over; and how much data asynchronous replication can lose (the RPO).
+
+**"What does w + r > n mean?"** In a leaderless system with n copies, if a write waits for w and a
+read asks r, the groups overlap when w + r > n, so a read reaches the newest write. Then the
+honest follow-up: concurrent writes still need a conflict rule, usually last writer wins.
+
+## Check yourself
+
+<details>
+<summary>1. A follower is 60 ms away and the leader takes 200 writes a second, asynchronously. If the leader crashes and that follower is promoted, about how many saved writes are lost?</summary>
+
+About 12. In 60 ms (0.06 s) the leader writes 200 × 0.06 = 12 changes, and those are the ones
+still on their way when it dies. More if the follower was lagging for another reason, such as a
+paused replay.
+
+</details>
+
+<details>
+<summary>2. Your PostgreSQL leader has synchronous_commit = on and one synchronous follower. A user saves a change and immediately reads it from that follower. Can they see old data?</summary>
+
+Yes. `on` waits until the change is on the follower's disk, not until it is applied. The follower
+may still be replaying it when the read arrives. Only `remote_apply` guarantees the change is
+visible there.
+
+</details>
+
+<details>
+<summary>3. The only synchronous follower crashes. What happens to new commits on the leader, and what should you have configured?</summary>
+
+They wait, indefinitely, because the leader cannot get the confirmation it promised to wait for.
+If a client cancels the wait, the change is still committed on the leader. Configure at least two
+candidates with `ANY 1 (a, b)`, or a tool that turns off synchronous mode when no follower is
+available, knowing that this opens a window without the guarantee.
+
+</details>
+
+<details>
+<summary>4. Why is split brain worse than a short outage?</summary>
+
+An outage loses time; split brain loses agreement. Two leaders accept different writes at the same
+log positions, so neither history can follow the other, and the conflicting writes must be
+reconciled by hand, sometimes for many hours. Fencing the old leader before promoting a new one
+prevents it.
+
+</details>
+
+<details>
+<summary>5. A leaderless store keeps 5 copies of each row. Writes wait for 3 copies. What is the smallest number of copies a read must ask to be sure it reaches the latest write?</summary>
+
+3. The rule is w + r greater than n: 3 + r must be greater than 5, so r must be at least 3. With r
+= 2, the 2 copies asked could both be among the 2 copies the write did not reach.
+
+</details>
+
+## Recap
+
+- Single-leader replication: the leader records every change in a numbered log; followers replay
+  the same log in the same order, and their position says exactly how far they have got.
+- Physical replication ships disk changes (exact, same version only); logical ships row changes
+  (filterable, cross-version). Statement shipping breaks on `now()` and friends.
+- Asynchronous commits are fast and lose the changes still on their way when the leader dies.
+  Synchronous commits wait for a follower, at the cost of a round trip. In PostgreSQL only
+  `remote_apply` also makes the change visible on that follower.
+- Lag causes stale reads and reads that go back in time. Fix with read-your-writes by log position,
+  or sticky followers; lag comes from the network, slow replay and paused replay.
+- Failover must detect, choose the most up-to-date follower, and fence the old leader; skip the
+  fencing and you get split brain.
+- Multi-leader and leaderless designs remove the single writer and pay with conflicts, usually
+  resolved by last writer wins. Quorums with w + r greater than n make reads reach the latest write.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'read-replicas', why: 'Sending reads to followers safely: routing, lag-aware load balancing and read-your-writes in practice.' },
+  { slug: 'failover', why: 'Detection, promotion, fencing and moving clients over, and how to test it before you need it.' },
+  { slug: 'quorums', why: 'Why majorities, how w and r trade speed for freshness, and sloppy quorums.' },
+  { slug: 'consensus-raft', why: 'How a group of machines agrees on one leader and one log, which is what failover tools rely on.' },
+  { slug: 'cap-and-pacelc', why: 'The trade between consistency, availability and latency that every replication choice makes.' },
+  { slug: 'backups-and-disaster-recovery', why: 'What replicas cannot do: going back in time, and the RPO and RTO numbers behind your design.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [PostgreSQL: High Availability, Load Balancing, and Replication](https://www.postgresql.org/docs/current/high-availability.html) (current version, checked November 2026) — log shipping, streaming, hot standby and replay conflicts.
+- [PostgreSQL: Write Ahead Log settings](https://www.postgresql.org/docs/current/runtime-config-wal.html) and [replication settings](https://www.postgresql.org/docs/current/runtime-config-replication.html) (current version, checked November 2026) — `synchronous_commit` levels, `synchronous_standby_names` with `FIRST` and `ANY`, slots and `max_slot_wal_keep_size`.
+- [PostgreSQL: pg_stat_replication](https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW) (current version, checked November 2026) — the three kinds of lag a leader reports.
+- [PostgreSQL 19: WAIT FOR](https://www.postgresql.org/docs/19/sql-wait-for.html) (development docs, 2026) — waiting on a follower until it has replayed a given position.
+- [MySQL 8.4: Semisynchronous Replication](https://dev.mysql.com/doc/refman/8.4/en/replication-semisync.html) (2024, checked November 2026) — what the source waits for, the 10-second timeout and the fallback.
+- [Patroni: Replication modes](https://patroni.readthedocs.io/en/latest/replication_modes.html) (living docs, checked November 2026) — `maximum_lag_on_failover`, synchronous mode and what it does and does not guarantee.
+- [Amazon DynamoDB: How global tables work](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/V2globaltables_HowItWorks.html) (living docs, checked November 2026) — multi-Region writes, last writer wins and the strongly consistent mode.
+- [Amazon Aurora FAQs](https://aws.amazon.com/rds/aurora/faqs/) (living docs, checked November 2026) — six copies across three Availability Zones and shared-storage replicas.
+- [Apache Cassandra: Dynamo-style replication and consistency levels](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) (living docs, checked November 2026) — replication factor, `QUORUM`, `LOCAL_QUORUM` and the overlap rule.
+
+**Engineering writing**
+
+- [Cloudflare: A Byzantine failure in the real world](https://blog.cloudflare.com/a-byzantine-failure-in-the-real-world/) (2020) — a half-broken switch, etcd elections and unnecessary database failovers.
+- [ClickHouse: Read-your-writes with WAIT FOR in PostgreSQL 19](https://clickhouse.com/blog/postgresql-19-wait-for-read-your-writes) (2026) — the log-position technique for read-your-writes on asynchronous followers.
+
+**History**
+
+- [GitHub: October 21 post-incident analysis](https://github.blog/news-insights/company-news/oct21-post-incident-analysis/) (2018, kept as history) — 43 seconds of network loss, a cross-country failover and a day of reconciling writes.
+- [Verbitski et al., Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes](https://dl.acm.org/doi/10.1145/3183713.3196937) (SIGMOD 2018, kept as history) — the 4-of-6 write quorum in Aurora's storage.

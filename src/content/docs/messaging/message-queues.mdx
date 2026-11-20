@@ -5,7 +5,7 @@ tagline: How to hand slow work to a queue so your service can reply at once, wha
 difficulty: intermediate
 track: messaging
 prerequisites: [retries-and-backoff, idempotency-keys]
-next: [delivery-semantics, dead-letter-queues, backpressure, pub-sub, transactional-outbox, log-based-messaging]
+next: [delivery-semantics, dead-letter-queues, backpressure, pub-sub, transactional-outbox, log-based-messaging, replication]
 lastReviewed: 2026-11-20
 sidebar:
   order: 1
@@ -1192,6 +1192,7 @@ Longer gaps between attempts, or more attempts, would have covered the outage.
   { slug: 'pub-sub', why: 'When one event must reach several services, each with its own queue.' },
   { slug: 'transactional-outbox', why: 'Closing the dual-write gap between saving the order and sending the message.' },
   { slug: 'log-based-messaging', why: 'Kafka and logs: messages that stay after reading, ordered partitions, and replay.' },
+  { slug: 'replication', why: 'The same "save, then send" problem inside a database: how a leader streams its log to copies, and what a crash loses.' },
 ]} />
 
 ## Further reading

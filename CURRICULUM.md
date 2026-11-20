@@ -80,7 +80,7 @@ function-calling-and-tools → eval-driven-development
 | 6 | Query optimization | query-optimization | 21 | planned |
 | 7 | N+1 queries | n-plus-one-queries | 5 | published (2026-10-29) |
 | 8 | Connection pooling | connection-pooling | 4 | published (2026-10-26) |
-| 9 | Replication | replication | 30 | planned |
+| 9 | Replication | replication | 30 | published (2026-11-20) |
 | 10 | Read replicas | read-replicas | 22 | planned |
 | 11 | Partitioning and sharding | partitioning-and-sharding | 28, 29 | planned |
 | 12 | Schema migrations and versioning | schema-migrations | 23, 24 | planned |

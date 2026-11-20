@@ -5,7 +5,7 @@ tagline: Why apps keep a few database connections open and share them, and why m
 difficulty: intermediate
 track: databases
 prerequisites: [latency-vs-throughput, tcp-vs-udp]
-next: [n-plus-one-queries, timeouts, serverless-cold-starts-and-limits]
+next: [n-plus-one-queries, timeouts, serverless-cold-starts-and-limits, replication]
 lastReviewed: 2026-11-09
 sidebar:
   order: 8
@@ -1038,6 +1038,7 @@ not shorter for everyone.
   { slug: 'n-plus-one-queries', why: 'The other way an endpoint drowns the database: a hundred small queries on one connection where one query would do.' },
   { slug: 'timeouts', why: 'How the acquire timeout, statement timeout and request deadline should fit inside each other.' },
   { slug: 'serverless-cold-starts-and-limits', why: 'Why functions that start and stop by the thousand need a pooler or a data API in front of the database.' },
+  { slug: 'replication', why: 'When one database machine is not enough: live copies on other machines, and why reads from them can be out of date.' },
 ]} />
 
 ## Further reading

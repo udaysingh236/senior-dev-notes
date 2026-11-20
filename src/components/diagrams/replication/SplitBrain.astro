@@ -1,0 +1,59 @@
+---
+// Split brain. The network between the old leader and the rest breaks. The failover tool cannot
+// reach the old leader, decides it is dead and promotes follower A. The old leader is alive and
+// still accepts writes from the app servers that can reach it. Both write log entry 1044, with
+// different orders in it: two histories that cannot be merged automatically.
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="rep-sb-t rep-sb-d">
+  <title id="rep-sb-t">Split brain: two leaders after a network cut</title>
+  <desc id="rep-sb-d">
+    A network cut separates the old leader on the left from the rest on the right. On the right,
+    the failover tool cannot reach the old leader and promotes follower A to leader. On the left,
+    the old leader is still running and still accepts writes from app server 1. On the right, the
+    new leader accepts writes from app server 2. Both write a log entry numbered 1044, each with a
+    different order. Two leaders now hold two different histories.
+  </desc>
+  <defs>
+    <marker id="rep-sb-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- apps -->
+  <rect x="4" y="4" width="160" height="46" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="84" y="34" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">App server 1</text>
+  <rect x="236" y="4" width="160" height="46" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="316" y="34" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">App server 2</text>
+  <path d="M84 52 L 84 98" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-sb-a)" />
+  <path d="M316 52 L 316 98" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-sb-a)" />
+  <text x="92" y="82" font-size="15" style="fill: var(--viz-muted)">writes</text>
+  <text x="308" y="82" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">writes</text>
+
+  <!-- old leader -->
+  <path d="M4 112 L4 190 A80 9 0 0 0 164 190 L164 112" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <ellipse cx="84" cy="112" rx="80" ry="9" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="84" y="142" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Old leader</text>
+  <text x="84" y="164" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">still alive,</text>
+  <text x="84" y="184" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">still writing</text>
+
+  <!-- new leader -->
+  <path d="M236 112 L236 190 A80 9 0 0 0 396 190 L396 112" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <ellipse cx="316" cy="112" rx="80" ry="9" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="316" y="142" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">A, promoted</text>
+  <text x="316" y="164" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">"the leader is</text>
+  <text x="316" y="184" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">dead, I lead"</text>
+
+  <!-- the cut -->
+  <path d="M200 60 L 190 100 L 210 130 L 190 165 L 210 200 L 200 236" fill="none" stroke-width="3" stroke-dasharray="7 5" style="stroke: var(--viz-bad)" />
+  <text x="200" y="254" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">network cut</text>
+
+  <!-- the two histories -->
+  <g style="font-family: var(--sl-font-mono)" font-size="15">
+    <rect x="4" y="268" width="160" height="32" rx="3" style="fill: var(--viz-flow-soft)" />
+    <text x="12" y="290" style="fill: var(--viz-ink)">1044: order X</text>
+    <rect x="236" y="268" width="160" height="32" rx="3" style="fill: var(--viz-flow-soft)" />
+    <text x="244" y="290" style="fill: var(--viz-ink)">1044: order Y</text>
+  </g>
+  <text x="200" y="336" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Same entry number, two different changes</text>
+</svg>

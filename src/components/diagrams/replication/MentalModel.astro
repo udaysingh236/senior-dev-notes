@@ -1,0 +1,62 @@
+---
+// Part 1 mental model. The app sends every write to the leader. The leader records each change as
+// the next numbered entry in its log and sends the entries, in order, to two followers. Follower A,
+// in the same building, has everything; follower B, 40 ms away, is two entries behind.
+---
+
+<svg viewBox="0 0 400 392" width="100%" role="img" aria-labelledby="rep-mm-t rep-mm-d">
+  <title id="rep-mm-t">One leader sending its numbered log to two followers</title>
+  <desc id="rep-mm-d">
+    The app sends every write to the leader. The leader writes each change as the next numbered
+    entry in its log: 1041, 1042, 1043. It sends the entries in order to follower A, in the same
+    building, which has everything up to 1043, and to follower B, 40 ms away in another city, which
+    has everything up to 1041 and is two entries behind. Followers answer reads; only the leader
+    takes writes.
+  </desc>
+  <defs>
+    <marker id="rep-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- App -->
+  <rect x="125" y="4" width="150" height="50" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="200" y="36" font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">App</text>
+  <path d="M200 56 L 200 96" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-mm-a)" />
+  <text x="210" y="82" font-size="16" style="fill: var(--viz-muted)">every write</text>
+
+  <!-- Leader -->
+  <path d="M100 110 L100 186 A100 10 0 0 0 300 186 L300 110" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <ellipse cx="200" cy="110" rx="100" ry="10" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="142" font-size="19" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Leader</text>
+  <g style="font-family: var(--sl-font-mono)" font-size="16" text-anchor="middle">
+    <rect x="114" y="154" width="54" height="28" rx="3" style="fill: var(--viz-flow-soft)" />
+    <rect x="173" y="154" width="54" height="28" rx="3" style="fill: var(--viz-flow-soft)" />
+    <rect x="232" y="154" width="54" height="28" rx="3" style="fill: var(--viz-flow-soft)" />
+    <text x="141" y="174" style="fill: var(--viz-ink)">1041</text>
+    <text x="200" y="174" style="fill: var(--viz-ink)">1042</text>
+    <text x="259" y="174" style="fill: var(--viz-ink)">1043</text>
+  </g>
+
+  <!-- arrows to followers -->
+  <path d="M160 200 L 100 270" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-mm-a)" />
+  <path d="M240 200 L 300 270" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-mm-a)" />
+  <text x="4" y="232" font-size="16" style="fill: var(--viz-muted)">log, in order</text>
+  <text x="4" y="252" font-size="16" style="fill: var(--viz-muted)">under 1 ms</text>
+  <text x="396" y="232" font-size="16" text-anchor="end" style="fill: var(--viz-muted)">log, in order</text>
+  <text x="396" y="252" font-size="16" text-anchor="end" style="fill: var(--viz-muted)">40 ms</text>
+
+  <!-- Follower A -->
+  <path d="M4 288 L4 350 A91 9 0 0 0 186 350 L186 288" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <ellipse cx="95" cy="288" rx="91" ry="9" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="95" y="318" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Follower A</text>
+  <text x="95" y="342" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">has up to 1043</text>
+
+  <!-- Follower B -->
+  <path d="M214 288 L214 350 A91 9 0 0 0 396 350 L396 288" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <ellipse cx="305" cy="288" rx="91" ry="9" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="305" y="318" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Follower B</text>
+  <text x="305" y="342" font-size="16" text-anchor="middle" style="fill: var(--viz-ink)">has up to 1041</text>
+
+  <text x="200" y="386" font-size="16" text-anchor="middle" style="fill: var(--viz-muted)">Followers answer reads. Only the leader takes writes.</text>
+</svg>

@@ -1,0 +1,64 @@
+---
+// Leaderless quorum with 3 copies. A write of version 2 reached copies 1 and 2; copy 3 still has
+// version 1. A read asks copies 2 and 3, gets version 2 and version 1, and returns the newer one.
+// Because 2 written + 2 read is more than 3, every read group shares at least one copy with every
+// write group.
+---
+
+<svg viewBox="0 0 400 330" width="100%" role="img" aria-labelledby="rep-q-t rep-q-d">
+  <title id="rep-q-t">Write to 2 of 3 copies, read from 2 of 3: they always overlap</title>
+  <desc id="rep-q-d">
+    Three copies of the same row. A write of version 2 reached copy 1 and copy 2, shown green; copy
+    3 missed it and still holds version 1, shown amber. A read asks copy 2 and copy 3, receives
+    version 2 and version 1, and returns the newer one, version 2. Two copies written plus two
+    copies read is four, more than three copies, so every read group includes at least one copy
+    that has the latest write.
+  </desc>
+  <defs>
+    <marker id="rep-q-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="rep-q-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+  </defs>
+
+  <!-- writer -->
+  <rect x="4" y="4" width="180" height="46" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="94" y="34" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Write version 2</text>
+  <!-- reader -->
+  <rect x="216" y="4" width="180" height="46" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="306" y="34" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Read</text>
+
+  <!-- write arrows to copies 1 and 2 -->
+  <path d="M60 52 L 66 150" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-q-a)" />
+  <path d="M130 52 L 190 150" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#rep-q-a)" />
+  <!-- read arrows to copies 2 and 3 -->
+  <path d="M270 52 L 214 150" fill="none" stroke-width="2" stroke-dasharray="5 4" style="stroke: var(--viz-ok)" marker-end="url(#rep-q-ok)" />
+  <path d="M340 52 L 334 150" fill="none" stroke-width="2" stroke-dasharray="5 4" style="stroke: var(--viz-ok)" marker-end="url(#rep-q-ok)" />
+
+  <!-- copies -->
+  <g>
+    <path d="M10 164 L10 226 A58 8 0 0 0 126 226 L126 164" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+    <ellipse cx="68" cy="164" rx="58" ry="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+    <text x="68" y="196" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Copy 1</text>
+    <text x="68" y="218" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">version 2</text>
+
+    <path d="M142 164 L142 226 A58 8 0 0 0 258 226 L258 164" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+    <ellipse cx="200" cy="164" rx="58" ry="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+    <text x="200" y="196" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Copy 2</text>
+    <text x="200" y="218" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">version 2</text>
+
+    <path d="M274 164 L274 226 A58 8 0 0 0 390 226 L390 164" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <ellipse cx="332" cy="164" rx="58" ry="8" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+    <text x="332" y="196" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Copy 3</text>
+    <text x="332" y="218" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">version 1</text>
+  </g>
+
+  <!-- overlap marker -->
+  <rect x="138" y="146" width="124" height="98" rx="8" fill="none" stroke-width="2" stroke-dasharray="4 4" style="stroke: var(--viz-ink)" />
+  <text x="200" y="266" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">in both groups</text>
+
+  <text x="200" y="296" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Read gets versions 2 and 1, returns 2</text>
+  <text x="200" y="320" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">2 written + 2 read = 4, more than 3 copies</text>
+</svg>

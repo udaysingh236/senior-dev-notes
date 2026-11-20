@@ -1,0 +1,19 @@
+---
+// A leader streaming its log to two followers. See replication-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="replication-leader-followers"
+  title="A leader and two followers"
+  description="The app at the top left sends orders to the leader, a cylinder showing how far its log has got. Below it, two lines lead to follower A and follower B, each a cylinder with its distance from the leader. Blue dots on a line are changes on their way. Under each follower: how many changes it is behind and how old the oldest of them is. Under the leader, on the left: how long a commit waits before the customer is told the order is saved ('stuck' when nothing has been saved for a while); on the right: how many orders are still waiting for that answer. The bar at the bottom says how many saved orders would be lost if the leader crashed now, or, after a crash, how many were lost."
+  watchFor="With 'commit waits for' on none, commits take no time, and B stays about 4 changes behind (100 orders a second for 40 ms). Press 'Cut follower A off', then 'Crash the leader': B is promoted and the orders from its last 40 ms are gone; drag B to 200 ms and try again. Reset, set 'first follower to reply': commits now wait 2 ms, the round trip to A; cut A off and they wait 80 ms, because B answers instead. Set 'both followers' and press 'Long query on B': nothing commits until B's replay resumes."
+  viewBox="0 0 400 344"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createReplicationModel } from './replication-model';
+
+  mountAll('replication-leader-followers', createReplicationModel);
+</script>
