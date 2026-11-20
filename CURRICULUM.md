@@ -121,7 +121,7 @@ function-calling-and-tools → eval-driven-development
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Message queues | message-queues | 36 | planned |
+| 1 | Message queues | message-queues | 36 | published (2026-11-20) |
 | 2 | Pub/Sub | pub-sub | 37 | planned |
 | 3 | Event-driven architecture | event-driven-architecture | 38 | planned |
 | 4 | Log-based messaging (Kafka) | log-based-messaging | new | planned |

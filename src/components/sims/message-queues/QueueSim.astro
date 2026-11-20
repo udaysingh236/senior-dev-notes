@@ -1,0 +1,20 @@
+---
+// Orders feeding a queue in front of email workers, with leases, acks and a dead-letter queue.
+// See queue-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="message-queues-queue"
+  title="A queue in front of email workers"
+  description="Orders arrive on the left, drawn as a box with the current orders per second, and each adds a message to the queue, a bar of cells: blue for a message never taken, amber for one that came back after its lease ran out, red for a poison message. The text under the bar gives the number waiting and the age of the oldest. The box on the right counts dead letters. Below, one cell per email worker: blue while it sends an email, amber and dashed when its lease ran out while it was still sending (another worker may now have the message), red while it restarts after a crash. Then the email provider, with the number of duplicate emails, and a line showing how many messages waited over the last 30 seconds."
+  watchFor="At the defaults, 12 orders a second meet 10 workers that can send 20 a second, and the queue stays near empty. Press the sale button: for 15 s, 36 orders a second arrive, the line climbs by about 16 a second to roughly 230, then takes about 30 s to clear at 8 a second. Press 'Provider slows': sends take 8 s against a 5 s lease, workers turn amber, messages come back and duplicates climb. Reset with a 10 s lease and repeat: no duplicates. Press 'Crash a worker': one email goes twice unless the idempotent consumer is on. Add a poison message: it comes back every 5 s and lands in Dead after 5 receives."
+  viewBox="0 0 400 320"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createQueueModel } from './queue-model';
+
+  mountAll('message-queues-queue', createQueueModel);
+</script>

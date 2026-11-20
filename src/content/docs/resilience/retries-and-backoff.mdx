@@ -1134,6 +1134,7 @@ budget or a circuit breaker that is shared more widely.
   { slug: 'circuit-breakers', why: 'A budget removes retries; a breaker stops all calls to a dependency that keeps failing, and tests for recovery.' },
   { slug: 'idempotency-keys', why: 'How to make a POST safe to retry: storing the key, the in-progress state and the stored response.' },
   { slug: 'load-shedding', why: 'The server-side half of escaping a retry storm: refusing work you cannot finish in time, by priority.' },
+  { slug: 'message-queues', why: 'Retrying work later instead of now: a queue holds the job, and its lease spaces the attempts.' },
 ]} />
 
 ## Further reading

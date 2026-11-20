@@ -1,0 +1,52 @@
+---
+// The sale backlog from the page: 300 orders/s for 10 minutes, workers send 100/s, then 40
+// orders/s. Backlog rises by 200/s to 120,000 at 10 min, then falls by 60/s to 0 at 43 min 20 s.
+// Plot area: x 60..390 for 0..45 min (7.333 units per minute), y 300..40 for 0..120,000.
+---
+
+<svg viewBox="0 0 400 380" width="100%" role="img" aria-labelledby="mq-bl-t mq-bl-d">
+  <title id="mq-bl-t">Backlog during and after a 10-minute sale</title>
+  <desc id="mq-bl-d">
+    A line chart of messages waiting against minutes since the sale began. During the 10-minute
+    sale, 300 orders a second arrive and 100 are sent, so the backlog rises in a straight line by
+    200 a second to 120,000 at 10 minutes. After the sale, 40 orders a second arrive, so it falls
+    by 60 a second and reaches zero at 43 minutes 20 seconds.
+  </desc>
+
+  <!-- sale band -->
+  <rect x="60" y="40" width="73.3" height="260" style="fill: var(--viz-warn-soft)" />
+  <text x="96.7" y="62" font-size="15" text-anchor="middle" style="fill: var(--viz-warn)">sale</text>
+
+  <!-- grid and axes -->
+  <g stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)">
+    <line x1="60" y1="40" x2="390" y2="40" />
+    <line x1="60" y1="170" x2="390" y2="170" />
+  </g>
+  <line x1="60" y1="300" x2="390" y2="300" stroke-width="1.5" style="stroke: var(--viz-muted)" />
+  <line x1="60" y1="40" x2="60" y2="300" stroke-width="1.5" style="stroke: var(--viz-muted)" />
+  <g font-size="15" text-anchor="end" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">
+    <text x="54" y="45">120k</text>
+    <text x="54" y="175">60k</text>
+    <text x="54" y="305">0</text>
+  </g>
+  <g font-size="15" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">
+    <text x="60" y="322">0</text>
+    <text x="133.3" y="322">10</text>
+    <text x="206.7" y="322">20</text>
+    <text x="280" y="322">30</text>
+    <text x="353.3" y="322">40</text>
+  </g>
+  <text x="225" y="348" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">minutes since the sale began</text>
+  <text x="4" y="372" font-size="15" style="fill: var(--viz-muted)">messages waiting (k = thousand)</text>
+
+  <!-- backlog line -->
+  <polyline points="60,300 133.3,40 377.8,300" fill="none" stroke-width="3" stroke-linejoin="round" style="stroke: var(--viz-flow)" />
+  <circle cx="133.3" cy="40" r="5" style="fill: var(--viz-flow)" />
+  <circle cx="377.8" cy="300" r="5" style="fill: var(--viz-ok)" />
+
+  <!-- labels -->
+  <text x="146" y="36" font-size="16" font-weight="700" style="fill: var(--viz-ink)">120,000 at 10 min</text>
+  <text x="90" y="244" font-size="15" style="fill: var(--viz-ink)">+200/s</text>
+  <text x="262" y="150" font-size="15" style="fill: var(--viz-ink)">−60/s</text>
+  <text x="384" y="284" font-size="15" font-weight="700" text-anchor="end" style="fill: var(--viz-ok)">empty at 43:20</text>
+</svg>

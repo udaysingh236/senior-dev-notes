@@ -1118,6 +1118,7 @@ one transaction, commit, then acknowledge.
 ## Where to go next
 
 <NextTopics items={[
+  { slug: 'message-queues', why: 'Where duplicate deliveries come from: leases, acks and crashes between the work and the ack.' },
   { slug: 'delivery-semantics', why: 'At-most-once, at-least-once and "exactly once": which one each queue gives you, and where the inbox table fits.' },
   { slug: 'transactional-outbox', why: 'The mirror image: publishing a message exactly when your transaction commits, so the consumer has something to deduplicate.' },
   { slug: 'distributed-locks', why: 'Leases and fencing tokens in general, beyond the one lock an idempotency key is.' },

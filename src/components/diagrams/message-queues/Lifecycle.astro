@@ -1,0 +1,68 @@
+---
+// One message's life in a queue with leases: waiting -> in flight (hidden for the lease) ->
+// deleted on ack; back to waiting when the lease runs out or on a nack; to the dead-letter queue
+// when its receive count has reached the limit. Numbers: the page's 30 s lease and 5 receives.
+---
+
+<svg viewBox="0 0 400 410" width="100%" role="img" aria-labelledby="mq-lc-t mq-lc-d">
+  <title id="mq-lc-t">The states of one message in a queue</title>
+  <desc id="mq-lc-d">
+    A message starts waiting. When a worker receives it, its receive count goes up by one and it
+    becomes in flight, hidden from other workers for the 30-second lease. An ack deletes it for
+    good. If the lease runs out, or the worker sends a nack, it goes back to waiting. When its
+    receive count has reached the limit of 5, the next receive moves it to the dead-letter queue
+    instead.
+  </desc>
+  <defs>
+    <marker id="mq-lc-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="mq-lc-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-ok)" />
+    </marker>
+    <marker id="mq-lc-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-warn)" />
+    </marker>
+    <marker id="mq-lc-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-bad)" />
+    </marker>
+  </defs>
+
+  <!-- Waiting -->
+  <rect x="100" y="20" width="190" height="62" rx="8" stroke-width="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="195" y="47" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Waiting</text>
+  <text x="195" y="70" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">any worker may take it</text>
+
+  <!-- receive -->
+  <line x1="150" y1="84" x2="150" y2="176" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-lc-a)" />
+  <text x="142" y="122" font-size="15" text-anchor="end" style="fill: var(--viz-ink)">receive</text>
+  <text x="142" y="142" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">count + 1</text>
+
+  <!-- back to waiting -->
+  <line x1="240" y1="178" x2="240" y2="86" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-warn)" marker-end="url(#mq-lc-w)" />
+  <text x="248" y="122" font-size="15" style="fill: var(--viz-warn)">lease over</text>
+  <text x="248" y="142" font-size="15" style="fill: var(--viz-warn)">or nack</text>
+
+  <!-- In flight -->
+  <rect x="100" y="180" width="190" height="62" rx="8" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="195" y="207" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">In flight</text>
+  <text x="195" y="230" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">hidden for 30 s</text>
+
+  <!-- ack -->
+  <path d="M150 244 L 150 280 L 80 280 L 80 320" fill="none" stroke-width="2" style="stroke: var(--viz-ok)" marker-end="url(#mq-lc-ok)" />
+  <text x="160" y="296" font-size="15" font-weight="700" style="fill: var(--viz-ok)">ack</text>
+  <rect x="4" y="324" width="152" height="56" rx="8" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="80" y="358" font-size="18" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Deleted</text>
+
+  <!-- dead letter -->
+  <path d="M292 51 L 340 51 L 340 320" fill="none" stroke-width="2" stroke-dasharray="6 4" style="stroke: var(--viz-bad)" marker-end="url(#mq-lc-b)" />
+  <text x="348" y="122" font-size="15" style="fill: var(--viz-bad)">count</text>
+  <text x="348" y="142" font-size="15" style="fill: var(--viz-bad)">is 5:</text>
+  <text x="348" y="162" font-size="15" style="fill: var(--viz-bad)">next</text>
+  <text x="348" y="182" font-size="15" style="fill: var(--viz-bad)">receive</text>
+  <rect x="226" y="324" width="170" height="56" rx="8" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="311" y="348" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Dead-letter</text>
+  <text x="311" y="369" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">queue</text>
+
+  <text x="4" y="404" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">only two ways out: an ack, or the dead-letter queue</text>
+</svg>

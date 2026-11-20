@@ -1,0 +1,89 @@
+---
+// Queue vs publish/subscribe vs log, drawn in the same layout. Queue: message 1042 goes to one of
+// three workers and is deleted after the ack. Pub/sub: a copy goes to each of three subscribers.
+// Log: messages stay in order; each reader keeps its own position and can go back.
+---
+
+<svg viewBox="0 0 400 540" width="100%" role="img" aria-labelledby="mq-nb-t mq-nb-d">
+  <title id="mq-nb-t">Queue, publish/subscribe and log compared</title>
+  <desc id="mq-nb-d">
+    Three panels. Queue: message 1042 enters a queue and is given to exactly one of three workers,
+    worker 2; the other two get other messages; the message is deleted after the ack.
+    Publish/subscribe: message 1042 is published to a topic and a copy goes to each subscriber:
+    email, warehouse and analytics. Log: messages 1039 to 1043 are kept in order; the email reader
+    is at 1042, and the analytics reader has gone back to 1039 to read again; nothing is deleted
+    by reading.
+  </desc>
+  <defs>
+    <marker id="mq-nb-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+    <marker id="mq-nb-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-stroke)" />
+    </marker>
+  </defs>
+
+  <!-- Panel 1: queue -->
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Queue: one worker gets it</text>
+  <rect x="4" y="66" width="62" height="36" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+  <text x="35" y="90" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">1042</text>
+  <line x1="68" y1="84" x2="108" y2="84" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <rect x="112" y="64" width="100" height="40" rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-server)" />
+  <line x1="145" y1="64" x2="145" y2="104" stroke-width="1.5" style="stroke: var(--viz-server)" />
+  <line x1="178" y1="64" x2="178" y2="104" stroke-width="1.5" style="stroke: var(--viz-server)" />
+  <text x="162" y="124" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">queue</text>
+  <line x1="214" y1="84" x2="282" y2="84" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <line x1="214" y1="78" x2="282" y2="44" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" marker-end="url(#mq-nb-m)" />
+  <line x1="214" y1="90" x2="282" y2="124" stroke-width="1.5" stroke-dasharray="4 4" style="stroke: var(--viz-stroke)" marker-end="url(#mq-nb-m)" />
+  <rect x="286" y="28" width="110" height="32" rx="5" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="341" y="50" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">worker 1</text>
+  <rect x="286" y="68" width="110" height="32" rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="341" y="90" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">worker 2: 1042</text>
+  <rect x="286" y="108" width="110" height="32" rx="5" stroke-width="1.5" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="341" y="130" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">worker 3</text>
+  <text x="4" y="160" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">deleted after worker 2 acks</text>
+
+  <line x1="4" y1="178" x2="396" y2="178" stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+
+  <!-- Panel 2: pub/sub -->
+  <text x="4" y="206" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Pub/sub: each subscriber gets a copy</text>
+  <rect x="4" y="250" width="62" height="36" rx="4" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" stroke-width="2" />
+  <text x="35" y="274" font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">1042</text>
+  <line x1="68" y1="268" x2="108" y2="268" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <rect x="112" y="248" width="100" height="40" rx="20" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-server)" />
+  <text x="162" y="273" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">topic</text>
+  <line x1="214" y1="262" x2="282" y2="228" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <line x1="214" y1="268" x2="282" y2="268" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <line x1="214" y1="274" x2="282" y2="308" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#mq-nb-a)" />
+  <rect x="286" y="212" width="110" height="32" rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="341" y="234" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">email: 1042</text>
+  <rect x="286" y="252" width="110" height="32" rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="341" y="274" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">stock: 1042</text>
+  <rect x="286" y="292" width="110" height="32" rx="5" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="341" y="314" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">stats: 1042</text>
+  <text x="4" y="344" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">three copies, one per subscriber</text>
+
+  <line x1="4" y1="362" x2="396" y2="362" stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+
+  <!-- Panel 3: log -->
+  <text x="4" y="390" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Log: kept in order, re-readable</text>
+  <g stroke-width="1.5" style="stroke: var(--viz-server)">
+    <rect x="4" y="430" width="74" height="40" rx="3" style="fill: var(--viz-surface)" />
+    <rect x="82" y="430" width="74" height="40" rx="3" style="fill: var(--viz-surface)" />
+    <rect x="160" y="430" width="74" height="40" rx="3" style="fill: var(--viz-surface)" />
+    <rect x="238" y="430" width="74" height="40" rx="3" style="fill: var(--viz-flow-soft)" />
+    <rect x="316" y="430" width="80" height="40" rx="3" style="fill: var(--viz-surface)" />
+  </g>
+  <g font-size="15" text-anchor="middle" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <text x="41" y="455">1039</text>
+    <text x="119" y="455">1040</text>
+    <text x="197" y="455">1041</text>
+    <text x="275" y="455">1042</text>
+    <text x="356" y="455">1043</text>
+  </g>
+  <line x1="275" y1="410" x2="275" y2="426" stroke-width="2" style="stroke: var(--viz-ok)" />
+  <text x="275" y="404" font-size="15" text-anchor="middle" style="fill: var(--viz-ok)">email reader</text>
+  <line x1="41" y1="490" x2="41" y2="474" stroke-width="2" style="stroke: var(--viz-client)" />
+  <text x="4" y="508" font-size="15" style="fill: var(--viz-client)">stats reader, gone back to re-read</text>
+  <text x="4" y="532" font-size="15" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">reading deletes nothing; old messages expire</text>
+</svg>
