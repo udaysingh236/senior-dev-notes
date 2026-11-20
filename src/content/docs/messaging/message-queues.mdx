@@ -1,0 +1,1219 @@
+---
+title: Message Queues
+description: How a message queue lets a service hand slow work to background workers and reply at once, explained from zero with one shop and one order-confirmation email, then in depth. Producers, consumers and brokers, acknowledgements, leases (visibility timeouts), why at-least-once delivery means a message can arrive twice and how idempotent consumers handle it, ordering and message groups, retries and dead-letter queues, poison messages, long polling and prefetch, backlogs and drain time, a Postgres table as a queue with SKIP LOCKED, and the defaults of Amazon SQS, RabbitMQ, Celery, BullMQ and Kafka share groups.
+tagline: How to hand slow work to a queue so your service can reply at once, what happens when a worker crashes halfway, and why the same work can run twice.
+difficulty: intermediate
+track: messaging
+prerequisites: [retries-and-backoff, idempotency-keys]
+next: [delivery-semantics, dead-letter-queues, backpressure, pub-sub, transactional-outbox, log-based-messaging, replication]
+lastReviewed: 2026-11-20
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/message-queues/MentalModel.astro';
+import Neighbours from '../../../components/diagrams/message-queues/Neighbours.astro';
+import Lifecycle from '../../../components/diagrams/message-queues/Lifecycle.astro';
+import Backlog from '../../../components/diagrams/message-queues/Backlog.astro';
+import QueueSim from '../../../components/sims/message-queues/QueueSim.astro';
+
+## The question
+
+A customer places an order in your online shop. Your code saves the order and then sends a
+confirmation email, and the email service takes half a second to answer. So every customer waits
+half a second longer than they need to. And when the email service is down for a minute, you must
+choose: fail the order, or skip the email. Neither is acceptable. How do you make sure the email
+always goes out, without making the customer wait for it?
+
+The short answer: don't send the email while the customer waits. Write a short note, "send the
+confirmation for order 1042", into a **message queue**, a service that stores notes like this in
+order until something takes them. Reply to the customer at once. A separate program, a
+**worker**, takes notes from the queue one by one and sends the emails. If a worker crashes
+halfway, the queue notices that the note was never finished and gives it to another worker. The
+price of that safety: now and then, the same email is sent twice, and your worker must be written
+to handle that.
+
+## The idea in plain words
+
+Follow one order through one shop. The **Checkout** service handles "place order" requests. For
+every order it must save the order in the database and get a confirmation email sent through an
+**email provider**, an outside company whose service sends email for you.
+
+1. **The setup.** Saving the order takes Checkout 50 ms. Asking the email provider to send one
+   email takes about 500 ms, because the provider is far away and does its own work. On a normal
+   day, 40 orders arrive every second.
+2. **Calling the provider directly.** If Checkout sends the email itself, the customer waits for
+   both steps: 50 + 500 = 550 ms. Most of that wait is for an email the customer does not need
+   this very second.
+3. **When the provider is down.** If the provider stops answering for a minute, Checkout has two
+   bad choices. It can fail the order, losing a sale because of an email. Or it can save the
+   order and skip the email, and the customer never hears from you.
+4. **The idea: write a note instead.** After saving the order, Checkout puts a small note into a
+   queue: `send confirmation for order 1042`. Handing a note to the queue takes about 10 ms. The
+   customer gets "order placed" after 50 + 10 = 60 ms instead of 550 ms.
+5. **Workers take the notes.** A group of 50 email workers runs separately from Checkout. Each
+   worker takes the note at the front of the queue, sends the email, which takes 0.5 s, and takes
+   the next note. One worker sends 1 ÷ 0.5 = 2 emails a second, so 50 workers send
+   50 × 2 = 100 emails a second. Orders arrive at 40 a second, so the workers keep up with room to spare and
+   the queue stays nearly empty.
+6. **Taking a note does not delete it.** When a worker takes note 1042, the queue hides it from
+   the other workers for 30 seconds but keeps it. When the email has gone out, the worker tells
+   the queue "done with 1042", and only then does the queue delete the note.
+7. **A worker crashes halfway.** Suppose the worker's server dies after taking note 1042 and
+   before sending the email. No "done" ever arrives. After 30 seconds the queue shows the note
+   again, another worker takes it, and the email goes out about 30 seconds late. Nothing is lost.
+8. **The price: sometimes twice.** Now suppose the worker crashes *after* sending the email but
+   *before* saying "done". The queue cannot tell this apart from the first crash, so after 30
+   seconds another worker sends the email again. The customer gets two copies. To avoid that, the
+   worker first checks a record of orders already emailed and skips any order it finds there.
+9. **A note that always fails.** Suppose note 1043 has a broken email address that makes the
+   worker crash every time. Without a limit, it would come back every 30 seconds forever. So the
+   queue counts how many times each note was taken; after 5 tries it moves the note to a separate
+   **dead-letter queue**, where a person can look at it later.
+10. **The provider goes down for a minute.** Every send fails, so no worker says "done", and the
+    notes pile up instead of being lost: 40 orders a second × 60 seconds = 2,400 notes waiting.
+    Not one order failed, and customers got "order placed" in 60 ms as usual. When the provider is
+    back, the workers send 100 emails a second while 40 new orders a second keep arriving, so the
+    pile shrinks by 100 − 40 = 60 notes a second. 2,400 notes ÷ 60 per second = 40 seconds to
+    clear it.
+
+<Figure caption="Checkout saves the order, puts a note in the queue and replies in 60 ms. Email workers take notes from the front, send the email, and say 'done' so the queue deletes the note. A note that fails 5 times moves to a dead-letter queue for a person to inspect.">
+  <MentalModel />
+</Figure>
+
+The picture shows the trade. Checkout no longer waits for the email, and no longer cares whether
+the provider is up. The queue holds the work safely until a worker finishes it. In return, the
+email arrives a moment later than it would have, and very occasionally twice.
+
+There is one thing a queue cannot do. It does not make the workers any faster. If orders arrive
+faster than the workers can send emails, hour after hour, the pile grows without end, and emails
+arrive later and later. A queue absorbs short bursts; it does not add capacity. Part 2 works out
+exactly how long a pile takes to clear.
+
+An everyday picture: a busy restaurant. The waiter does not stand in the kitchen while your food
+cooks. They write your order on a slip, pin it to the rail above the kitchen counter and go back
+to the tables. Cooks take slips from the rail in order. The picture breaks in two places. If a
+cook drops a slip and walks out, nobody puts it back on the rail; a queue puts the note back by
+itself when the 30 seconds run out. And a restaurant would never cook your order twice, while a
+queue sometimes delivers a note twice, by design.
+
+## The building blocks
+
+Eight ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### Doing work now or later
+
+**What it is.** Work done **synchronously** is done while the caller waits for it. Work done
+**asynchronously** is accepted now and done later, after the caller has had its answer.
+
+**Why it exists.** Some work is slow, or depends on another service that may be down, and the
+caller does not need its result right now. Making the caller wait for it costs time and makes the
+caller fail whenever that other service fails.
+
+**Example.** Saving order 1042 is synchronous: the customer must know the order was saved before
+seeing "order placed". Sending the confirmation email can be asynchronous: the customer is happy
+if it arrives a few seconds later. Moving the email out of the request cuts the customer's wait
+from 550 ms to 60 ms.
+
+**The technical version.** An asynchronous request usually answers with "accepted" rather than
+the final result. Over HTTP that can be `202 Accepted` with an ID the caller can check later; in a
+shop it is the normal response, with the email following on its own. The work moves to
+another process, and a queue is the usual way to get it there.
+
+### A message
+
+**What it is.** A **message** is a small piece of data that describes one unit of work, such as
+"send the confirmation for order 1042".
+
+**Why it exists.** Checkout and the email workers are separate programs, often on separate
+servers. They need a way to pass work from one to the other that does not need both to be running
+at the same moment.
+
+**Example.** The note for order 1042 is a short piece of JSON, about 60 bytes:
+`{"type": "order_confirmation", "order_id": 1042}`. It carries the order ID, not the email's text
+or the order's details. The worker reads those from the database when it gets to the message, so
+it always uses the latest data.
+
+**The technical version.** A message has a **body** (the data, often JSON) and **attributes**
+(extra labels such as a type or a creation time), and the queue gives it an ID. Queues limit the
+size: Amazon SQS, Amazon's hosted queue service, accepts at most 1 MiB (1,048,576 bytes) per
+message, as of November 2026. Large data, such as a PDF invoice, goes into file storage, and the
+message carries only its location.
+
+### Producer, consumer and broker
+
+**What it is.** The **producer** is the program that puts messages into a queue. The **consumer**
+is the program that takes them out and does the work. The **broker** is the server that holds the
+queue in between.
+
+**Why it exists.** Separating the three lets each one fail, restart or grow on its own. Checkout
+can keep accepting orders while every email worker is being restarted, because the broker keeps
+the messages.
+
+**Example.** Checkout is the producer. The 50 email workers are the consumers. The broker is a
+queue service such as Amazon SQS or RabbitMQ (an open-source broker you run yourself), holding a
+queue named `order-emails`. Checkout knows the queue's name, not where the workers are or how many
+there are. You can go from 50 workers to 150 without changing a line of Checkout.
+
+**The technical version.** The broker stores each message **durably**: on disk, and usually
+copied to more than one machine, before it confirms to the producer that the message was
+accepted. Amazon SQS stores every message in several separate data centres before it answers.
+Producers and consumers talk to the broker over the network; they never talk to each other. This
+separation is called **decoupling**.
+
+### An acknowledgement
+
+**What it is.** An **acknowledgement**, or **ack**, is the consumer telling the broker "I have
+finished this message; you can delete it".
+
+**Why it exists.** The broker cannot see inside a worker. Without an ack, it would have to delete
+a message the moment it hands it out, and a worker that crashed halfway would take the message
+with it.
+
+**Example.** A worker takes message 1042, sends the email, and then acks. The broker deletes
+message 1042. If the worker had crashed before the ack, the broker would still have the message,
+and could give it to another worker.
+
+**The technical version.** In Amazon SQS, the ack is a `DeleteMessage` call. In RabbitMQ it is
+`basic.ack`. A consumer can also give a **negative acknowledgement** (a **nack**), "I could not
+do this", which asks the broker to put the message back or move it aside. *When* the consumer
+acks is the most important decision on this page: before the work or after it.
+
+### A lease (visibility timeout)
+
+**What it is.** A **lease** is a time limit on how long one worker may hold a message before the
+queue gives it to someone else.
+
+**Why it exists.** A worker that crashed sends no ack, but it sends no "I crashed" either. The
+broker needs a rule for deciding when a message has been abandoned. The rule is: no ack within the
+lease means the worker is gone.
+
+**Example.** The `order-emails` queue has a 30-second lease. At 10:00:00 a worker takes message
+1042. The message is now **in flight**: taken but not yet acked. It is hidden from the other
+workers until 10:00:30. If the ack arrives before then, the message is deleted. If not, at
+10:00:30 it becomes visible again and the next worker that asks gets it.
+
+**The technical version.** Amazon SQS calls the lease the **visibility timeout**: 30 s by
+default, at most 12 hours, as of November 2026. Google Cloud Pub/Sub calls it the **ack
+deadline**: 10 s by default. A worker that needs longer can extend its lease while it works. Part
+2 shows why the lease length matters so much.
+
+### At-least-once delivery and idempotent consumers
+
+**What it is.** **At-least-once delivery** means the queue promises every message will be
+delivered, possibly more than once. An **idempotent** consumer is one that gives the same result
+whether it handles a message once or several times.
+
+**Why it exists.** The queue cannot know whether a worker that went silent did the work or not.
+Giving the message out again is the only way never to lose it, and that means a message whose
+work was in fact done gets done again. Since duplicates cannot be prevented, the consumer has to
+make them harmless.
+
+**Example.** A worker sends the email for order 1042 at 10:00:01 and crashes before acking. At
+10:00:31 the message reappears and another worker takes it. If the second worker sends the
+email, the customer gets two. If it first checks a table of orders already emailed, finds 1042
+there, and acks without sending, the customer gets one.
+
+**The technical version.** The other option, **at-most-once delivery**, acks first and works
+after: a crash loses the message, but it never runs twice. Queues advertise "exactly-once" only
+in narrow senses, explained in Part 2. In practice, reliable systems pair at-least-once delivery
+with idempotent consumers. The [idempotency keys page](/messaging/idempotency-keys/) covers
+making an operation safe to repeat in depth.
+
+### A dead-letter queue
+
+**What it is.** A **dead-letter queue** is a separate queue where messages go after failing too
+many times, so a person can look at them.
+
+**Why it exists.** Some messages will never succeed: a broken email address, a bug that crashes
+on one kind of order. Without a limit, such a message, a **poison message**, comes back forever,
+wasting a worker each time and hiding the real problem.
+
+**Example.** The `order-emails` queue moves a message to `order-emails-dead` after 5 receives.
+Message 1043 crashes the worker every time. With a 30-second lease it is tried at 0, 30, 60, 90
+and 120 seconds, and the next time a worker asks for it, at 150 seconds, the queue moves it to the
+dead-letter queue instead. An alarm tells the team there is one message there.
+
+**The technical version.** In Amazon SQS this is a **redrive policy** with a `maxReceiveCount`.
+RabbitMQ calls it a **delivery limit**, 20 by default for its replicated "quorum" queues since
+version 4.0. Once the bug is fixed, the messages can be moved back to the main queue, which is
+called a **redrive**.
+
+### Arrival rate, processing rate and backlog
+
+**What it is.** The **arrival rate** is how many messages enter the queue per second. The
+**processing rate** is how many the workers can finish per second. The **backlog** is how many
+are waiting.
+
+**Why it exists.** These three numbers decide whether a queue helps or hurts. When the arrival
+rate stays below the processing rate, the backlog stays near zero. When it stays above, the
+backlog grows every second, and so does the wait.
+
+**Example.** On a normal day 40 messages arrive per second and the 50 workers can finish 100 per
+second, so the backlog stays near zero. During the one-minute provider outage the workers finish
+nothing, so the backlog grows by 40 a second. After 60 seconds it is 40 × 60 = 2,400 messages.
+
+**The technical version.** The backlog changes by (arrival rate − processing rate) every second
+and never drops below zero. Once the workers are back, the time to clear a backlog is the backlog
+÷ (processing rate − arrival rate): here 2,400 ÷ (100 − 40) = 2,400 ÷ 60 = 40 s. If the
+processing rate is not above the arrival rate, the backlog never clears.
+
+:::tip[If you stop here]
+- A message queue lets a service write down slow work ("send the email for order 1042") and reply
+  at once; separate workers do the work later.
+- Taking a message only hides it for a while (a lease). The worker acks when the work is done, and
+  only then is the message deleted, so a crashed worker loses nothing.
+- Because of that, a message can be delivered twice. Write workers so that doing a message twice
+  has the same effect as doing it once.
+- A message that fails again and again goes to a dead-letter queue after a set number of tries.
+- A queue absorbs bursts and outages, but it adds no capacity: if work arrives faster than workers
+  finish it for long, the wait grows without end.
+:::
+
+## Going deeper
+
+Your queue stores every message on several machines and never loses one. So why do customers
+still get two confirmation emails, or none, or one that arrives twenty minutes late? Where do the
+guarantees of a queue end, and where does your code take over?
+
+The answer is that a broker's guarantees are about *storing* messages. Everything that decides
+what the customer sees happens at the edges: the moment the producer hands a message over, the
+handshake between the broker and a worker, and the arithmetic of rates. The rest of this page
+walks those edges in order.
+
+- **Handing a message over.** Checkout saves the order, then sends the message. If it crashes in
+  between, the order exists and the email never will.
+- **Taking and acking.** Ack too early and a crash loses the email. Ack late and a crash sends it
+  twice. Choose the lease badly and the email is sent twice with no crash at all.
+- **Ordering.** Two messages about the same order can be handled in the wrong order by two
+  workers, even on a queue that keeps them in order.
+- **Retries.** A message that fails can poison a worker, or, during a long outage, perfectly good
+  messages can be thrown into the dead-letter queue.
+- **Rates.** A 10-minute sale can leave a pile of 120,000 messages that is not cleared until 43
+  minutes after the sale began.
+
+Each of these has a precise mechanism and a precise fix, and the runnable examples on this page
+reproduce every one of them.
+
+## The obvious fix, and why it breaks
+
+The first queue most teams build is not a queue service at all. It is one of two shortcuts.
+
+**Shortcut 1: a list inside the web server.** Checkout appends the email job to a list in memory,
+and a background thread (a second line of work running inside the same program) sends the emails.
+
+```python
+email_jobs = []  # lives in Checkout's memory
+
+def place_order(order):
+    save(order)
+    email_jobs.append(order.id)  # a background thread pops these and sends
+    return "order placed"
+```
+
+It works on your laptop. In production it fails in three ways. A deploy or a crash restarts the
+process and every job in the list is gone, with no record that it existed. Each Checkout server
+has its own list, so one busy server cannot hand work to an idle one. And the email work now
+competes with customers for the same server's CPU and memory.
+
+**Shortcut 2: a database table with a status column.** Checkout inserts a row with
+`status = 'pending'`. Workers find a pending row, send the email and mark it done.
+
+```sql
+SELECT id FROM email_jobs WHERE status = 'pending' ORDER BY id LIMIT 1;
+-- send the email, then:
+UPDATE email_jobs SET status = 'done' WHERE id = 42;
+```
+
+This survives restarts, because the rows are in the database. But two workers that run the
+`SELECT` at the same moment both get row 42 and both send the email. Adding `FOR UPDATE` puts a
+**lock** on the row, a mark that makes every other worker wait until the first one is finished
+with it. That fixes the double send, but now every worker waits in line for the same first row.
+And when a worker crashes after reading row 42, the row stays `pending` but nobody knows it was
+abandoned, or, if the worker had set it to `in_progress`, it stays that way forever. Every problem
+on this page appears here in miniature. A table can be a perfectly good queue, but only once it
+has leases, acks and a way for workers to skip each other's rows, which is the Postgres version in
+"Build it yourself".
+
+### Its neighbours: queue, publish/subscribe and log
+
+Three kinds of messaging systems are often confused, because all three have producers, consumers
+and a broker. They differ in who gets each message and how long it stays.
+
+- **A queue** gives each message to **one** consumer. Fifty workers share one queue, and each
+  message is handled once (or occasionally twice). The message is deleted after its ack.
+- **Publish/subscribe** (pub/sub) gives a **copy** of each message to every subscriber. When an
+  order is placed, the email service, the warehouse and the analytics team may each need to know.
+  Each subscriber usually reads through a queue of its own.
+- **A log**, such as Apache Kafka, keeps messages in order for a set time whether or not they
+  were read. Each reader remembers its position and can go back and re-read. Messages are not
+  deleted by an ack.
+
+<Figure caption="Three ways to deliver order 1042's message. A queue gives it to exactly one of the workers and deletes it after the ack. Publish/subscribe gives a copy to each subscriber: email, stock (the warehouse) and stats (analytics). A log keeps every message in order; each reader keeps its own position and can re-read.">
+  <Neighbours />
+</Figure>
+
+Notice that the three differ in who receives the message, not in how it is sent. This page is
+about the first kind, the work queue; pub/sub and log-based messaging get their own pages
+(coming soon). A **task queue
+library**, such as Celery (Python) or BullMQ (Node.js), is not a fourth kind: it is code that
+runs your functions as jobs on top of a broker such as RabbitMQ or Redis (an in-memory data
+store often used as a simple broker), with the same acks,
+leases and retries underneath.
+
+## How it works, piece by piece
+
+### Sending: when is a message safe?
+
+A message is safe once the broker has stored it and said so. The producer must wait for that
+confirmation before it treats the work as handed over.
+
+Here is what happens when Checkout sends message 1042:
+
+1. Checkout sends the message to the broker over the network.
+2. The broker writes it to disk, and usually to the disks of other machines too.
+3. The broker answers "stored", with the message's ID.
+4. Only now does Checkout count the email as on its way.
+
+If step 3 never arrives, because the network dropped the answer, Checkout cannot know whether the
+message was stored. The safe move is to send it again, which is another way a duplicate is born:
+this time at the producer, before any worker is involved. Amazon SQS **FIFO** queues (first in,
+first out, the queue type that keeps strict order) accept a **deduplication ID** with each message
+and drop a second message with the same ID sent within 5 minutes, as of November 2026. That
+covers this one case, a retried send, and nothing that happens later at the workers.
+
+A harder gap sits one step earlier. Checkout does two things: save the order in its database, and
+send a message to the broker. A database **transaction** groups several changes so they are saved
+together or not at all, but it only covers one database. The broker is a different system, so no
+transaction covers both steps.
+
+- Save, then send: a crash between the two leaves an order with no email, silently.
+- Send, then save: a crash between the two sends an email for an order that does not exist.
+
+This is called the **dual-write problem**. The standard fix is the **transactional outbox**:
+Checkout writes the message into an `outbox` table in the same database transaction as the order,
+so both happen or neither does. A separate process reads the outbox and sends to the broker,
+retrying until the broker confirms. The transactional outbox page (coming soon) covers it; for this page, the point is that "save, then send" is a bug waiting for a crash.
+
+Two habits make messages easier to live with. Send IDs, not data: a message that says "order
+1042" stays small and makes the worker read the current state, so a message that waited 20
+minutes does not email an old address. And put a **type** and a **version** in every message,
+such as `"type": "order_confirmation", "v": 2`, so old and new workers can tell what they are
+reading while you deploy a change.
+
+### Handing out: pull, long polling and prefetch
+
+A worker gets messages in one of two ways. It can **pull**, by asking the broker "anything for
+me?" in a loop. Or the broker can **push**, by sending messages down a connection the worker keeps
+open. Amazon SQS is pull; RabbitMQ usually pushes.
+
+**Pulling without waiting is wasteful.** Suppose the 50 workers each ask once a second, and at
+night the queue is empty. That is 50 requests a second, and a day has 24 × 60 × 60 = 86,400
+seconds, so 50 × 86,400 = 4,320,000 requests a day that return nothing. Hosted queues charge per
+request, and each empty answer still costs network and CPU.
+
+**Long polling** fixes this: the worker asks "anything for me? I will wait up to 20 seconds". The
+broker answers as soon as a message arrives, or after 20 seconds with nothing. When the queue is
+empty, each worker now makes one request per 20 s, so the 50 workers make 50 ÷ 20 = 2.5 requests a
+second, and 2.5 × 86,400 = 216,000 a day: 20 times fewer. Messages are not delayed by it; a
+message that arrives during the wait is returned at once. In Amazon SQS this is `WaitTimeSeconds`,
+at most 20 s, and one request returns at most 10 messages, as of November 2026.
+
+**Prefetch** is the push version of "how many at a time". It is the number of messages the broker
+may send to a worker before that worker has acked any of them. With a prefetch of 1, a worker gets
+a new message only after acking the last one. Higher values avoid a pause between messages, but
+the messages a worker holds are messages no other worker can take.
+
+A worked example of prefetch going wrong: each email takes 0.5 s, and a worker has a prefetch of
+300. It receives 300 messages at once, which is 300 × 0.5 = 150 s of work for that one worker,
+while the worker next to it may have none. If it crashes, all 300 wait until the broker notices
+the dropped connection before they are given to anyone else. RabbitMQ's documentation notes that
+very high prefetch values bring little extra speed: its replicated queues cap prefetch at 2,000,
+and it says 2,000 is not meaningfully faster than 300. For slow work like sending email, a
+prefetch of a few messages per worker is plenty; for tiny, fast messages, tens or hundreds help.
+
+### Leases and acks: the handshake that decides everything
+
+Every message moves through a few states. Watching one message move through them answers most
+questions about duplicates and losses.
+
+<Figure caption="One message's life. It waits until a worker receives it; then it is in flight and hidden for the lease. An ack deletes it. If the lease runs out, or the worker gives a nack, it goes back to waiting. Each receive adds one to its count; once the count reaches the limit, the next receive moves it to the dead-letter queue instead.">
+  <Lifecycle />
+</Figure>
+
+The diagram has only two exits: the ack, and the dead-letter queue. Everything else returns the
+message to waiting, which is why a queue does not lose messages, and also why it repeats them.
+
+**When to ack.** A worker can ack at two moments, and each gives a different promise.
+
+- **Ack first, then work.** If the worker crashes after the ack, the message is gone and the work
+  was never done: at-most-once. The runnable example shows it: "emails sent: 0, left in queue: 0".
+  Use this only for work you would not miss, such as a metric that a newer one replaces.
+- **Work first, then ack.** If the worker crashes after the work and before the ack, the message
+  comes back and the work is done again: at-least-once. This is the right default for anything
+  that matters.
+
+Watch the second case end to end. The email for order 1042 goes out twice, and nothing was wrong
+with the queue.
+
+<StepThrough
+  title="A crash between the email and the ack"
+  actors={[
+    { id: 'queue', label: 'Queue', kind: 'queue' },
+    { id: 'a', label: 'Worker A', kind: 'server' },
+    { id: 'b', label: 'Worker B', kind: 'server' },
+    { id: 'mail', label: 'Email provider', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'queue', to: 'a', label: '1042, lease 30 s', text: 'At t = 0 s, worker A receives message 1042. The queue hides it until t = 30 s and counts this as receive number 1.' },
+    { from: 'a', to: 'mail', label: 'send email', text: 'At t = 1 s, worker A sends the confirmation email for order 1042. The customer receives it.' },
+    { from: 'a', to: 'a', label: 'crash', tone: 'bad', text: 'Before worker A can ack, its server dies. The queue hears nothing: no ack, and no message saying it crashed.' },
+    { from: 'queue', to: 'queue', label: 'lease over', tone: 'warn', text: 'At t = 30 s the lease runs out. As far as the queue knows, the work was never done, so message 1042 is waiting again.' },
+    { from: 'queue', to: 'b', label: '1042 again', text: 'At t = 31 s, worker B asks for work and receives message 1042, receive number 2.' },
+    { from: 'b', to: 'mail', label: 'send email', tone: 'warn', text: 'Worker B sends the email again. The customer now has two identical confirmations.' },
+    { from: 'b', to: 'queue', label: 'ack', tone: 'ok', dashed: true, text: 'Worker B acks, and the queue deletes message 1042 for good.' },
+  ]}
+  summary="The queue did exactly what it promised: it never lost message 1042. The duplicate came from the gap between doing the work and acking it, and only the consumer can close that gap, by checking whether the order was already emailed."
+/>
+
+**Choosing the lease.** The lease must be longer than the slowest normal handling of a message.
+If it is not, the queue gives the message to a second worker while the first is still working,
+and the work runs twice with no crash at all. The runnable example shows it: the email takes 45 s,
+the lease is 30 s, worker B takes the message at 30 s, and both workers send it, at 40 s and 45 s.
+Worker A's late ack is refused, because its lease is over.
+
+This failure is worse than it looks, because it arrives with load. On a bad day the email
+provider slows down for everyone. Sends that took 0.5 s now take 40 s, every lease runs out, every
+message is sent twice, and the provider, already struggling, now gets twice the calls.
+
+The other direction costs something too. The lease is also how long a crashed worker's message
+waits before anyone retries it. A 12-hour lease never causes a duplicate from slowness, but a
+crash delays that email by 12 hours. A practical rule: set the lease to several times the slowest
+handling time you see on a normal day (if the slowest send takes 2 s, a 30 s lease is 15 times
+that), and for work whose length varies a lot, have the worker extend its lease while it works.
+
+**Extending the lease (a heartbeat).** A worker doing long work tells the queue "still on it" every
+so often, and the lease restarts from that moment. In the runnable example the worker extends
+every 10 s during the 45-second send, and the email goes out once. In Amazon SQS the call is
+`ChangeMessageVisibility`; Google Cloud Pub/Sub's client libraries extend the deadline
+automatically, up to an hour by default. The heartbeat must stop if the work is stuck, or a hung
+worker holds the message forever: give the work itself a timeout too.
+
+**The late ack.** In the slow-send case, worker A finished at 45 s and acked, but by then worker B
+held the message. If A's ack had deleted the message, it would have deleted B's job out from
+under it. So each receive gets its own **receipt** (SQS calls it a receipt handle; in the Postgres
+version below it is the receive count), and an ack only counts if it carries the receipt of the
+current lease. This idea, a number that goes up with every new holder so a stale holder's actions
+can be refused, is called a **fencing token**.
+
+**RabbitMQ is different.** It has no per-message lease. It notices a dead worker by its dropped
+network connection, and puts every unacked message from that connection back in the queue, marked
+as redelivered. As a backstop against a worker that stays connected but never acks, it cuts that worker off
+and takes its messages back after a **consumer timeout**: 30 minutes by default, as of November
+2026.
+
+### Duplicates and the idempotent consumer
+
+By now duplicates have appeared from four directions:
+
+1. The producer retries a send whose confirmation was lost.
+2. A worker crashes after the work and before the ack.
+3. A lease runs out while the work is still going.
+4. The broker itself delivers twice. Amazon SQS standard queues say plainly that more than one
+   copy of a message may be delivered, because each message is stored on several machines.
+
+No setting removes all four, so the consumer must make the second copy harmless. There are three
+ways, from best to weakest.
+
+**Make the work naturally repeatable.** "Set order 1042's status to `emailed`" can run ten times
+with the same result. "Add 1 to the count of emails sent" cannot. Write the first kind whenever
+the work allows it.
+
+**Record what you did, in the same transaction as the effect.** When the work is a database
+change, keep a table of handled message IDs with a unique constraint, and insert into it in the
+same transaction as the change:
+
+```sql
+BEGIN;
+INSERT INTO handled_messages (message_id) VALUES ('order-confirmation-1042');
+-- fails on a duplicate: the unique key means the work was already done, so roll back and ack
+UPDATE loyalty_points SET points = points + 50 WHERE customer_id = 7;
+COMMIT;
+```
+
+Both rows commit together or neither does, so there is no moment where the points were added but
+the message is not recorded. This is often called an **inbox table**. Use an ID that is the same
+on every copy: the producer's own ID for the event (here `order-confirmation-1042`) is safer than
+the broker's message ID, which differs between two separate sends of the same event.
+
+**Pass a key to the outside service.** Sending an email is not a database change, so it cannot
+share a transaction with your table. If the provider accepts an **idempotency key** (a unique ID
+you send with the request, such as `order-confirmation-1042`, so it ignores a second request with
+the same key), use it: the provider then deduplicates for you. If it does not, check your table
+before sending and record after sending. A crash in the gap between "sent" and "recorded" still
+sends a second email, but that gap is a few milliseconds instead of a 30-second lease.
+
+So what is **exactly-once**? A broker cannot make your worker's side effects happen exactly once,
+because it cannot see them. When a product says "exactly-once", read what it covers: SQS FIFO's
+5-minute deduplication of sends, or Google Cloud Pub/Sub's promise not to redeliver a message
+after a successful ack. Either is useful, and neither covers an email sent a moment before a crash.
+What you can build is **effectively once**: at-least-once delivery plus an idempotent consumer.
+The delivery semantics page (coming soon) compares the three promises in depth.
+
+### Ordering: why a queue does not keep your order
+
+Most queues hand messages out roughly in the order they arrived. That is not the same as the
+messages being *handled* in that order, as soon as there is more than one worker.
+
+A worked example: the customer pays for order 1042 and cancels it a second later. Two messages
+enter the queue, `paid` and then `cancelled`, in that order. Worker 1 takes `paid` at 10:00:00.000
+and needs 800 ms, because it calls the payment service. Worker 2 takes `cancelled` at
+10:00:00.010 and needs 200 ms, so it finishes at 10:00:00.210 and sets the order to cancelled.
+Worker 1 finishes at 10:00:00.800 and sets it to paid. The queue kept the order; the workers did
+not. The customer cancelled, and the system says paid.
+
+Retries make it worse: if `paid` had crashed and come back 30 s later, it would run after
+everything that came behind it.
+
+There are two fixes.
+
+- **Process one key at a time.** Amazon SQS FIFO queues take a **message group ID**, here the order
+  ID. Messages in one group are handed out one at a time, in order: `cancelled` is not given to
+  anyone until `paid` is acked. Different orders still run in parallel. The cost is speed: a
+  stuck message blocks its whole group, and FIFO queues allow 300 send, receive or delete calls a
+  second without the high-throughput mode, or 3,000 messages a second in batches of 10, as of
+  November 2026. Kafka gets the same effect by sending all messages with one key to the same
+  **partition**, one ordered slice of its log, which a single reader handles in order.
+- **Make the handler tolerate order.** Put the order's version number, or the time of the change,
+  in each message, and have the handler ignore a message older than what the database already
+  has. Now `paid` (version 1) arriving after `cancelled` (version 2) is ignored. This keeps the
+  queue fast and is usually the better design.
+
+Ask whether you need order at all. "Send a confirmation email" does not care what came before it.
+Many systems need order only per key (per order, per customer), and almost none need one global
+order across all messages.
+
+### Retries and dead-letter queues
+
+When handling fails, the message comes back and is tried again. The lease sets the spacing: with
+a 30-second lease and no nack, the attempts are 30 s apart. The runnable example's poison message
+is tried at 0, 30, 60, 90 and 120 s, and moved to the dead-letter queue at 150 s.
+
+**Not every failure deserves a retry.** Sort failures into two kinds before you code the handler.
+
+- **Temporary failures:** the provider timed out or returned `503 Service Unavailable`, or the
+  database was busy. Retry, with growing gaps. In SQS, a worker can shorten or lengthen its lease
+  to set the next attempt's time, for example 10 s, then 20 s, then 40 s: the backoff idea from
+  the [retries page](/resilience/retries-and-backoff/), done by the queue.
+- **Permanent failures:** the message is malformed, the order does not exist, the email address is
+  invalid. Retrying cannot help. Send the message straight to the dead-letter queue, or record the
+  failure and ack it, instead of burning four more attempts.
+
+**Setting the limit.** The receive limit and the lease together decide how long a message
+survives an outage. With 5 receives 30 s apart, a message's last attempt comes 4 × 30 = 120 s
+after its first, and it is moved at 150 s. Now say the email provider is down for 3 minutes, which
+is 180 s. Any message that arrived more than 120 s before the provider came back fails all 5
+attempts: that is every message from the first 180 − 120 = 60 s of the outage, about
+40 × 60 = 2,400 messages, and nothing is wrong with any of them. Those messages need a redrive
+after the outage. Set the count and backoff so that their total covers the longest outage you
+expect from that dependency.
+AWS's documentation says the same: set `maxReceiveCount` high enough for sufficient retries.
+
+**A dead-letter queue is a to-do list, not a bin.** Three rules make it useful:
+
+- **Alarm on it.** Any message in the dead-letter queue means a customer did not get something.
+  Alert when its depth goes above zero.
+- **Keep messages long enough to fix the bug.** In SQS standard queues a message's expiry counts
+  from when it was first sent, not from when it reached the dead-letter queue. With the default
+  4-day retention on both, a message that spent 1 day failing has only 3 days left after it
+  arrives. Give the dead-letter queue the maximum, 14 days, as of November 2026.
+- **Plan the redrive.** After fixing the bug, move the messages back to the main queue. Because
+  the consumer is idempotent, a message that partly succeeded before failing is safe to run again.
+
+On a FIFO queue, moving one message aside lets the next message in its group go ahead, which
+breaks that group's order. AWS's documentation warns against dead-letter queues where the order
+of operations matters.
+
+### Backlogs: the arithmetic of a sale
+
+A queue holds the difference between how fast work arrives and how fast it is done. For short
+bursts that is its whole value. For long ones it becomes the problem.
+
+Work through a 10-minute festival sale. Orders jump from 40 a second to 300 a second for 600
+seconds. The 50 workers still send 100 emails a second.
+
+1. **During the sale.** 300 arrive and 100 leave every second, so the backlog grows by
+   300 − 100 = 200 messages a second. After 600 s it holds 200 × 600 = 120,000 messages.
+2. **The wait at the end of the sale.** An order placed at the 600-second mark has 120,000
+   messages ahead of it. At 100 a second, that is 120,000 ÷ 100 = 1,200 s, which is 20 minutes,
+   before its email goes out.
+3. **After the sale.** Orders drop back to 40 a second, so the backlog shrinks by
+   100 − 40 = 60 a second. Clearing 120,000 messages takes 120,000 ÷ 60 = 2,000 s, which is 33
+   minutes and 20 seconds.
+4. **In total.** The queue is empty again 600 + 2,000 = 2,600 s after the sale started, which is
+   43 minutes and 20 seconds. The runnable example prints the same numbers.
+
+<Figure caption="A 10-minute sale at 300 orders a second, with workers that send 100 emails a second. The backlog climbs by 200 a second to 120,000 at the end of the sale, then falls by only 60 a second, because new orders keep arriving. It is empty again 43 min 20 s after the sale began.">
+  <Backlog />
+</Figure>
+
+Notice the shape: the backlog builds in 10 minutes and takes 33 minutes to clear, because the
+workers' spare capacity after the sale, 60 a second, is much smaller than the extra load during
+it, 200 a second. AWS engineers described this in 2019 as a queue's two modes: a fast mode with
+no backlog, and a slow mode that a system falls into quickly and leaves slowly (AWS Builders' Library,
+kept as history).
+
+**Watch the age, not only the count.** "120,000 messages waiting" means nothing without the rate:
+it is a 20-minute wait at 100 a second, and a 2-minute wait at 1,000 a second. The number that
+matches what customers feel is the **age of the oldest message**, how long the message at the
+front has waited. Alert on that. In SQS it is the `ApproximateAgeOfOldestMessage` metric.
+
+**Scale workers on the backlog.** To keep up during the sale, the workers must send 300 emails a
+second, which at 2 per worker means 300 ÷ 2 = 150 workers. A common rule for autoscaling (adding
+and removing workers automatically) is to aim for a fixed backlog per worker. If you would accept
+each worker having 10 seconds of work waiting, that is 10 × 2 = 20 messages per worker. A backlog of
+2,000 then asks for 2,000 ÷ 20 = 100 workers. Two limits apply. New workers take time to start,
+so a scaler always lags a sudden spike. And more workers multiply the load on whatever they call:
+150 workers can send 300 emails a second only if the provider accepts 300 a second.
+
+**Not every message is worth doing late.** A confirmation email 20 minutes late is still useful.
+A one-time login code that expires after 5 minutes is not: sending it 20 minutes late wastes a
+worker and confuses the customer. Two tools help. Give such messages a time to live, and have the
+worker skip and ack any message older than it. And put work with different urgency in different
+queues (login codes in one, order emails in another, marketing newsletters in a third), each with
+its own workers, so a newsletter backlog never delays a login code.
+
+The sim below puts all of this in one place: an order stream, a queue, ten workers, the email
+provider and a dead-letter queue. Change the inputs and watch the backlog, the age of the oldest
+message, duplicates and dead letters.
+
+<QueueSim />
+
+## Choosing between them
+
+Most teams choose from five kinds of queue. All of them give at-least-once delivery with acks;
+they differ in how they hand out messages, how they keep order, and who runs them. Values are as
+of November 2026.
+
+| | Amazon SQS standard | Amazon SQS FIFO | RabbitMQ quorum queue | Postgres table | Kafka share group |
+|---|---|---|---|---|---|
+| Who runs it | AWS | AWS | You | You (your database) | You or a provider |
+| How a dead worker is noticed | Lease (30 s default) | Lease, per group | Dropped connection; 30 min consumer timeout | Lease column you write | Lock with a time limit |
+| Order | Best effort | Strict within a message group | Roughly in order; retries reorder | Whatever `ORDER BY` you write | Not kept |
+| Duplicates | Can happen even without failures | Sends deduplicated for 5 min | On crash or requeue | On crash or late ack | On crash or timeout |
+| Dead letters | Redrive policy | Redrive policy (breaks group order) | Delivery limit, 20 by default | A table you move rows to | Delivery attempt limit |
+| Best for | Most background jobs on AWS | Per-key order on AWS | Push delivery, routing, self-hosted | Jobs that must commit with your data | Teams already running Kafka |
+
+The table's point: the differences are in the edges, not the core. Every option needs an
+idempotent consumer, a dead-letter plan and an age alarm.
+
+How I would choose:
+
+- **Already on AWS, ordinary background work:** SQS standard. Nothing to run, and the defaults are
+  sensible.
+- **Need per-key order on AWS:** SQS FIFO with the key as the message group ID, after checking
+  that version numbers in the messages would not do the job.
+- **Low volume, and the job must be created in the same transaction as your data:** a Postgres
+  table with `SKIP LOCKED`. One fewer system, and no dual-write problem. Watch the table's size and
+  keep it small.
+- **Running your own servers, or you need flexible routing of messages to many queues:**
+  RabbitMQ with quorum queues.
+- **Already running Kafka** and want queue-style workers on it: Kafka share groups.
+
+## Build it yourself
+
+Three versions: the naive list from earlier, a correct queue with leases, acks and a dead-letter
+queue, and a production-shaped queue in one Postgres table. The full files, with the six runs
+whose output this page quotes, are in
+[examples/message-queues](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/message-queues).
+Both languages print identical output.
+
+The correct queue: receiving hides a message for the lease; an ack deletes it only if the lease is
+still held; an expired lease puts it back; too many receives move it to the dead-letter list. Time
+is passed in, so the example can replay crashes exactly.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="queue_demo.py"
+class Queue:
+    def __init__(self, visibility_s: float = 30, max_receives: int = 5):
+        self.visibility_s = visibility_s
+        self.max_receives = max_receives
+        self.waiting: deque[Message] = deque()
+        self.in_flight: dict[int, tuple[Message, float]] = {}  # receipt -> (message, lease end)
+        self.dead_letters: list[Message] = []
+        self._next_id = 1
+        self._next_receipt = 1
+
+    def send(self, body: dict) -> int:
+        msg = Message(self._next_id, body)
+        self._next_id += 1
+        self.waiting.append(msg)  # a real broker writes it to disk before answering
+        return msg.id
+
+    def _expire_leases(self, now: float) -> None:
+        for receipt, (msg, lease_end) in list(self.in_flight.items()):
+            if now >= lease_end:  # nobody acked in time: give it to someone else
+                del self.in_flight[receipt]
+                self.waiting.appendleft(msg)
+
+    def receive(self, now: float) -> tuple[int, Message] | None:
+        self._expire_leases(now)
+        while self.waiting:
+            msg = self.waiting.popleft()
+            if msg.receives >= self.max_receives:  # tried enough: park it
+                self.dead_letters.append(msg)
+                continue
+            msg.receives += 1
+            receipt = self._next_receipt
+            self._next_receipt += 1
+            self.in_flight[receipt] = (msg, now + self.visibility_s)
+            return receipt, msg
+        return None
+
+    def ack(self, receipt: int, now: float) -> bool:
+        """Delete for good. False if the lease already ran out (someone else may have it)."""
+        self._expire_leases(now)
+        return self.in_flight.pop(receipt, None) is not None
+
+    def extend(self, receipt: int, now: float) -> None:
+        """Heartbeat: 'still working on it', the lease restarts from now."""
+        msg, _ = self.in_flight[receipt]
+        self.in_flight[receipt] = (msg, now + self.visibility_s)
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="queue-demo.mjs"
+class Queue {
+  constructor({ visibilityS = 30, maxReceives = 5 } = {}) {
+    this.visibilityS = visibilityS;
+    this.maxReceives = maxReceives;
+    this.waiting = [];
+    this.inFlight = new Map(); // receipt -> { msg, leaseEnd }
+    this.deadLetters = [];
+    this.nextId = 1;
+    this.nextReceipt = 1;
+  }
+
+  send(body) {
+    const msg = { id: this.nextId++, body, receives: 0 };
+    this.waiting.push(msg); // a real broker writes it to disk before answering
+    return msg.id;
+  }
+
+  #expireLeases(now) {
+    for (const [receipt, { msg, leaseEnd }] of this.inFlight) {
+      if (now >= leaseEnd) { // nobody acked in time: give it to someone else
+        this.inFlight.delete(receipt);
+        this.waiting.unshift(msg);
+      }
+    }
+  }
+
+  receive(now) {
+    this.#expireLeases(now);
+    while (this.waiting.length) {
+      const msg = this.waiting.shift();
+      if (msg.receives >= this.maxReceives) { // tried enough: park it
+        this.deadLetters.push(msg);
+        continue;
+      }
+      msg.receives += 1;
+      const receipt = this.nextReceipt++;
+      this.inFlight.set(receipt, { msg, leaseEnd: now + this.visibilityS });
+      return { receipt, msg };
+    }
+    return null;
+  }
+
+  /** Delete for good. false if the lease already ran out (someone else may have it). */
+  ack(receipt, now) {
+    this.#expireLeases(now);
+    return this.inFlight.delete(receipt);
+  }
+
+  /** Heartbeat: "still working on it", the lease restarts from now. */
+  extend(receipt, now) {
+    this.inFlight.get(receipt).leaseEnd = now + this.visibilityS;
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
+The consumer is where duplicates are handled. This one remembers which orders it already emailed
+and acks a duplicate without sending. In production the set is a table with a unique key, as in
+the inbox table above.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="queue_demo.py"
+already_sent: set[int] = set()  # in production: a table with a unique key
+
+def handle(msg: Message, now: float) -> None:
+    order_id = msg.body["order_id"]
+    if order_id in already_sent:
+        return  # a duplicate delivery: do nothing, but still ack it
+    send_email(order_id, now)
+    already_sent.add(order_id)
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="queue-demo.mjs"
+const alreadySent = new Set(); // in production: a table with a unique key
+
+function handle(msg, now) {
+  const { orderId } = msg.body;
+  if (alreadySent.has(orderId)) return; // a duplicate delivery: do nothing, but still ack it
+  sendEmail(orderId, now);
+  alreadySent.add(orderId);
+}
+```
+  </TabItem>
+</Tabs>
+
+The six runs, with the crash placed exactly between the email and the ack:
+
+```text
+1. Ack on receive, worker crashes before sending
+    emails sent: 0, left in queue: 0, dead letters: 0
+2. Ack after sending, worker A crashes between send and ack
+    t=    1s confirmation for order 1042
+    t=   32s confirmation for order 1042
+    emails sent: 2, left in queue: 0, dead letters: 0
+3. Same crash, idempotent consumer
+    t=    1s confirmation for order 1042
+    emails sent: 1, left in queue: 0, dead letters: 0
+4. Work takes 45 s, lease is 30 s (worker A's ack accepted: False)
+    t=   40s confirmation for order 1042
+    t=   45s confirmation for order 1042
+    emails sent: 2, left in queue: 0, dead letters: 0
+   Same slow send, worker extends its lease every 10 s
+    t=   45s confirmation for order 1042
+    emails sent: 1, left in queue: 0, dead letters: 0
+5. Poison message, lease 30 s, max 5 receives
+    t=   0s attempt 1: handler crashes, no ack
+    ...
+    t= 120s attempt 5: handler crashes, no ack
+    t= 150s next receive moves order 10x42 to the dead-letter queue
+6. Backlog: 300 orders/s for 600 s, then 40/s; workers send 100 emails/s
+    peak backlog 120,000 messages at t=600 s
+    backlog empty again at t=2600 s (43 min 20 s)
+    an order placed at t=600 s waits 1200 s for its email
+```
+
+The production-shaped version keeps the queue in a Postgres table, next to the orders. The lease is
+a `visible_at` column, the receive count doubles as the fencing token, and
+`FOR UPDATE SKIP LOCKED` lets many workers claim rows at the same time without waiting for each
+other: a row another worker is claiming right now is skipped, not waited for. PostgreSQL's
+documentation describes exactly this use: avoiding lock contention among consumers of a
+queue-like table.
+
+```sql title="queue.sql"
+CREATE TABLE jobs (
+  id         bigserial   PRIMARY KEY,
+  body       jsonb       NOT NULL,
+  visible_at timestamptz NOT NULL DEFAULT now(), -- hidden from workers until this time
+  receives   int         NOT NULL DEFAULT 0,     -- how many times a worker took it
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Claim: take the oldest visible job and hide it for 30 s (its lease).
+UPDATE jobs
+   SET visible_at = now() + interval '30 seconds',
+       receives   = receives + 1
+ WHERE id = (SELECT id FROM jobs
+              WHERE visible_at <= now() AND receives < 5
+              ORDER BY id
+              LIMIT 1
+              FOR UPDATE SKIP LOCKED)
+RETURNING id, body, receives;
+
+-- Ack: delete it, but only while we hold the lease we were given.
+DELETE FROM jobs WHERE id = $1 AND receives = $2;
+```
+
+Because the job row can be inserted in the same transaction as the order, this version has no
+dual-write problem at all. Run against PostgreSQL 16 with four workers claiming at once:
+
+```text
+1. Four workers claim 200 jobs at the same time
+   claims: 200, different jobs: 200, claimed twice: 0
+2. A lease runs out and a late ack is refused
+   worker B claims job 1, receive number 2
+   worker A acks with receive number 1: rows deleted 0
+   worker B acks with receive number 2: rows deleted 1
+3. A job that used up 5 receives moves to dead_jobs
+   jobs left: 0, dead jobs: 1 (order 10x42)
+```
+
+Every claim, ack and delete changes rows, and Postgres keeps old row versions until its cleanup
+process, **vacuum**, removes them. A queue table with heavy traffic produces many of those, so
+keep the table small (delete acked jobs, do not mark them done) and keep an eye on vacuum. At
+hundreds of jobs a second this works well; at many thousands a second, a dedicated broker is the
+easier choice.
+
+## How real systems do it
+
+All values below are as of November 2026, from each project's documentation.
+
+**Amazon SQS.** Standard queues: at-least-once, best-effort order, a 30-second visibility
+timeout by default (0 s to 12 h, and the 12 hours count from the first receive), up to 10 messages
+per receive, long polling up to 20 s, messages up to 1 MiB, kept 4 days by default and at most 14.
+About 120,000 messages may be in flight at once; past that, receiving returns nothing new until
+some are deleted. FIFO queues add message groups and 5-minute send deduplication. A dead-letter
+queue is a normal queue named in the source queue's redrive policy. On a standard queue whose
+`maxReceiveCount` is above 3, a message received 3 or more times without being deleted is moved to
+the back of the queue, so a failing message does not hold up the ones behind it. A typical setup in AWS's infrastructure language:
+
+```yaml title="CloudFormation (excerpt)"
+OrderEmails:
+  Type: AWS::SQS::Queue
+  Properties:
+    VisibilityTimeout: 30          # seconds; longer than the slowest normal send
+    ReceiveMessageWaitTimeSeconds: 20   # long polling
+    RedrivePolicy:
+      deadLetterTargetArn: !GetAtt OrderEmailsDead.Arn
+      maxReceiveCount: 5
+OrderEmailsDead:
+  Type: AWS::SQS::Queue
+  Properties:
+    MessageRetentionPeriod: 1209600   # 14 days, the maximum
+```
+
+**RabbitMQ.** The broker pushes messages to consumers over a long-lived connection. Its
+documentation calls automatic acknowledgement (ack on delivery) unsafe; manual acks are the norm.
+Unacked messages are put back when a consumer's connection, or the channel (one stream of
+messages) inside it, closes, and are flagged as redelivered. Prefetch is set per channel with
+`basic.qos`. **Quorum queues**, its replicated
+queue type, cap prefetch at 2,000 and, since version 4.0 in 2024, drop or dead-letter a message
+after 20 deliveries by default (before 4.0 there was no limit). The consumer timeout is 30 minutes.
+
+**Celery and BullMQ**, the most common task-queue libraries for Python and Node.js. Celery acks a
+task's message *before* running it unless `task_acks_late` is turned on, so by default a worker
+that crashes mid-task loses the task. Its documentation also warns that with RabbitMQ 4.0 or
+later, a task that keeps crashing its worker can disappear after 20 redeliveries without a log
+line. BullMQ keeps jobs in Redis and gives each running job a lock that the worker renews; if a
+worker is so busy computing that it fails to renew it in time, the job is marked **stalled** and handed to another
+worker, or failed after too many stalls. That is the lease and its heartbeat under different names.
+
+**Kafka share groups.** Kafka is a log, where each partition is read by one consumer in order. Its
+**share groups**, added through the proposal KIP-932, let many consumers read the same
+partition with a time-limited lock on each record and a limit on delivery attempts: queue
+behaviour on top of a log. They were early access in Kafka 4.0 (March 2025) and became generally
+available in Kafka 4.2 (2026).
+
+Notice how the same three ideas appear under different names everywhere: a lease (visibility
+timeout, ack deadline, lock, consumer timeout), an ack (delete, `basic.ack`, job completion), and a
+limit on attempts (redrive policy, delivery limit, max stalls). Learn the ideas once, then read
+each product's defaults.
+
+## Gotchas and war stories
+
+:::danger[Acking before the work is done]
+Ack on receive is at-most-once: every crash, deploy or out-of-memory kill loses the messages being
+worked on, with no error anywhere. Celery does this by default. Check when your library acks, and
+for anything that matters, make it ack after the work.
+:::
+
+**The lease shorter than a bad day.** A 30-second lease is fine while sends take 0.5 s. When the
+provider slows to 40 s per send, every message is handed to a second worker before the first
+finishes, so the provider gets twice the calls exactly when it can least take them. Set the lease
+from the slowest handling you would still call normal, add heartbeats for long work, and give the
+work itself a timeout shorter than the lease.
+
+**The outage that fills the dead-letter queue.** With 5 receives and a 30-second lease, a message
+gives up after 150 s, because its fifth attempt comes 120 s after its first. A 10-minute provider
+outage (600 s) therefore dead-letters every message that arrived in its first 600 − 120 = 480 s,
+which is 8 of the 10 minutes, healthy messages included. After the outage, someone must notice
+and redrive them. Size retries to the outages you expect, and back off between attempts
+so the same number of attempts covers more time.
+
+:::caution[A delivery limit you did not know you had]
+RabbitMQ 4.0 made quorum queues stop after 20 deliveries by default, where 3.x retried forever.
+A message that crashes its worker on every attempt now quietly disappears after the 20th unless a
+dead-letter target is configured. After any broker upgrade, read the release notes for new
+defaults, and always configure a dead-letter target.
+:::
+
+**The dead-letter queue nobody reads.** Messages land there, nobody is alerted, and after the
+retention period they are deleted for good, often sooner than expected, because in SQS standard
+queues the clock started when the message was first sent. Alarm on depth above zero and give the
+dead-letter queue the longest retention.
+
+**A real incident: not knowing what was sent.** Buttondown, a newsletter service, published a
+postmortem in March 2025. On one of its own email-sending servers, too many worker threads opened
+connections to the database that tracked pending messages, and it stopped working properly. About
+70,000 messages were left in an unknown state: some marked pending had been sent, some marked sent
+had not. Around 13,000 subscribers across 40 authors saw delays of hours, missing emails or
+duplicates. The team reduced the number of workers, isolated the server, drained the queue and
+resent only the emails they were certain had not gone out. The lessons match this page: too many
+workers can overload what they depend on, and the state of each in-flight message (taken, done,
+acked) must be stored somewhere you can still trust when things break.
+
+## Trade-offs and when not to use it
+
+What a queue costs:
+
+- **Delay.** Work happens later: usually milliseconds later, sometimes, in a backlog, many
+  minutes later. Anything the caller needs in its response cannot go through a queue.
+- **Duplicates.** Every consumer must be idempotent, and every consumer written in a hurry is a
+  future double charge or double email.
+- **Another system to run and watch.** Queue depth, age of the oldest message, dead letters,
+  worker health. A broker you run yourself also needs upgrades, disks and a spare server to switch to when one
+  fails.
+- **Harder debugging.** One customer action now runs in two places at two times. Give every
+  message the ID of the request that created it and log it on both sides, so you can follow one
+  order through.
+- **Errors arrive late.** The caller has already been told "accepted". If the work fails, you need
+  another way to tell the user (an email, a status page, a notification).
+
+What a queue does not do: it does not add capacity, it does not make work exactly-once, and it
+does not keep messages in order across several workers.
+
+When not to reach for one:
+
+- **The caller needs the result now**, such as checking a password or charging a card before
+  showing "paid". Do it synchronously, with a timeout.
+- **Several services all need the same event.** That is pub/sub, usually
+  a topic feeding one queue per subscriber.
+- **You need to re-read history or replay events.** A log keeps
+  messages after they are read; a queue deletes them.
+- **The work is tiny and the dependency is reliable.** A queue between two functions in one
+  service adds a network hop, a system and duplicates, for nothing.
+
+## Interview corner
+
+Queues come up in almost every system design interview: "send notifications", "process uploads",
+"handle a flash sale". The interviewer is listening for whether you know what happens when things
+fail.
+
+Typical questions:
+
+1. "Design the order flow so that sending emails never slows down or breaks checkout."
+2. "A worker crashes in the middle of processing a message. What happens?"
+3. "How do you guarantee each message is processed exactly once?"
+4. "Your queue has 2 million messages in it. What do you do?"
+
+For the first, draw producer, queue, workers, dead-letter queue. Say that the order and the
+message must be written together (the outbox) and that workers ack after the work.
+
+For the second, explain the lease: the message reappears after the visibility timeout and another
+worker takes it. Then volunteer the consequence: the work may run twice, so the consumer is
+idempotent, with an inbox table or an idempotency key at the outside service.
+
+For the third, the strong answer refuses the premise politely: delivery is at-least-once, and
+"exactly once" is built as at-least-once plus idempotent handling, with the deduplication stored
+in the same transaction as the effect.
+
+For the fourth, ask for the rates before acting. Work out the drain time, backlog ÷ (processing
+rate − arrival rate), and check the age of the oldest message. Then: add workers if the downstream
+can take more, shed or expire work that is no longer useful, and separate urgent messages from the
+rest.
+
+## Check yourself
+
+<details>
+<summary>1. A worker takes a message, writes to the database, and crashes before acking. What happens next, and what must the worker's code do about it?</summary>
+
+When the lease runs out, the message becomes visible again and another worker receives it, so the
+database write runs a second time. The handler must be idempotent: write in a way that gives the
+same result when repeated, or record the message's ID in a unique-keyed table in the same
+transaction as the write, so the second attempt sees it and only acks.
+
+</details>
+
+<details>
+<summary>2. Each job takes up to 50 s, and the queue's visibility timeout is 30 s. Nothing ever crashes. What goes wrong?</summary>
+
+Every job that runs past 30 s is handed to a second worker while the first is still working, so
+slow jobs run twice, and the first worker's ack is refused or deletes nothing. Fix it by raising
+the lease above the slowest normal job, having workers extend their lease while they work, or
+both.
+
+</details>
+
+<details>
+<summary>3. 500 messages arrive per second for 5 minutes, and the workers process 300 per second. Normal traffic afterwards is 100 per second. How big does the backlog get, and how long does it take to clear?</summary>
+
+During the burst the backlog grows by 500 − 300 = 200 a second. 5 minutes is 300 s, so it reaches
+200 × 300 = 60,000 messages. Afterwards it shrinks by 300 − 100 = 200 a second, so clearing it
+takes 60,000 ÷ 200 = 300 s, which is 5 minutes.
+
+</details>
+
+<details>
+<summary>4. You use an SQS FIFO queue for a customer's account events, but there are 10 workers. Can two events for the same account be handled at the same time?</summary>
+
+Not if the account ID is the message group ID: messages in one group are handed out one at a time,
+and the next is held back until the previous one is acked or its lease runs out. If the group ID
+is the same for all messages, only one message is handled at a time across the whole queue. If
+every message has its own group ID, there is no ordering at all.
+
+</details>
+
+<details>
+<summary>5. The email provider is down for 4 minutes. Your queue has a 30-second lease and moves messages to the dead-letter queue after 5 receives. What should you expect after the outage?</summary>
+
+A message is tried at 0, 30, 60, 90 and 120 s after it arrives, and moved at 150 s. The outage
+lasts 4 × 60 = 240 s, so any message whose fifth attempt still falls inside it fails every time:
+that is every message that arrived in the first 240 − 120 = 120 s, the first 2 minutes. They reach
+the dead-letter queue even though nothing is wrong with them. After the provider recovers, those messages must be redriven to the main queue.
+Longer gaps between attempts, or more attempts, would have covered the outage.
+
+</details>
+
+## Recap
+
+- A message queue turns slow or unreliable work into a message: the producer replies at once, and
+  workers do the work later.
+- Receiving only hides a message for its lease; an ack after the work deletes it. Ack before the
+  work and a crash loses it.
+- Delivery is at-least-once: crashes, expired leases, producer retries and the broker itself all
+  create duplicates. Consumers must be idempotent, with deduplication stored alongside the effect.
+- The lease must outlast the slowest normal handling; extend it with heartbeats for long work, and
+  refuse acks from expired leases.
+- Order survives only one worker per key: use message groups or version numbers.
+- Retries need a limit, a dead-letter queue that someone is alerted about, and enough total time
+  to outlast a real outage. Drain time is backlog ÷ (processing rate − arrival rate); alert on the
+  age of the oldest message.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'delivery-semantics', why: 'At-most-once, at-least-once and "exactly once" side by side, and what each queue really promises.' },
+  { slug: 'dead-letter-queues', why: 'Designing the failure path: classifying errors, backoff between attempts, alerting and redrive.' },
+  { slug: 'backpressure', why: 'What to do when the backlog will not clear: slowing producers down instead of letting the queue grow.' },
+  { slug: 'pub-sub', why: 'When one event must reach several services, each with its own queue.' },
+  { slug: 'transactional-outbox', why: 'Closing the dual-write gap between saving the order and sending the message.' },
+  { slug: 'log-based-messaging', why: 'Kafka and logs: messages that stay after reading, ordered partitions, and replay.' },
+  { slug: 'replication', why: 'The same "save, then send" problem inside a database: how a leader streams its log to copies, and what a crash loses.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [Amazon SQS: visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html), [message quotas](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html) and [standard queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html) (living docs, checked November 2026) — leases, in-flight limits, sizes, retention and why standard queues can deliver twice.
+- [Amazon SQS: dead-letter queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) and [FIFO message identifiers](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queue-message-identifiers.html) (living docs, checked November 2026) — `maxReceiveCount`, the retention trap, message groups and 5-minute deduplication.
+- [Amazon SQS: short and long polling](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html) (living docs, checked November 2026) — why short polls return empty and how `WaitTimeSeconds` works.
+- [RabbitMQ: consumer acknowledgements and publisher confirms](https://www.rabbitmq.com/docs/confirms) (living docs, checked November 2026) — ack modes, automatic requeueing, prefetch and its effect on throughput.
+- [RabbitMQ: configurable limits and timeouts](https://www.rabbitmq.com/docs/limits) (living docs) and [Quorum queues in 4.0](https://www.rabbitmq.com/blog/2024/08/28/quorum-queues-in-4.0) (2024) — the default delivery limit of 20 and the 30-minute consumer timeout.
+- [PostgreSQL: SELECT, the locking clause](https://www.postgresql.org/docs/current/sql-select.html) (current version, checked November 2026) — `SKIP LOCKED` and its intended use for queue-like tables.
+- [Google Cloud Pub/Sub: subscription properties](https://cloud.google.com/pubsub/docs/subscription-properties) and [lease management](https://cloud.google.com/pubsub/docs/lease-management) (living docs, checked November 2026) — ack deadlines and automatic extension.
+- [Celery: configuration, `task_acks_late`](https://docs.celeryq.dev/en/stable/userguide/configuration.html) (Celery 5, checked November 2026) — early acks by default, and the RabbitMQ delivery-limit warning.
+- [BullMQ: stalled jobs](https://docs.bullmq.io/guide/workers/stalled-jobs) (living docs, checked November 2026) — job locks, renewal and what happens to a stalled job.
+
+**Engineering writing**
+
+- [Apache Kafka 4.0 release announcement](https://kafka.apache.org/blog/2025/03/18/apache-kafka-4.0.0-release-announcement/) (2025) and [Confluent: queue semantics with the share consumer](https://www.confluent.io/blog/kafka-queue-semantics-share-consumer-ga/) (2026) — share groups from early access to general availability.
+- [Buttondown: Incident #0016, external events backlog](https://buttondown.com/blog/incident-0016) (2025) — a public postmortem of stuck, duplicated and missing emails.
+
+**History**
+
+- [AWS Builders' Library: Avoiding insurmountable queue backlogs](https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/) (2019, kept as history) — the "two modes" view of queues and Amazon's ways of draining backlogs safely.

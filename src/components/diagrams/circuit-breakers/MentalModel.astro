@@ -1,0 +1,56 @@
+---
+// Part 1 mental model. Reviews has stopped answering. Top: no breaker, every page waits the full
+// 300 ms timeout, which needs 62 workers out of 20. Bottom: the breaker is open, pages skip the
+// call and are served without reviews in 10 ms, which needs 2 workers; Reviews gets a trial call
+// now and then. Numbers from the page's running example: 200 pages a second, 10 ms of own work.
+---
+
+<svg viewBox="0 0 400 440" width="100%" role="img" aria-labelledby="cb-mm-t cb-mm-d">
+  <title id="cb-mm-t">A circuit breaker stops a dead dependency from using up every worker</title>
+  <desc id="cb-mm-d">
+    Reviews has stopped answering. Top panel, no breaker: Product calls Reviews for every page and
+    every call waits the full 300 ms timeout, so 200 pages a second need about 62 workers and
+    Product has 20; about 2 pages in 3 fail. Bottom panel, breaker open: Product does not call
+    Reviews; each page is served without reviews in 10 ms, so only 2 workers are busy, and
+    Reviews receives one trial call every few seconds.
+  </desc>
+  <defs>
+    <marker id="cb-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- Panel 1: no breaker -->
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Reviews is down, no breaker</text>
+  <rect x="4" y="38" width="120" height="60" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="64" y="64" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Product</text>
+  <text x="64" y="86" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">20 workers</text>
+  <line x1="126" y1="68" x2="272" y2="68" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#cb-mm-a)" />
+  <text x="199" y="58" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">every page calls</text>
+  <rect x="276" y="38" width="120" height="60" rx="6" stroke-width="2" stroke-dasharray="6 3" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="336" y="64" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Reviews</text>
+  <text x="336" y="86" font-size="15" text-anchor="middle" style="fill: var(--viz-bad)">no answer</text>
+  <text x="4" y="126" font-size="16" style="fill: var(--viz-ink)">each page waits 300 ms for nothing</text>
+  <text x="4" y="150" font-size="16" style="fill: var(--viz-ink)">workers needed: about 62, workers: 20</text>
+  <text x="4" y="176" font-size="16" font-weight="700" style="fill: var(--viz-bad)">about 2 pages in 3 fail</text>
+
+  <line x1="4" y1="200" x2="396" y2="200" stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+
+  <!-- Panel 2: breaker open -->
+  <text x="4" y="232" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Reviews is down, breaker open</text>
+  <rect x="4" y="248" width="120" height="60" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="64" y="274" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Product</text>
+  <text x="64" y="296" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">20 workers</text>
+  <line x1="126" y1="278" x2="150" y2="278" stroke-width="2" style="stroke: var(--viz-flow)" />
+  <rect x="150" y="260" width="96" height="36" rx="18" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-bad)" />
+  <text x="198" y="284" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-bad)">OPEN</text>
+  <line x1="248" y1="278" x2="272" y2="278" stroke-width="2" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+  <rect x="276" y="248" width="120" height="60" rx="6" stroke-width="2" stroke-dasharray="6 3" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="336" y="274" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Reviews</text>
+  <text x="336" y="296" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">left alone</text>
+  <text x="4" y="336" font-size="16" style="fill: var(--viz-ink)">pages skip the call: served without</text>
+  <text x="4" y="358" font-size="16" style="fill: var(--viz-ink)">reviews in 10 ms</text>
+  <text x="4" y="382" font-size="16" style="fill: var(--viz-ink)">workers needed: about 2, workers: 20</text>
+  <text x="4" y="408" font-size="16" font-weight="700" style="fill: var(--viz-ok)">every page served</text>
+  <text x="396" y="432" font-size="15" text-anchor="end" font-style="italic" style="fill: var(--viz-muted); font-family: var(--note-font-display)">one trial call every 5 s checks on Reviews</text>
+</svg>

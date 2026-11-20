@@ -80,7 +80,7 @@ function-calling-and-tools → eval-driven-development
 | 6 | Query optimization | query-optimization | 21 | planned |
 | 7 | N+1 queries | n-plus-one-queries | 5 | published (2026-10-29) |
 | 8 | Connection pooling | connection-pooling | 4 | published (2026-10-26) |
-| 9 | Replication | replication | 30 | planned |
+| 9 | Replication | replication | 30 | published (2026-11-20) |
 | 10 | Read replicas | read-replicas | 22 | planned |
 | 11 | Partitioning and sharding | partitioning-and-sharding | 28, 29 | planned |
 | 12 | Schema migrations and versioning | schema-migrations | 23, 24 | planned |
@@ -121,7 +121,7 @@ function-calling-and-tools → eval-driven-development
 
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
-| 1 | Message queues | message-queues | 36 | planned |
+| 1 | Message queues | message-queues | 36 | published (2026-11-20) |
 | 2 | Pub/Sub | pub-sub | 37 | planned |
 | 3 | Event-driven architecture | event-driven-architecture | 38 | planned |
 | 4 | Log-based messaging (Kafka) | log-based-messaging | new | planned |
@@ -139,7 +139,7 @@ function-calling-and-tools → eval-driven-development
 |---|---|---|---|---|
 | 1 | Timeouts | timeouts | 10 | published (2026-11-06) |
 | 2 | Retries, exponential backoff and jitter | retries-and-backoff | 11, 12 | published (2026-11-06) |
-| 3 | Circuit breakers | circuit-breakers | 13 | pilot |
+| 3 | Circuit breakers | circuit-breakers | 13 | published (2026-11-18) |
 | 4 | Bulkheads | bulkheads | new | planned |
 | 5 | Rate limiting | rate-limiting | 2 | published (2026-10-17) |
 | 6 | Load shedding | load-shedding | new | planned |

@@ -1,0 +1,1108 @@
+---
+title: Circuit Breakers
+description: Why a service that keeps calling a dead dependency goes down with it, even with a good timeout, and how a circuit breaker stops the calls for a while and then checks for recovery, explained from zero with one page and one Reviews service, then in depth. The closed, open and half-open states, what counts as a failure, count and time windows, minimum calls, how long to stay open, trial calls, where breaker state lives, why one breaker for a sharded service turns a partial failure into a total one, fallbacks, breakers with retries, adaptive throttling, and the defaults of Resilience4j, Polly, Envoy and opossum.
+tagline: When another service keeps failing, stop calling it for a while, so your own service stays up and the other one gets room to recover.
+difficulty: intermediate
+track: resilience
+prerequisites: [timeouts, retries-and-backoff]
+next: [bulkheads, load-shedding, graceful-degradation, health-checks-and-probes]
+lastReviewed: 2026-11-18
+sidebar:
+  order: 3
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/circuit-breakers/MentalModel.astro';
+import StateMachine from '../../../components/diagrams/circuit-breakers/StateMachine.astro';
+import Window from '../../../components/diagrams/circuit-breakers/Window.astro';
+import Scope from '../../../components/diagrams/circuit-breakers/Scope.astro';
+import BreakerSim from '../../../components/sims/circuit-breakers/BreakerSim.astro';
+
+## The question
+
+Your product page calls a Reviews service to show customer reviews. You did everything right: the
+call has a short timeout, and if it fails, the page is shown without reviews. Then Reviews goes down
+completely, and your product page goes down with it. Two customers in three get an error instead of
+a page, a page that could have been shown perfectly well without reviews. How does a feature you
+can live without take down the page? And how do you stop it?
+
+The short answer: a timeout limits how long each call waits, but when every call fails, every page
+still waits the full timeout, and those waits use up your server. A **circuit breaker** watches the
+calls to Reviews. When most of the recent ones have failed, it stops making them for a few seconds:
+the page skips Reviews and is served at once without reviews. Every few seconds it lets one call
+through to check whether Reviews is back, and when that call succeeds, normal calls resume.
+
+## The idea in plain words
+
+Follow one page through one bad minute. The **Product** service builds product pages. For every
+page it calls the **Reviews** service and waits for the answer. Reviews is a **dependency** of
+Product: a service Product calls while it works.
+
+1. **The setup.** Product can work on 20 pages at the same time and no more. Each of those 20
+   places is called a **worker** (the building blocks below explain workers). A page keeps its
+   worker from the moment it starts until it is sent, including the time spent waiting for Reviews.
+2. **A normal day.** 200 pages are requested every second. Each page needs 10 ms of Product's own
+   work plus a call to Reviews that takes about 40 ms, so a page holds its worker for
+   10 + 40 = 50 ms. Every second, Product needs 200 × 50 ms = 10,000 ms of worker time, which is 10
+   seconds of work packed into each second. Each worker gives one second of its time per second, so
+   about 10 workers are busy at any moment, out of 20. Plenty of room.
+3. **The timeout.** Product waits at most 300 ms for Reviews. On a normal day almost no call comes
+   near that, so the limit never fires. It is there for the bad day.
+4. **The bad day.** At 10:00:00, the database behind Reviews stops answering, and Reviews stops
+   answering too. Every call from Product now waits the full 300 ms and then fails. So every page
+   holds its worker for 10 + 300 = 310 ms, which is 0.31 seconds.
+5. **Product runs out of workers.** 200 pages a second, each holding a worker for 0.31 seconds,
+   need 200 × 0.31 = 62 workers busy at any moment. Product has 20. Turned around, 20 workers that
+   are each held for 0.31 s can finish at most 20 ÷ 0.31 ≈ 64 pages a second. The other
+   200 − 64 = 136 pages a second find no free worker and fail. That is 136 out of every 200, about
+   2 pages in 3. The timeout worked exactly as designed; there are too many timeouts.
+6. **Catching the error does not help.** Product already shows the page without reviews when the
+   call fails. But the error arrives only after the 300 ms wait. The fallback is right; it comes
+   300 ms too late, and the worker is held all that time.
+7. **The idea: stop calling.** Product keeps a record of how its last 20 calls to Reviews ended.
+   When at least 10 of those 20 have failed, it concludes that Reviews is down and stops calling it
+   for 5 seconds. This switch is the circuit breaker, and "stopped" is called **open**.
+8. **While the breaker is open.** A page does not call Reviews at all. It gets an immediate "not
+   calling Reviews" error, shows the page without reviews, and is done in 10 ms. 200 pages a second
+   × 0.01 s = 2 workers busy. Every page is served again, without reviews.
+9. **Reviews gets room to recover.** Without the breaker, Reviews kept receiving about 64 calls a
+   second, all the calls Product's 20 workers could send, each one asking a struggling service for
+   work. With the breaker open it receives almost nothing, which makes restarting much easier.
+10. **Checking whether Reviews is back.** After 5 seconds the breaker lets one call through, a
+    **trial call**. If it fails, the breaker stays open for another 5 seconds. If it succeeds, the
+    breaker **closes**: normal calls resume and pages show reviews again.
+
+<Figure caption="Reviews has stopped answering. Without a breaker, every page waits the 300 ms timeout, which needs about 62 workers when Product has 20, so about 2 pages in 3 fail. With the breaker open, pages skip the call and are served without reviews in 10 ms, which needs 2 workers.">
+  <MentalModel />
+</Figure>
+
+The picture shows the trade. Without the breaker, the page pays 300 ms per call to learn something
+it already knows: Reviews is down. With the breaker, it pays that price for the first few calls,
+then stops paying and serves a slightly poorer page at full speed.
+
+Here is the bad minute with real times, from the runnable example on this page. Reviews stops
+answering at 10:00:00.000. The first call fails when its 300 ms timeout runs out, at
+10:00:00.300. Product makes a call every 1,000 ÷ 200 = 5 ms, so the calls behind it fail 5 ms apart:
+the tenth failure comes 9 gaps of 5 ms after the first, 9 × 5 = 45 ms later, at 300 + 45 = 345 ms,
+which is 10:00:00.345. The other 10 places in the 20-call record still hold successes from right
+before the outage, so that makes 10 failures in the last 20 calls, and the breaker opens. Trials at 10:00:05.345, 10:00:10.645 and 10:00:15.945 each fail after 300 ms. Each
+trial starts 5 seconds after the last one failed, so the trials are 5 + 0.3 = 5.3 seconds apart.
+Reviews comes back at 10:00:20. The next trial, at 10:00:21.245, succeeds, and the breaker closes.
+For the rest of its 20-second outage Reviews received 3 trial calls, instead of about
+64 × 20 = 1,280 calls without a breaker, and pages showed reviews again 1.2 seconds after Reviews
+recovered.
+
+An everyday picture: the circuit breaker in your home's fuse box (in India, the MCB). When a fault
+makes too much current flow, the breaker trips and cuts the circuit, so the wires do not overheat
+and the rest of the house keeps working. The software breaker borrowed the name and its words: in a
+home, a **closed** circuit lets current flow, so a closed software breaker lets calls flow, and an
+open one stops them. The picture stops working in one place: a home breaker stays off until a
+person flips it back. A software breaker tests the line itself, with a trial call, and closes on
+its own.
+
+## The building blocks
+
+Seven ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A worker and a worker pool
+
+**What it is.** A **worker** is the part of a server that handles one request at a time. A **worker
+pool** is the fixed set of workers the server has.
+
+**Why it exists.** Every request in progress uses memory and other resources, so a server cannot
+take on unlimited requests at once. It sets a fixed number and makes the rest wait or turns them
+away.
+
+**Example.** Product has a pool of 20 workers. Page request number 21 arrives while all 20 are
+busy. It waits in a line, called a **queue**, until a worker is free. If the queue is full too,
+Product refuses it at once, usually with `503 Service Unavailable`.
+
+**The technical version.** A worker can be a **thread** (one line of work inside a program), a
+**process** (one running copy of the program), or a slot under a limit on how many requests an
+**async** server handles at once (an async server handles many requests on one thread, switching
+between them while they wait). In every case a request holds its worker until it finishes, and
+waiting for a dependency counts as holding it. The [timeouts page](/resilience/timeouts/) covers
+workers in depth.
+
+### How many workers a load keeps busy
+
+**What it is.** The number of workers busy at any moment is, on average, the number of requests per
+second times how many seconds each request holds its worker.
+
+**Why it exists.** It turns "Reviews is slow" into a number you can compare with the pool. Double
+how long each page holds a worker and you need twice the workers, at the same traffic.
+
+**Example.** 200 pages a second, each holding a worker for 50 ms. First turn milliseconds into
+seconds: 50 ms is 0.05 s. Then multiply: 200 × 0.05 = 10 workers busy. If each page instead holds
+its worker for 310 ms, that is 0.31 s, and 200 × 0.31 = 62 workers.
+
+**The technical version.** This is **Little's law**: items in a system = arrival rate × time each
+item spends there. Read the other way round, a pool can serve at most workers ÷ time held:
+20 ÷ 0.31 s ≈ 64 requests a second.
+
+### A timeout
+
+**What it is.** A **timeout** is a limit on how long the caller waits for one call. When it runs
+out, the caller stops waiting and gets an error instead of an answer.
+
+**Why it exists.** A call can end three ways: an answer, an error, or never. "Never" holds a worker
+for ever. A timeout turns "never" into an error after a known time.
+
+**Example.** Product's timeout on Reviews is 300 ms. A call that gets no answer fails at 300 ms, and
+the worker is free again.
+
+**The technical version.** A timeout limits what one failing call costs. It does nothing about how
+many calls fail. When a dependency is completely down, every call costs the full timeout, which is
+the problem this page solves. How to choose the number is on the
+[timeouts page](/resilience/timeouts/#choosing-the-number).
+
+### Failing fast
+
+**What it is.** **Failing fast** means returning an error at once, without waiting, when you
+already know the work cannot succeed.
+
+**Why it exists.** An error after 300 ms and an error after 0 ms tell the caller the same thing. The
+fast one does not hold a worker for 300 ms first.
+
+**Example.** A page that waits for a dead Reviews holds a worker for 310 ms. A page that fails fast
+on the Reviews call holds it for 10 ms, only Product's own work. That is 310 ÷ 10 = 31 times fewer
+workers for the same traffic.
+
+**The technical version.** Failing fast needs a reason to believe the call will fail without making
+it. A circuit breaker provides that reason: its record of recent calls.
+
+### A fallback
+
+**What it is.** A **fallback** is what your code does instead when a call fails: a simpler answer
+that is still useful.
+
+**Why it exists.** Most pages need some dependencies and could live without others. A product page
+without reviews is still a product page; without the price, it is not.
+
+**Example.** When the Reviews call fails, or the breaker refuses it, Product shows the page with
+the line "Reviews are not available right now". Another fallback could be the reviews it saved a
+few minutes ago.
+
+**The technical version.** A fallback can be a default value, a saved copy (a **cache**: a store of
+recent answers kept close by so they can be reused), a smaller version of the feature, or an error
+returned fast. Part 2 covers what makes a fallback safe.
+
+### A failure rate over a window
+
+**What it is.** A **failure rate** is the share of calls that failed. A **window** is the set of
+recent calls it is counted over, such as the last 20 calls or the last 10 seconds.
+
+**Why it exists.** One failure tells you nothing; healthy services fail now and then. Many failures
+among the recent calls tell you something is wrong now. Old calls must drop out of the count, or a
+failure from last week would still count today.
+
+**Example.** A share is often written as a percentage: a number out of 100. 10 failures out of 20
+calls is 10 ÷ 20 = 0.5, and 0.5 × 100 = 50%. Now the next call fails too: it enters the window and
+the oldest call leaves. If the oldest one had succeeded, the window now holds 11 failures out of 20,
+which is 11 ÷ 20 = 0.55, or 55%.
+
+**The technical version.** The breaker opens when the failure rate in the window reaches a
+**threshold**, such as 50%, and only once the window holds enough calls to judge, a **minimum
+number of calls**. Part 2 compares windows counted in calls with windows counted in seconds.
+
+### Three states: closed, open and half-open
+
+**What it is.** A circuit breaker is always in one of three **states**, and each state has its own
+rule for what to do with a call.
+
+**Why it exists.** The breaker has to do three different jobs: let calls through and watch them,
+refuse calls while the dependency is down, and test carefully whether it is back. One state for each
+job keeps the rules small.
+
+**Example.** **Closed**: Product calls Reviews and records each result. 10 of the last 20 fail, so
+the breaker moves to **open**: for 5 seconds, every call is refused at once. Then it moves to
+**half-open**: the next call is a trial and goes through, and the others are still refused until
+it ends. The trial succeeds, so the breaker moves to closed.
+
+**The technical version.** A set of states with fixed rules for moving between them is called a
+**state machine**. The breaker's has four moves: closed to open when the failure rate reaches the
+threshold, open to half-open when the open time is up, half-open to closed when the trial
+succeeds, and half-open to open when it fails.
+
+:::tip[If you stop here]
+- A timeout limits what each failing call costs, but when a dependency is down, every call fails
+  and every one costs the full timeout. Those waits can use up all your workers.
+- A **circuit breaker** watches the recent calls to one dependency. When too many failed, it
+  **opens**: calls are refused at once, without being made, and your code uses a **fallback**.
+- After a few seconds it goes **half-open** and lets a trial call through. Success **closes** it and
+  calls resume; failure keeps it open a while longer.
+- It protects twice: your workers stop waiting for a dead service, and the dead service stops
+  receiving calls while it tries to recover.
+:::
+
+## Going deeper
+
+Part 1's breaker had round numbers and one outage. Real breakers decide from a small number of recent calls, which can mislead by chance,
+alone, inside each running copy of your service (a busy service runs many identical copies on many
+servers), whether a whole other service is down. How many
+failures prove that it is, and which errors count as failures? How long should it stay open, when
+every extra second open is a second without reviews after recovery? And when "Reviews" is really
+four servers and only one of them is broken, does your breaker cut off the three healthy ones too?
+
+A breaker is a guess, made on every call, from the last few seconds of evidence. A wrong guess
+costs in both directions. Open too late, or never, and Product loses its workers, as in Part 1.
+Open when Reviews is fine, or stay open after it recovers, and every customer loses reviews they
+could have had. Each knob of a breaker trades one of those mistakes against the other, and the
+rest of this page is about how to set each one.
+
+## The obvious fix, and why it breaks
+
+The first breaker most people write counts failures and stops after a limit:
+
+```python
+class NaiveBreaker:
+    def __init__(self, max_failures: int = 10):
+        self.max_failures = max_failures
+        self.failures = 0  # never reset, never forgets
+
+    def allow(self, now_ms: float) -> bool:
+        return self.failures < self.max_failures  # once off, off for ever
+
+    def record(self, ok: bool, now_ms: float, trial: bool = False) -> None:
+        if not ok:
+            self.failures += 1
+```
+
+It has two flaws, and the runnable example shows both. First, it never forgets. A healthy Reviews
+where 1 call in 1,000 fails still collects failures: at 200 calls a second it fails about 200 ÷
+1,000 = 0.2 times a second, so 10 failures arrive in about 10 ÷ 0.2 = 50 seconds. In the example's
+run the tenth failure came after 7,518 calls, which is 7,518 ÷ 200 = 37.6 seconds of a
+perfectly healthy day. Second, it never checks again. Once off, it stays off, through the outage
+and after it, until someone restarts the service.
+
+The common upgrade counts **consecutive** failures instead: open after about 5 failures in a row, and any
+success resets the count. It forgets, and that is the default in two popular libraries, `pybreaker`
+for Python and `gobreaker` for Go. But a streak measures luck, not a rate. Here is why, with one
+idea from school.
+
+A **probability** is a number from 0 to 1 for how likely something is: 1 in 4 is 0.25. When two
+things happen independently (one does not affect the other), the chance that both happen is the two chances multiplied: two calls
+that each fail 1 time in 4 both fail with chance 0.25 × 0.25 = 0.0625, about 1 in 16.
+
+Now suppose one Reviews server in four is broken, so 1 call in 4 fails. The chance that a given
+call and the 4 after it all fail is 0.25 × 0.25 × 0.25 × 0.25 × 0.25 ≈ 0.001, about 1 in 1,000. At
+200 calls a second there are 200 new places a second where such a run can start, so one appears
+about every 1,000 ÷ 200 = 5 seconds (a little less often in practice, because overlapping runs
+count once, but still every few seconds). The breaker opens every few seconds, cutting off the three
+healthy servers each time. Meanwhile a dependency that fails 1 call in 50 almost never strings 5
+together (0.02 multiplied by itself five times is about 3 in a billion), even when those failures cost a 300 ms timeout each. The threshold you meant ("too many
+failures") is not the one you got ("an unlucky streak").
+
+What the breaker needs is a failure **rate** over a window that forgets, a minimum number of calls
+before it judges, and a way to test for recovery. Before building that, it helps to separate the
+breaker from five ideas it is often confused with:
+
+- A **timeout** limits how long one call waits. A breaker decides whether to make the call at all.
+  You need both: the timeout produces the failures the breaker counts.
+- A **retry** sends a failed call again. A breaker that is open stops retries along with first
+  attempts. A **retry budget** caps only the extra calls retries add (the
+  [retries page](/resilience/retries-and-backoff/#retry-budgets-capping-the-extra-load) compares the
+  two).
+- **Rate limiting** is the opposite side: a server capping how many requests one client may send
+  ([rate limiting](/resilience/rate-limiting/)). A breaker is a client protecting itself from a
+  server.
+- A **bulkhead** gives each dependency its own small pool of workers, so one slow dependency can
+  hold at most its own pool. It limits the damage while calls still fail; the breaker stops the
+  calls.
+- **Load shedding** is a server refusing work it cannot finish because it is itself overloaded.
+  A breaker refuses work because someone else is failing.
+
+## How it works, piece by piece
+
+### The three states, precisely
+
+Part 1 named the states. Here is exactly what a breaker does with a call in each one, and with the
+calls that are still running when it changes state.
+
+<Figure caption="A breaker's three states and four moves. Closed counts results; when 10 of the last 20 failed it opens. Open refuses every call; after 5 s it goes half-open. Half-open lets one trial through: success closes the breaker, failure opens it again.">
+  <StateMachine />
+</Figure>
+
+The figure shows that only two things move a breaker: results of calls, and time passing. Each
+state reads one of them.
+
+**Closed.** Every call is allowed. When a call ends, its result goes into the window, and the
+breaker checks the window: if it holds at least the minimum number of calls and the failure rate is
+at or above the threshold, the breaker opens and notes the time.
+
+**Open.** Every call is refused before it is made. The caller gets a specific error, such as
+`CallNotPermittedException` in Resilience4j or `BrokenCircuitException` in Polly (popular breaker
+libraries for Java and .NET; "How real systems do it" below compares the main libraries), so the code can
+tell "the breaker refused" apart from "Reviews failed". Calls that started before the breaker
+opened still finish, and their results are ignored: the decision is already made.
+
+**Half-open.** Most libraries move to half-open lazily: the first call after the open time ends
+finds the time is up, switches the state and becomes the trial. Only a fixed number of trial calls
+are allowed through, one in `pybreaker`, `gobreaker` and opossum, 10 by default in Resilience4j.
+Every other call is refused while the trials run, exactly as when open. If the trials succeed, the
+breaker closes and clears the window, so the outage's failures do not count against the recovered
+service. If a trial fails, the breaker opens again.
+
+Many libraries add states for the people who run the service. Resilience4j has `FORCED_OPEN` (refuse everything, for
+example to switch off a feature during an incident), `DISABLED` (always allow) and `METRICS_ONLY`
+(count but never open). Polly calls its forced state "isolated". These are worth having on day
+one: they let you test the fallback in a **staging environment** (a copy of production used for
+testing) by forcing the breaker open.
+
+Here is Part 1's outage again, call by call.
+
+<StepThrough
+  title="One outage, call by call"
+  description="Product asks its breaker before each call to Reviews. Reviews stops answering, the breaker opens after ten failures, refuses calls for five seconds, sends a trial that fails, waits again, and closes when a later trial succeeds."
+  actors={[
+    { id: 'product', label: 'Product', kind: 'client' },
+    { id: 'breaker', label: 'Breaker', kind: 'server' },
+    { id: 'reviews', label: 'Reviews', kind: 'server' },
+  ]}
+  steps={[
+    { from: 'breaker', to: 'reviews', label: 'call', text: 'The breaker is closed, so the call goes through. At 10:00:00.000 Reviews stops answering, and this call will never get an answer.' },
+    { from: 'reviews', to: 'breaker', label: '300 ms timeout', text: 'After 300 ms the timeout fires and the call fails. The breaker records a failure. Calls made every 5 ms behind it fail the same way.', tone: 'bad', dashed: true },
+    { from: 'breaker', to: 'breaker', label: 'OPEN', text: 'At 10:00:00.345, 10 of the last 20 calls have failed: 50%, the threshold. The breaker opens and notes the time.', tone: 'bad' },
+    { from: 'product', to: 'breaker', label: 'may I call?', text: 'The next page asks the breaker before calling Reviews.' },
+    { from: 'breaker', to: 'product', label: 'refused', text: 'No call is made. Product gets an error at once and serves the page without reviews, 10 ms after it started.', tone: 'warn', dashed: true },
+    { from: 'breaker', to: 'breaker', label: '5 s later', text: 'At 10:00:05.345 the open time is up. The breaker goes half-open, and the next call becomes the trial.', tone: 'warn' },
+    { from: 'breaker', to: 'reviews', label: 'trial call', text: 'One call goes to Reviews. Every other page is still refused at once while the trial runs.' },
+    { from: 'reviews', to: 'breaker', label: 'timeout', text: 'Reviews is still down. The trial fails after 300 ms, and the breaker opens for another 5 s. Each such cycle costs Reviews one call.', tone: 'bad', dashed: true },
+    { from: 'reviews', to: 'breaker', label: '200 OK', text: 'Reviews recovered at 10:00:20. The trial at 10:00:21.245 succeeds in about 30 ms.', tone: 'ok', dashed: true },
+    { from: 'breaker', to: 'breaker', label: 'CLOSED', text: 'The breaker closes and clears its window. Pages call Reviews and show reviews again.', tone: 'ok' },
+  ]}
+  summary="The breaker paid for ten failures to learn that Reviews was down, then refused about 4,000 calls (200 a second for about 21 seconds), each in no time at all. Reviews received 3 trial calls while it was down and a fourth, successful one after it recovered, and pages showed reviews again 1.2 s after it came back."
+/>
+
+### What counts as a failure
+
+The breaker's window is only as good as what goes into it. The question is not "did the call
+fail?" but "does this failure say that Reviews is unwell?"
+
+**Count these:** a timeout, a refused or reset connection, and a `5xx` status such as `500` or
+`503`. Each says the dependency could not do the work.
+
+**Do not count these:** `4xx` statuses such as `400 Bad Request` or `404 Not Found`. They say the
+caller asked for something wrong, and Reviews answered correctly. Imagine a bot requests 2,000 product pages
+for products that do not exist, and Reviews answers `404` to each. Counting those would open the
+breaker against a healthy Reviews and hide reviews from every real customer. The production example
+on this page sends 2,000 calls that all return `404` and stays closed. Also do not count calls
+your own code cancelled, for example because the user closed the page.
+
+**Decide about these:** `429 Too Many Requests` and `503` with a `Retry-After` header mean "slow
+down". Counting them lets the breaker back off for everyone, which is usually what the dependency
+wants; also honour `Retry-After` itself, as the
+[retries page](/resilience/retries-and-backoff/#listening-to-the-server) describes. The example code
+on this page takes the other choice: it treats every `4xx`, `429` included, as not a failure and
+leaves slowing down to the retry logic.
+
+Library defaults are blunt here. Polly counts every exception except a cancellation. `gobreaker`
+counts every error. Resilience4j counts every exception unless you list some as ignored. So the
+classifier is code you write: a function that looks at the error or the status and says
+"counts" or "does not count", like `counts_as_failure` in the example below.
+
+**Slow calls are failures too.** A Reviews that answers every call in 2.5 seconds is almost as bad
+as one that does not answer, because each call holds a worker for 2.5 s. Resilience4j can count a
+call as failed when it takes longer than `slowCallDurationThreshold`, but by default that is 60
+seconds, and it only opens when 100% of calls are slow, so out of the box this check almost never
+fires.
+
+There is a subtlety in when a slow call is judged. A call that takes 2.5 s reaches the window only
+when it ends, 2.5 s after it started, and by then the window also holds seconds of earlier
+successes. The production example makes Reviews answer in 2.5 s from 10 s onward, with a
+10-second window and a 1-second slow threshold. From 10 s to 12.5 s no slow call has ended yet, so
+the window sees nothing wrong. From 12.5 s, slow calls end at 200 a second, but the window still
+holds about 7 seconds of fast calls from before 10 s, which drop out one second at a time. Only at
+16 s do the slow ones (701) outnumber what is left (608 fast), and the breaker opens, 6 seconds
+into the slowdown. Setting the timeout close to the slow threshold fixes most of this: a call is then cut off,
+and judged, at 1 s instead of 2.5 s.
+
+### Counting: windows and minimum calls
+
+There are two ways to keep "the recent calls", and the libraries split between them.
+
+<Figure caption="Top: a count window keeps the results of the last 10 calls; 5 failed, so the rate is 50%, and each new result pushes out the oldest. Bottom: a time window keeps one bucket per second for the last 10 seconds, each holding a count of calls and failures; each new second wipes the oldest bucket.">
+  <Window />
+</Figure>
+
+The top half reads as a fixed list of results, the bottom half as a short history. Both answer the same
+question, "what share of recent calls failed?", with different meanings of "recent".
+
+**A count window** holds the last *N* results in a fixed list. When a new result arrives, the
+oldest one leaves. Its memory never grows: *N* entries. At 200 calls a second a 100-call window
+covers the last 100 ÷ 200 = 0.5 seconds; at 2 calls a second the same window covers the last 50
+seconds, which may include an outage that ended long ago. Resilience4j uses a count window of 100
+calls by default.
+
+**A time window** covers the last *T* seconds, kept as one **bucket** per second. Each bucket holds
+two counters, calls and failures. When a new second starts, its bucket replaces the oldest one,
+wiping it. The rate is the failures in all buckets divided by the calls in all buckets. Memory is
+*T* buckets of two numbers, whatever the traffic. Polly uses 30 seconds by default, opossum 10
+seconds in 10 buckets.
+
+**The minimum number of calls** stops the breaker judging from a handful. Without one, a single
+failure out of a single call is a 100% failure rate. The production example sends 4 calls in 2
+seconds, 3 of which fail: a 75% rate, but under its minimum of 20 calls, so it stays closed.
+
+The minimum cuts both ways. Polly's defaults need 100 calls in 30 seconds before the 10% threshold
+counts at all, so a dependency called fewer than 100 ÷ 30 ≈ 3.3 times a second can never open its
+breaker. opossum's default minimum, `volumeThreshold`, is 0, so its breaker can open on 1 failure
+out of 1 call. Neither default is wrong; each is a choice about traffic you have to check against
+your own.
+
+**Small windows are noisy.** In a window of 20 calls with 1 call in 4 failing, you expect 5
+failures. Getting 10 or more is rare, about 1 time in 70 by a statistics formula we will not need here. But
+the breaker checks after every call, 200 times a second. Those checks overlap (each window shares 19
+calls with the one before), so it does not open 200 ÷ 70 ≈ 3 times a second, but a rare pattern
+with that many chances still turns up within seconds. The sim below shows it: with a window of 20, a 25% failure rate opens the
+breaker by chance; with a window of 100, it does not. In practice, size the window so it holds at
+least 50–100 calls at your normal traffic: then a stretch of bad luck is too short to fill half of
+it, as the sim's 100-call window shows.
+
+Now try the whole thing. The sim runs Part 1's setup: 20 workers, 200 pages a second, 10 ms of own
+work, a 300 ms timeout, and a breaker that opens at 50% of the last 20 calls and stays open for 5 s.
+
+<BreakerSim />
+
+Things to try beyond the caption (the script stops Reviews at 3 s and brings it back at 20 s): set
+"Stays open for" to 30 s and press Reset. The breaker opens at about 3.4 s. Reviews recovers at
+20 s, but the breaker stays open until about 33 s, 13 seconds of pages without reviews for no
+reason. Set it to 1 s and the breaker sends a trial roughly every 1.3 seconds instead of every 5.3.
+
+### How long to stay open, and how to test
+
+The open time is a bet on how long outages last. Short open times find recovery quickly but send
+more trials into a dependency that may still be down. Long ones are quiet but keep the breaker open
+after the dependency has recovered.
+
+**What the trials cost you.** In Part 1, each cycle is 5 seconds open plus a trial that holds one
+worker for 0.3 seconds. That is one worker busy for 0.3 s out of every 5.3 s:
+0.3 ÷ 5.3 ≈ 0.057, which is about 6% of one worker's time. Negligible for one breaker. But a trial is a full-length call: if trials are
+allowed to wait the full timeout, a slow trial is as expensive as any other call. Shopify's Semian
+library gives trials their own, shorter timeout (`half_open_resource_timeout`) for that reason. Its
+team's 2020 write-up, "Your Circuit Breaker is Misconfigured", works through how these costs add up
+across many processes, and argues that a slightly misconfigured breaker can be as bad as none.
+
+**What the trials cost the dependency.** Every running copy of Product has its own breaker. Suppose
+Product runs as 50 copies, each as busy as Part 1's. Each sends one trial per 5.3 s, so Reviews
+receives 50 ÷ 5.3 ≈ 9.4 calls a second while it is down. Without breakers, each copy would send
+about 64 a second, the most its 20 workers can, so 50 × 64 = 3,200 calls a second. Small, unless all 50 open in the same instant and
+then send their trials in the same instant, every 5.3 seconds, as a burst of 50.
+
+**Two improvements fix most of that:**
+
+- **Jitter the open time.** Instead of exactly 5 s, wait a random time between 4 s and 6 s. Copies
+  that opened together then test at different moments. The production example uses ±20%.
+- **Grow the open time after each failed trial.** 5 s, then 10, then 20, up to a cap. A dependency
+  that is still down after three trials is probably having a long outage, and trials every 5 s add
+  nothing. Envoy, a widely used proxy, grows its time this way when it takes a failing server
+  out of rotation: 30 s times the number of times in a row that server was taken out, up to 300 s. Polly allows it through `BreakDurationGenerator`.
+
+The cost of growth is the recovery delay. In the production example's run (its output is in "Build
+it yourself" below), the third failed trial set the open time to 5 × 2 × 2 = 20 s (with jitter,
+19.6 s), so the breaker closed 14 seconds after the
+dependency recovered. A cap of 30–60 s keeps that bounded.
+
+**How many trials.** One trial is a sample of one: a lucky success closes the breaker on a
+dependency that is still half broken, and full traffic lands on it again at once. Several trials,
+say 3 to 10, judged together, make a false recovery less likely. The production example needs all 3
+of its trials to succeed; Resilience4j needs its 10 to stay under the failure threshold. When the breaker does close, all of the traffic
+returns in one step; a dependency that has only now restarted, with its cache empty, may fail again
+under it. If you see the breaker flapping between open and closed every few seconds, that is the
+usual cause.
+
+### Where the breaker lives, and what it covers
+
+**Where the state lives.** By default a breaker is an object inside one process. Each copy of
+Product has its own breaker, learns alone that Reviews is down, and tests alone. Semian goes
+further: its state lives in each worker process, so a server running 16 worker processes has 16
+breakers. Envoy calls its own limits "fully distributed (not coordinated)": each proxy decides for
+itself.
+
+That has a cost and a benefit. The cost: each breaker sees only its share of the traffic. This time
+suppose 50 copies share Part 1's 200 calls a second between them: they see 200 ÷ 50 = 4 calls a second each, so a 100-call window covers 100 ÷ 4
+= 25 seconds, and each copy needs its own failures to open. The benefit: no coordination. A shared
+breaker, for example state kept in Redis (a fast in-memory database; `pybreaker` supports this), sees all the traffic, but it
+adds a network round trip to every call and a new dependency that can itself fail. Most teams keep
+breakers local and size the window to the traffic each copy actually sees.
+
+**What it covers.** One breaker should cover a set of calls that fail together. That sounds obvious
+and is where most breakers are wrong. Imagine Reviews runs on four servers behind a **load balancer** (a server that spreads incoming
+requests across several servers),
+or stores reviews in four **shards** (four slices of the data, each on its own database), and one
+of the four dies.
+
+<Figure caption="Reviews runs on four servers and server 3 stops answering. One breaker for all of Reviews sees 1 call in 4 fail: at a 50% threshold it stays closed and keeps paying the timeout, at 20% it opens and cuts off the healthy servers too. One breaker per server cuts off only server 3.">
+  <Scope />
+</Figure>
+
+The top half is the trap. One breaker for "Reviews" sees 25% of calls fail. Below its threshold,
+it does nothing, and Product pays the 300 ms timeout on 1 call in 4: in the sim's "1 call in 4
+hangs" mode with the window set to 100, about 15 of the 20 workers end up stuck, and up to a fifth
+of pages fail. The working: 200 × ¼ = 50 calls a second hang, each holding a worker for 0.31 s, so
+50 × 0.31 ≈ 15.5 workers; the other 150 pages need 150 × 0.05 = 7.5 more. 15.5 + 7.5 = 23 workers
+wanted, 20 exist, so the queue grows and some pages fail. Above its
+threshold, it opens and refuses all calls, including the 75% that would have worked: a partial
+failure becomes a total one. Polly's default threshold is 10%, so a one-in-four failure opens it.
+Marc Brooker made this argument in 2022: modern services are built to fail partially, shard by
+shard, and a breaker that cannot tell which calls will fail works against that design.
+
+The bottom half is the fix: a breaker per server, per shard, or per customer, whatever unit
+actually fails together. Polly's docs recommend one breaker per **authority** (scheme, host and
+port) rather than one per service. When the servers sit behind a load balancer you do not control
+from the client, the balancer can do the per-server version for you: it stops sending traffic to a
+server that keeps failing, which Envoy calls **outlier detection** (by default, 5 failures in a row
+eject a server for 30 s, and never more than 10% of the servers at once; the
+[load balancing page](/traffic/load-balancing/#ejection-and-the-panic-guard) covers it).
+
+### Fallbacks: what to do instead
+
+An open breaker needs an answer for every refused call. Four kinds, from best to worst for the
+customer:
+
+- **A saved answer.** The reviews from the last successful call, kept in a cache for a few minutes.
+  Slightly old, often good enough.
+- **A smaller feature.** The page without reviews, or with only the average star rating, which
+  Product may store itself.
+- **A default.** "No reviews yet" is a lie when there are reviews; "Reviews are not available right
+  now" is honest.
+- **A fast error.** For a dependency the page cannot do without, such as Payments, failing at once
+  with a clear message is still far better than holding a worker for 300 ms and then failing.
+
+Three rules keep fallbacks safe. **A fallback must not depend on the thing that failed**: falling
+back from Reviews to a second Reviews endpoint on the same database fails the same way. **A
+fallback must be cheaper than the call it replaces**: a fallback that runs a heavy database query
+moves the overload from Reviews to your database. **A fallback that is never used is never
+tested**: it fails for the first time during the outage. Force the breaker open in a test
+environment and look at the page.
+
+:::caution[A fallback hides the outage]
+With a good fallback, customers see a slightly poorer page and nobody gets an error. That is the
+point, and also the danger: if no one is told, Reviews can be down for hours. Send every state change
+of the breaker to your metrics and alert on "open for more than a few minutes". The examples on
+this page all have an `on_change` hook for exactly that.
+:::
+
+### Breakers with timeouts and retries
+
+A breaker rarely works alone. On a call to Reviews, three policies wrap each other, and their order
+matters. From the outside in:
+
+1. **Retry**, with backoff and a budget, decides whether to try again
+   ([retries and backoff](/resilience/retries-and-backoff/)).
+2. **Circuit breaker**, asked before every attempt, including retries.
+3. **Timeout**, on each attempt, so a hung attempt becomes a failure the breaker can count.
+
+In code the order looks like `retry(lambda: breaker.call(lambda: get_reviews(timeout=0.3)))`: each
+layer calls the one inside it. With this order, an open breaker refuses retries as well as first attempts, and each attempt's
+timeout feeds the breaker. Configure the retry not to retry the breaker's own "refused" error: it
+will be refused again, at once. Polly's docs make the same point: the breaker does not retry, and
+it is meant to be combined with a retry strategy.
+
+**A breaker or a retry budget?** Both stop retries from piling onto a failing dependency, in
+different ways. Marc Brooker's 2022 simulations compared them. A breaker adds no extra load at
+high failure rates, because it stops all calls. But it also stops the first attempts that would have
+succeeded, and it trips early when only some calls fail. A retry budget keeps every first attempt
+and caps only the retries, so it degrades smoothly, and Brooker preferred it for retries. They
+combine well: a budget for retries, a breaker (scoped per server or shard) for the case where a
+dependency is truly down.
+
+**A dimmer instead of a switch.** A breaker is a switch: all calls or none. **Adaptive throttling**
+refuses a share of calls that grows with the failure rate. Envoy's admission control filter, based
+on client-side throttling from Google's SRE book, works it out over a 30-second window like this.
+Suppose 6,000 calls were made and 1,500 succeeded, and the target success rate is 95%. Divide the
+successes by the target: 1,500 ÷ 0.95 ≈ 1,579, the number of calls the successes "justify". Take
+that from the calls made: 6,000 − 1,579 = 4,421 calls more than justified. Divide by the calls made
+plus one (the one keeps the sum from dividing by zero when no calls were made): 4,421 ÷ 6,001 ≈ 0.74. So about 74% of new calls are refused at once, and 26% still go
+through and keep measuring. On a healthy day, with 5,990 successes out of 6,000,
+5,990 ÷ 0.95 ≈ 6,305 is more than 6,000, the result is below zero, and nothing is refused. In
+general: refuse probability = (calls − successes ÷ target) ÷ (calls + 1), never below 0, and Envoy
+caps it at 80% by default so some traffic always keeps testing. There is no open state to wait out,
+so recovery shows up as soon as the success rate improves.
+
+## Choosing between them
+
+Five ways to decide "stop calling", side by side:
+
+| | Decides from | A dependency 1 in 4 broken | Low traffic | Recovery found | Used by |
+|---|---|---|---|---|---|
+| Consecutive failures | the current streak | opens by luck, every few seconds | works, but noisy | next trial after a fixed wait | `pybreaker`, `gobreaker` defaults |
+| Count window | rate over the last *N* calls | stays closed or cuts everything, by threshold | window spans minutes | trials after the open time | Resilience4j default |
+| Time window | rate over the last *T* seconds | same as count window | may never reach the minimum | trials after the open time | Polly, opossum |
+| Adaptive throttling | success rate, as a share to refuse | refuses about the broken share | small samples, noisy share | continuously, no open state | Envoy admission control |
+| Per-server ejection | each server's own failures | ejects only the broken server | per-server counts are small | after the ejection time | Envoy outlier detection |
+
+Notice that only the last row handles the one-broken-server case well, and only because it is
+scoped per server, not because of its counting.
+
+How to choose. Start with a time window of 10–30 seconds, a minimum of calls that your traffic
+reaches within that window, a threshold of 50%, an open time of 5–10 seconds with jitter and
+growth, and 3 or more trial calls. Scope it to the unit that fails together: per host when you call
+hosts directly, per shard when the data is sharded. If you already run a **service mesh** (a proxy
+next to every copy of every service, handling the calls between them) or a proxy such as Envoy, use its outlier detection for per-server failures and keep an application breaker
+for the case where the whole dependency is down and you have a fallback to serve.
+
+## Build it yourself
+
+Three versions: the naive one from earlier, a correct breaker with the three states, and the
+production-shaped details. The full files, with the simulation that produced every number on this
+page, are in
+[examples/circuit-breakers](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/circuit-breakers).
+Both languages print identical output.
+
+The correct breaker: a count window, a minimum (here, a full window), the three states and one
+trial call. The clock is passed in, so tests can control time.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="breaker.py"
+from collections import deque
+from typing import Callable
+
+class CircuitBreaker:
+    def __init__(self, window: int = 20, threshold: float = 0.5, open_ms: float = 5000,
+                 on_change: Callable[[str, float], None] | None = None):
+        self.window, self.threshold, self.open_ms = window, threshold, open_ms
+        self.on_change = on_change or (lambda state, now: None)
+        self.state = "closed"
+        self.outcomes: deque[bool] = deque(maxlen=window)  # True = failed
+        self.opened_at = 0.0
+        self.trial_in_flight = False
+
+    def _move(self, state: str, now_ms: float) -> None:
+        self.state = state
+        self.on_change(state, now_ms)
+
+    def allow(self, now_ms: float) -> bool:
+        """Ask before every call. False means: do not call, use the fallback."""
+        if self.state == "open" and now_ms - self.opened_at >= self.open_ms:
+            self._move("half_open", now_ms)
+        if self.state == "closed":
+            return True
+        if self.state == "half_open" and not self.trial_in_flight:
+            self.trial_in_flight = True  # this call is the trial
+            return True
+        return False
+
+    def record(self, ok: bool, now_ms: float, trial: bool = False) -> None:
+        """Report how an allowed call ended. `trial` marks the half-open trial."""
+        if trial:
+            self.trial_in_flight = False
+            if ok:
+                self.outcomes.clear()  # start counting afresh
+                self._move("closed", now_ms)
+            else:
+                self.opened_at = now_ms
+                self._move("open", now_ms)
+            return
+        if self.state != "closed":
+            return  # started before the breaker opened; ignore it
+        self.outcomes.append(not ok)
+        full = len(self.outcomes) == self.window  # never decide from fewer
+        if full and sum(self.outcomes) / self.window >= self.threshold:
+            self.opened_at = now_ms
+            self._move("open", now_ms)
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="breaker.mjs"
+export class CircuitBreaker {
+  constructor({ window = 20, threshold = 0.5, openMs = 5000, onChange = () => {} } = {}) {
+    Object.assign(this, { window, threshold, openMs, onChange });
+    this.state = 'closed';
+    this.outcomes = []; // true = failed; the last `window` calls
+    this.openedAt = 0;
+    this.trialInFlight = false;
+  }
+
+  #move(state, nowMs) {
+    this.state = state;
+    this.onChange(state, nowMs);
+  }
+
+  /** Ask before every call. false means: do not call, use the fallback. */
+  allow(nowMs) {
+    if (this.state === 'open' && nowMs - this.openedAt >= this.openMs) this.#move('half_open', nowMs);
+    if (this.state === 'closed') return true;
+    if (this.state === 'half_open' && !this.trialInFlight) {
+      this.trialInFlight = true; // this call is the trial
+      return true;
+    }
+    return false;
+  }
+
+  /** Report how an allowed call ended. `trial` marks the half-open trial. */
+  record(ok, nowMs, trial = false) {
+    if (trial) {
+      this.trialInFlight = false;
+      if (ok) {
+        this.outcomes = []; // start counting afresh
+        this.#move('closed', nowMs);
+      } else {
+        this.openedAt = nowMs;
+        this.#move('open', nowMs);
+      }
+      return;
+    }
+    if (this.state !== 'closed') return; // started before the breaker opened; ignore it
+    this.outcomes.push(!ok);
+    if (this.outcomes.length > this.window) this.outcomes.shift();
+    const full = this.outcomes.length === this.window; // never decide from fewer
+    const failed = this.outcomes.filter(Boolean).length;
+    if (full && failed / this.window >= this.threshold) {
+      this.openedAt = nowMs;
+      this.#move('open', nowMs);
+    }
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
+Run against Part 1's outage and a healthy day, it prints the following. The example's clock starts
+at 0, so Part 1's 10:00:00 is t = 10 s here, and Reviews is down from 10 s to 30 s.
+
+```text
+40 s, Reviews down from 10 s to 30 s
+none       calls made   8,000   refused       0   workers waiting on Reviews in the outage:  60.0
+naive      calls made   2,067   refused   5,933   workers waiting on Reviews in the outage:   1.0
+Circuit breaker (last 20 calls, open at 50%, 5 s open):
+  t=10.345s  breaker -> open
+  t=15.345s  breaker -> half_open
+  t=15.645s  breaker -> open
+  ...
+  t=31.245s  breaker -> half_open
+  t=31.277s  breaker -> closed
+breaker    calls made   3,817   refused   4,183   workers waiting on Reviews in the outage:   1.1
+
+10 healthy minutes, 1 call in 1,000 fails, no outage at all
+naive      calls made   7,518   refused 112,482
+breaker    calls made 120,000   refused       0
+```
+
+Read the "workers waiting" column: during the outage, with no breaker, 60 workers' worth of time
+went to waiting on Reviews (the example has no pool limit, so it shows the demand: 200 calls a
+second × 0.3 s = 60); with the breaker, about 1. The naive breaker also gets the outage
+right, then never calls Reviews again, and on a healthy day it shuts Reviews off after 37.6 s.
+
+The production-shaped version changes three things you have met above: a classifier that ignores
+`4xx` and counts slow calls, an open time that grows and is jittered, and several trials. In the
+open time, `2 ** failed_trials` doubles the wait for each failed trial (1, 2, 4…), and
+`1 - 0.2 + 0.4 × random` turns a random number between 0 and 1 into a factor between 0.8 and 1.2.
+Here are
+those parts; the full class adds the 10-second bucketed window and the minimum of 20 calls.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="breaker_prod.py (excerpt)"
+def counts_as_failure(status: int | None, elapsed_ms: float, slow_ms: float) -> bool:
+    """status None means no answer: a timeout or a connection error."""
+    if status is None or status >= 500:
+        return True
+    if 400 <= status < 500:
+        return False   # the caller's mistake: Reviews is fine
+    return elapsed_ms >= slow_ms
+
+def _open(self, now_ms: float, why: str) -> None:
+    wait = min(self.max_open_ms, self.base_open_ms * 2 ** self.failed_trials)
+    wait *= 1 - self.jitter + 2 * self.jitter * self.rand()   # ±20% by default
+    self.state, self.open_until = "open", now_ms + wait
+    self.on_change("open", now_ms, f"{why}; trying again in {wait / 1000:.1f} s")
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="breaker-prod.mjs (excerpt)"
+export function countsAsFailure(status, elapsedMs, slowMs) {
+  if (status === null || status >= 500) return true; // no answer, or a 5xx
+  if (status >= 400) return false; // the caller's mistake: Reviews is fine
+  return elapsedMs >= slowMs;
+}
+
+#open(nowMs, why) {
+  let wait = Math.min(this.maxOpenMs, this.openMs * 2 ** this.failedTrials);
+  wait *= 1 - this.jitter + 2 * this.jitter * this.rand(); // ±20% by default
+  this.state = 'open';
+  this.openUntil = nowMs + wait;
+  this.onChange('open', nowMs, `${why}; trying again in ${(wait / 1000).toFixed(1)} s`);
+}
+```
+  </TabItem>
+</Tabs>
+
+```text
+1. Every call returns 404 for 10 s (the caller asks for products that do not exist)
+  still closed
+2. Quiet traffic: 2 calls a second, and 3 of the first 4 fail
+  still closed: 4 calls are too few to judge
+3. 200 calls a second; Reviews answers in 2.5 s (slow, not dead) from 10 s to 40 s
+  t= 16.00s  -> open      (701 of the last 1309 calls failed; trying again in 5.4 s)
+  t= 21.45s  -> half_open (letting 3 trial calls through)
+  t= 23.95s  -> open      (a trial call failed; trying again in 8.2 s)
+  t= 32.10s  -> half_open (letting 3 trial calls through)
+  t= 34.60s  -> open      (a trial call failed; trying again in 19.6 s)
+  t= 54.25s  -> half_open (letting 3 trial calls through)
+  t= 54.30s  -> closed    (every trial call succeeded)
+```
+
+Each run here is one lesson from this page: `404`s do not open the breaker, a handful of calls is
+too few to judge, slow calls are caught but late, and a growing open time delays recovery (closed
+at 54.3 s, 14 seconds after Reviews recovered at 40 s).
+
+## How real systems do it
+
+All values below are as of November 2026, read from each project's source or docs on GitHub.
+
+**Resilience4j (Java)**, the library Netflix points to for new projects. A count window of 100
+calls, a minimum of 100 calls, a 50% failure threshold, 60 s open, and 10 trial calls in half-open.
+Slow calls count only past 60 s, and only when 100% are slow, so set those two settings yourself. Extra
+calls in half-open get `CallNotPermittedException`, the same as when open. A typical Spring Boot
+setup for Reviews:
+
+```yaml title="application.yml"
+resilience4j.circuitbreaker:
+  instances:
+    reviews:
+      slidingWindowType: TIME_BASED
+      slidingWindowSize: 10            # seconds
+      minimumNumberOfCalls: 20
+      failureRateThreshold: 50
+      slowCallDurationThreshold: 1s
+      slowCallRateThreshold: 50
+      waitDurationInOpenState: 5s
+      permittedNumberOfCallsInHalfOpenState: 3
+      ignoreExceptions:
+        - com.example.reviews.NotFoundException   # 4xx: do not count
+```
+
+**Polly (.NET)**, version 8. A 30-second time window, a minimum of 100 calls, a 10% failure
+ratio, 5 s open and one probe call. `BreakDurationGenerator` makes the open time dynamic. Below the
+minimum, the ratio is ignored, so quiet dependencies never open. The docs warn against checking
+the breaker's state before calling: the breaker then never reaches half-open, because no call ever
+arrives to become the trial.
+
+**Envoy**, the proxy behind many service meshes, uses the name "circuit breaking" for something
+else: limits on concurrent connections, pending requests, requests and retries per **upstream
+cluster**, the group of servers behind one service (1,024 connections and 3 concurrent retries by default). Those are bulkheads, not breakers;
+they refuse the excess, not everything. The classic breaker idea lives in **outlier detection**,
+per server:
+
+```yaml title="envoy cluster (excerpt)"
+outlier_detection:
+  consecutive_5xx: 5          # 5 failures in a row eject the server
+  interval: 10s               # how often ejections are evaluated
+  base_ejection_time: 30s     # × the number of times ejected in a row
+  max_ejection_time: 300s
+  max_ejection_percent: 10    # never eject more than 10% of servers
+```
+
+**opossum (Node.js)**, version 10. A 10-second window in 10 buckets, a 50% error threshold, a
+10-second timeout of its own on every call, 30 s open, one trial in half-open, and
+`volumeThreshold` 0: no minimum, so set one.
+
+**gobreaker (Go) and pybreaker (Python)** count failures in a row: `gobreaker` opens on the sixth
+(more than 5), `pybreaker` on the fifth. Both stay open 60 s. `pybreaker` can keep its state in Redis to share it across processes, and takes
+an `exclude` list for errors that should not count.
+
+**Semian (Ruby)**, Shopify's library, counts errors per worker process within
+`error_threshold_timeout`, stays open for `error_timeout`, needs `success_threshold` successes to
+close, and gives trials a shorter `half_open_resource_timeout`. A newer mode uses an error rate
+with a minimum of 10 requests in a 10-second window. It also has bulkheads.
+
+**Hystrix**, Netflix's Java library that made the pattern famous, has been in maintenance mode for
+years, with 1.5.18 as its final release. You will meet it in older codebases and in many tutorials.
+
+Notice how far apart the defaults are: Polly opens at 10%, Resilience4j at 50%, `gobreaker` on a
+streak of 6; open times run from 5 s to 60 s. There is no standard breaker. Read the defaults of
+the one you use, and set every number for your own traffic.
+
+## Gotchas and war stories
+
+:::danger[One breaker for a sharded or multi-server dependency]
+A breaker that covers a whole service turns one dead shard or server into a full outage, or, below
+its threshold, does nothing while a quarter of your calls time out. A classic pattern: a breaker
+with a 10% threshold in front of a database split into eight shards, where one shard going down
+blacks out all eight. Scope breakers to the unit that fails together.
+:::
+
+**The breaker blames the dependency for your own trouble.** Your calls to Reviews can time out
+because *your* process is struggling: its CPU is maxed out, its language runtime pauses the program to free unused memory (garbage
+collection), or
+its pool of connections to Reviews is used up. The breaker sees timeouts and opens against a
+healthy Reviews. When a breaker opens, check the caller's own metrics before paging the
+dependency's team.
+
+**A breaker that never opens.** Two common reasons. The traffic per copy never reaches the minimum
+number of calls (Polly's 100 calls in 30 s per process is a lot for a quiet endpoint). Or the
+dependency got slow rather than dead, and slow calls are not counted. Test the breaker by
+injecting both kinds of failure in a staging environment, not only connection errors.
+
+:::caution[Counting your callers' mistakes]
+If `4xx` responses count as failures, a buggy client, a crawler or a bad deploy of your own code
+that sends malformed requests can open the breaker against a healthy dependency, for every
+customer. Classify errors explicitly; the default "every exception counts" is wrong for HTTP.
+:::
+
+**Flapping.** The breaker opens, closes, opens, closes every few seconds. Usual causes: a window so
+small that chance trips it (the sim's window of 20), a single trial call that succeeds by luck, or
+full traffic returning at once to a dependency that can carry only part of it. More trials, a
+bigger window and a growing open time calm it; alert on the number of state changes, not only on
+"open".
+
+**The fallback that was never run.** It throws a null-pointer exception, or calls the same failing
+database, or renders a broken page, and nobody knew, because the breaker had never opened in
+production. Force breakers open regularly in a test environment (`FORCED_OPEN`, Polly's manual
+isolate) and look at the result.
+
+## Trade-offs and when not to use it
+
+What a breaker costs:
+
+- **False opens.** A breaker that guesses wrong removes a working feature for everyone, at least
+  for one open time.
+- **Recovery delay.** Up to one open time after the dependency recovers, longer with growth.
+- **Partial becomes total**, unless the breaker is scoped per server or shard.
+- **Tuning and testing.** Five or six numbers per breaker, each tied to your traffic, and a
+  fallback path that only runs on bad days.
+
+What it does not do: it does not make a call faster, it does not fix the dependency, and it does
+not protect the dependency from callers that have no breaker. It is a client-side tool.
+
+When not to reach for one first:
+
+- **No timeout yet.** A breaker counts failures; without a timeout, a hung call never becomes a
+  failure. Timeouts come first.
+- **Per-server failures behind a proxy you run.** Outlier detection in the proxy or mesh handles
+  them better, per server.
+- **Retry storms.** A retry budget caps retries without cutting off first attempts.
+- **Very low traffic.** A dependency called a few times a minute gives the breaker too few samples
+  to judge; a timeout and a fast fallback may be all you need.
+- **Work that must not be dropped**, such as writing an order. Refusing at once is wrong there;
+  put the work in a queue and process it when the dependency is back.
+
+## Interview corner
+
+Circuit breakers come up in system design interviews whenever one service calls another, and in
+"how would you make this resilient?" follow-ups.
+
+Typical questions:
+
+1. "Service A calls B, and B goes down. What happens to A, and how do you protect it?"
+2. "Explain the states of a circuit breaker."
+3. "How would you choose the thresholds?"
+4. "What is the difference between a circuit breaker, a retry and rate limiting?"
+
+A strong answer to the first walks through the arithmetic: with a timeout of *T*, every failing
+call holds a worker for *T*, so workers needed = calls per second × *T*, and that can exceed the
+pool even with a short timeout. Then the breaker: it stops making calls the caller already expects
+to fail, serves a fallback, and checks for recovery with trial calls.
+
+For the states, describe what each does with a call and what moves the breaker between them, and
+mention that calls in flight when it opens are ignored and extra calls in half-open are refused.
+For thresholds, say that the window and minimum come from your traffic, that `4xx` should not
+count and slow calls should, and that the open time trades recovery delay against trial load,
+with jitter across copies.
+
+What separates good answers: scope. Mention that one breaker in front of a sharded dependency
+turns a partial failure into a total one, and that per-host breakers or the load balancer's outlier
+detection fix it. Mention that the breaker's state is per process unless you pay for sharing it.
+And mention alerting on the open state, because a good fallback hides the outage.
+
+## Check yourself
+
+<details>
+<summary>1. Product's timeout on Reviews is 300 ms and Product has 20 workers. Reviews dies completely. Why can Product still go down, and with what numbers?</summary>
+
+Every call now waits the full 300 ms before failing, so every page holds a worker for 10 ms + 300 ms
+= 310 ms. At 200 pages a second that needs 200 × 0.31 = 62 workers, and Product has 20. The pool can
+finish only 20 ÷ 0.31 ≈ 64 pages a second, so about 136 of every 200 fail. The timeout limits each
+call's cost but not the number of failing calls.
+
+</details>
+
+<details>
+<summary>2. A breaker is open. Five calls were already in flight to Reviews when it opened, and all five succeed. What does the breaker do?</summary>
+
+Nothing. Results of calls that started before the breaker opened are ignored; the decision to open
+was already made. Only the trial calls in half-open decide whether it closes.
+
+</details>
+
+<details>
+<summary>3. Your breaker counts every exception. A crawler starts requesting thousands of products that do not exist, and Reviews answers 404 to each. What happens, and what is the fix?</summary>
+
+The 404s count as failures, the failure rate passes the threshold, and the breaker opens against a
+healthy Reviews: every customer loses reviews. Fix: classify errors so that `4xx` responses do not
+count; only timeouts, connection errors, `5xx` and slow calls do.
+
+</details>
+
+<details>
+<summary>4. Reviews stores its data in four shards and one shard dies. Your one breaker for Reviews opens at 10%. What do customers see, and what would you change?</summary>
+
+25% of calls fail, which passes 10%, so the breaker opens and refuses all calls to Reviews,
+including the 75% that would have worked. Every page loses reviews. Scope the breaker per shard (or
+per host, or let the load balancer eject the failing server), so only the dead shard's calls are
+refused.
+
+</details>
+
+<details>
+<summary>5. 50 copies of Product each have their own breaker with exactly 5 s open. Reviews restarts at the same moment all 50 open. What does Reviews see, and how do you smooth it?</summary>
+
+All 50 breakers go half-open at the same moment and send their trials together: a burst of 50
+calls every 5.3 seconds while Reviews is trying to start. Jitter the open time (for example a random
+4–6 s) so the copies test at different moments, and grow the open time after each failed trial.
+
+</details>
+
+## Recap
+
+- A timeout limits what one failing call costs; when a dependency is down, every call fails, and
+  workers needed = calls per second × timeout can exceed the pool.
+- A circuit breaker watches the failure rate over a window. Closed: calls flow and are counted.
+  Open: calls are refused at once and a fallback is served. Half-open: a few trials decide.
+- Count timeouts, connection errors, `5xx` and slow calls; never the caller's own `4xx` mistakes
+  (decide `429` on purpose). Use a window that holds
+  50–100 calls at your traffic, and a minimum before it judges.
+- The open time trades recovery delay against trial load. Jitter it, grow it after failed trials,
+  cap it, and use more than one trial.
+- Scope a breaker to what fails together: per server or shard, not per service, or a partial
+  failure becomes a total one.
+- Wrap retries outside the breaker and the timeout inside it, test the fallback by forcing the
+  breaker open, and alert on its state changes.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'bulkheads', why: 'A breaker stops calls to a dead dependency; a bulkhead caps how many workers a slow one can hold while you wait for the breaker to decide.' },
+  { slug: 'load-shedding', why: 'The server-side mirror: refusing work when you yourself are overloaded, instead of when someone else is failing.' },
+  { slug: 'graceful-degradation', why: 'How to design the fallbacks: which features a page can lose, and how to show it.' },
+  { slug: 'health-checks-and-probes', why: 'How load balancers and Kubernetes decide a server is unwell, the per-server cousin of a breaker.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [Resilience4j: CircuitBreakerConfig](https://github.com/resilience4j/resilience4j/blob/master/resilience4j-circuitbreaker/src/main/java/io/github/resilience4j/circuitbreaker/CircuitBreakerConfig.java) and [CircuitBreakerStateMachine](https://github.com/resilience4j/resilience4j/blob/master/resilience4j-circuitbreaker/src/main/java/io/github/resilience4j/circuitbreaker/internal/CircuitBreakerStateMachine.java) (source, v2.4.0, checked November 2026) — every default, and exactly how half-open admits and judges trial calls.
+- [Polly: circuit breaker strategy](https://www.pollydocs.org/strategies/circuit-breaker) (living docs, version 8.9, checked November 2026) — defaults, the dynamic break duration, manual isolation, and the anti-patterns section.
+- [Envoy: circuit breaking](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/circuit_breaking) and [outlier detection](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/outlier) (living docs, checked November 2026) — why Envoy's "circuit breakers" are concurrency limits, and per-server ejection with its defaults.
+- [Envoy: admission control filter](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/admission_control_filter) (living docs, checked November 2026) — adaptive throttling: the formula, the success threshold and the rejection cap.
+- [opossum](https://github.com/nodeshift/opossum) (source and README, v10.0.0, 2026) — the Node.js breaker's defaults and its fallback and half-open behaviour.
+- [gobreaker](https://github.com/sony/gobreaker) and [pybreaker](https://github.com/danielfm/pybreaker) (READMEs, checked November 2026) — consecutive-failure breakers, excluded errors and shared Redis state.
+- [Semian](https://github.com/Shopify/semian) (README, checked November 2026) — Shopify's breaker and bulkhead parameters, per-process state and the half-open timeout.
+- [Hystrix](https://github.com/Netflix/Hystrix) (README, checked November 2026) — the maintenance notice and Netflix's pointer to Resilience4j.
+
+**Engineering writing**
+
+- [Marc Brooker: Will circuit breakers solve my problems?](https://brooker.co.za/blog/2022/02/16/circuit-breakers.html) (2022) — why breakers can turn partial failures into total ones in sharded systems, and the problem of local sampling.
+- [Marc Brooker: Fixing retries with token buckets and circuit breakers](https://brooker.co.za/blog/2022/02/28/retries.html) (2022) — simulations comparing retries, a breaker and a retry budget.
+- [Shopify Engineering: Your Circuit Breaker is Misconfigured](https://shopify.engineering/circuit-breaker-misconfigured) (2020) — how the open time and the half-open timeout decide how much capacity a breaker saves.
+
+**History**
+
+- Michael Nygard, *Release It!* (2007, second edition 2018, kept as history) — the book that named the circuit breaker pattern for software.

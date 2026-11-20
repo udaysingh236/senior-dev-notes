@@ -1,0 +1,61 @@
+---
+// Two ways a breaker remembers recent calls. Top: a count window, the last 10 results in a ring;
+// a new result replaces the oldest. Bottom: a time window, the last 10 seconds as one bucket per
+// second holding a count of calls and failures; each new second wipes the oldest bucket.
+const ring = [0, 0, 1, 0, 0, 1, 1, 0, 1, 1]; // 1 = failed; oldest first
+const buckets = [
+  [210, 1], [195, 0], [205, 2], [190, 1], [200, 0], [198, 3], [204, 40], [201, 120], [199, 196], [60, 59],
+];
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="cb-win-t cb-win-d">
+  <title id="cb-win-t">A count window and a time window</title>
+  <desc id="cb-win-d">
+    Top: a count window holds the results of the last 10 calls. 5 of the 10 failed, so the failure
+    rate is 50%. The next result pushes out the oldest. Bottom: a time window keeps one bucket per
+    second for the last 10 seconds, each with a count of calls and of failures. In the last four
+    seconds failures climb from 3 to 40, 120 and 196 out of about 200 calls each, and the newest
+    second is still filling. Each new second wipes the oldest bucket.
+  </desc>
+  <defs>
+    <marker id="cb-win-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-muted)" />
+    </marker>
+  </defs>
+
+  <text x="4" y="22" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Count window: the last 10 calls</text>
+  {ring.map((f, i) => (
+    <g>
+      <rect x={4 + i * 39} y="38" width="33" height="33" rx="4" stroke-width="1.5"
+        stroke-dasharray={f ? '5 2' : undefined}
+        style={f ? 'fill: var(--viz-bad-soft); stroke: var(--viz-bad)' : 'fill: var(--viz-ok-soft); stroke: var(--viz-ok)'} />
+      <text x={20.5 + i * 39} y="61" font-size="16" font-weight="700" text-anchor="middle" style={f ? 'fill: var(--viz-bad)' : 'fill: var(--viz-ok)'}>{f ? '✗' : '✓'}</text>
+    </g>
+  ))}
+  <text x="4" y="94" font-size="15" style="fill: var(--viz-muted)">oldest</text>
+  <text x="396" y="94" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">newest</text>
+  <path d="M300 112 L392 112" fill="none" stroke-width="1.5" style="stroke: var(--viz-muted)" marker-end="url(#cb-win-a)" />
+  <text x="292" y="117" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">next result pushes out the oldest</text>
+  <text x="4" y="146" font-size="16" font-weight="700" style="fill: var(--viz-ink)">5 failed of 10 = 50%</text>
+
+  <line x1="4" y1="170" x2="396" y2="170" stroke-width="1" stroke-dasharray="3 4" style="stroke: var(--viz-stroke)" />
+
+  <text x="4" y="200" font-size="17" font-weight="700" style="fill: var(--viz-ink)">Time window: the last 10 seconds</text>
+  <text x="4" y="222" font-size="15" style="fill: var(--viz-muted)">one bucket per second: failures / calls</text>
+  {buckets.map(([calls, fails], i) => {
+    const h = 120 * (calls / 210);
+    const fh = 120 * (fails / 210);
+    const x = 4 + i * 39;
+    const last = i === buckets.length - 1;
+    return (
+      <g>
+        <rect x={x} y={360 - h} width="33" height={h} rx="3" stroke-width="1.5" stroke-dasharray={last ? '4 3' : undefined} style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+        {fails > 0 && <rect x={x} y={360 - fh} width="33" height={fh} rx="3" stroke-width="1.5" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />}
+        <text x={x + 16.5} y="380" font-size="15" text-anchor="middle" style="fill: var(--viz-bad)">{fails}</text>
+        <text x={x + 16.5} y="398" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">{calls}</text>
+      </g>
+    );
+  })}
+  <text x="4" y="416" font-size="15" style="fill: var(--viz-muted)">10 s ago</text>
+  <text x="396" y="416" font-size="15" text-anchor="end" style="fill: var(--viz-muted)">this second, filling</text>
+</svg>
