@@ -10,7 +10,9 @@ before posting about new pages. Update this log after each post goes out.
 3. Never use a phrase that only makes sense after reading the page (for example "one old TTL",
    "shop server").
 4. Give any fix or advice as numbered steps a beginner could follow.
-5. Before handing a post over, read it as a student who has never seen the page, and rewrite every
+5. Early in the post (within the first few lines), mention that the page also has interview
+   questions on the topic.
+6. Before handing a post over, read it as a student who has never seen the page, and rewrite every
    sentence they would have to stop and decode.
 
 The plain rewrite of the DNS post (#2), 2026-11-20, shows the intended tone.
