@@ -13,7 +13,7 @@ before posting about new pages. Update this log after each post goes out.
 5. Before handing a post over, read it as a student who has never seen the page, and rewrite every
    sentence they would have to stop and decode.
 
-The approved DNS post (#2) is the reference for tone and plainness.
+The plain rewrite of the DNS post (#2), 2026-11-20, shows the intended tone.
 
 | # | Page | Status |
 |---|---|---|
