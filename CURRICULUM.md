@@ -204,7 +204,7 @@ function-calling-and-tools → eval-driven-development
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | Observability: the big picture | observability-overview | 105 | planned |
-| 2 | Logging | logging | 100 | planned |
+| 2 | Logging | logging | 100 | published (2026-11-21) |
 | 3 | Metrics and monitoring | metrics-and-monitoring | 101, 103 | planned |
 | 4 | Distributed tracing | distributed-tracing | 102 | planned |
 | 5 | Alerting | alerting | 104 | planned |

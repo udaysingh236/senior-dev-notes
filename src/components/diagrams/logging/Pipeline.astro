@@ -1,0 +1,51 @@
+---
+// The log pipeline. The app writes lines to a buffer (standard output or a local file); an agent
+// on the same machine reads them, adds labels such as service and host, batches them and sends
+// them to the log store. The store keeps an index to find lines fast, and deletes them after the
+// retention period. Each hop can be slow or full; the app's buffer is where the choice between
+// waiting and dropping is made.
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="log-pl-t log-pl-d">
+  <title id="log-pl-t">From the app's buffer to the log store</title>
+  <desc id="log-pl-d">
+    Four stages from top to bottom. One: the app writes a line to standard output or a local file,
+    through a buffer; if the buffer is full the app must either wait or drop the line. Two: an
+    agent on the same machine reads the lines, adds labels such as service and host, and sends
+    them in batches. Three: the log store receives the batches, builds an index so searches are
+    fast, and is paid for by the gigabyte. Four: after the retention period, for example 30 days,
+    lines are deleted or moved to cheap storage.
+  </desc>
+  <defs>
+    <marker id="log-pl-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- 1 app -->
+  <rect x="4" y="4" width="392" height="80" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="30" font-size="17" font-weight="700" style="fill: var(--viz-ink)">1. App writes a line</text>
+  <text x="16" y="52" font-size="15" style="fill: var(--viz-ink)">to standard output or a file, via a buffer</text>
+  <text x="16" y="74" font-size="15" font-weight="700" style="fill: var(--viz-warn)">buffer full? wait, or drop</text>
+  <path d="M200 86 L 200 106" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#log-pl-a)" />
+
+  <!-- 2 agent -->
+  <rect x="4" y="110" width="392" height="80" rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="16" y="136" font-size="17" font-weight="700" style="fill: var(--viz-ink)">2. Agent on the same machine</text>
+  <text x="16" y="158" font-size="15" style="fill: var(--viz-ink)">reads lines, adds service and host,</text>
+  <text x="16" y="180" font-size="15" style="fill: var(--viz-ink)">sends them in batches</text>
+  <path d="M200 192 L 200 212" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#log-pl-a)" />
+
+  <!-- 3 store -->
+  <path d="M4 226 L4 290 A196 10 0 0 0 396 290 L396 226" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <ellipse cx="200" cy="226" rx="196" ry="10" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="16" y="256" font-size="17" font-weight="700" style="fill: var(--viz-ink)">3. Log store</text>
+  <text x="16" y="278" font-size="15" style="fill: var(--viz-ink)">indexes lines for fast search, paid per GB</text>
+  <path d="M200 304 L 200 330" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#log-pl-a)" />
+
+  <!-- 4 retention -->
+  <rect x="4" y="334" width="392" height="80" rx="6" stroke-width="2" stroke-dasharray="6 4" style="fill: var(--viz-surface); stroke: var(--viz-muted)" />
+  <text x="16" y="360" font-size="17" font-weight="700" style="fill: var(--viz-ink)">4. After the retention period</text>
+  <text x="16" y="382" font-size="15" style="fill: var(--viz-ink)">for example 30 days: deleted, or moved</text>
+  <text x="16" y="404" font-size="15" style="fill: var(--viz-ink)">to cheaper storage that is slow to search</text>
+</svg>

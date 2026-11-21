@@ -1,0 +1,907 @@
+---
+title: Logging
+description: How programs write down what they did, so you can find out later what went wrong, explained from zero with one failed order and then in depth. Log lines and levels, structured (JSON) logs, request IDs that tie one request together across services, the pipeline from your app to a searchable log store, what a line costs in time and money (measured), why a slow log store can slow your whole service, sampling, retention, and keeping passwords and attacks out of your logs.
+tagline: How programs write down what they did, so that when something goes wrong you can find the exact lines for one customer's request, and why careless logging costs money and can even slow down your service.
+difficulty: beginner
+track: observability
+prerequisites: [how-the-web-works, timeouts]
+next: [metrics-and-monitoring, distributed-tracing, alerting, slis-slos-error-budgets, observability-overview]
+lastReviewed: 2026-11-21
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import StepThrough from '../../../components/StepThrough.astro';
+import MentalModel from '../../../components/diagrams/logging/MentalModel.astro';
+import TextVsJson from '../../../components/diagrams/logging/TextVsJson.astro';
+import Pipeline from '../../../components/diagrams/logging/Pipeline.astro';
+import LogPipelineSim from '../../../components/sims/logging/LogPipelineSim.astro';
+
+## The question
+
+A customer writes to your shop: "I was charged ₹1,499, but the page said my order failed." It
+happened last night at 2:14. You look at your servers this morning, and everything is working
+fine. Nothing is broken anymore, and nobody saw it happen. How do you find out what went wrong
+for that one customer?
+
+The short answer: you read what your programs wrote down while it happened. Every important step
+a program takes, it writes one short line into a **log**: the time, what happened, and the
+details, such as the order number. All the lines from all your servers are collected in one
+place that you can search. If each line also carries a label that says which customer request it
+belongs to, one search shows you that customer's whole story, step by step: the order arrived,
+the shop's page gave up waiting for the payment, and the card was charged a moment later anyway.
+
+## The idea in plain words
+
+We will follow one order the whole way. Your shop runs as three small programs, called
+**services**, each on its own server:
+
+- **Checkout** takes the order from the customer's browser.
+- **Payments** charges the customer's card.
+- **Email** sends the confirmation.
+
+Checkout asks Payments to charge the card and waits for the answer. It waits at most 2 seconds
+(2,000 ms), so that a stuck payment never leaves the customer staring at a spinning page
+forever. This limit is called a **timeout**.
+
+Here is what happened to order 1042 at 2:14 last night, and what each service wrote down.
+
+1. **The order arrives at Checkout.** Checkout gives this request a unique name, `req-9c21`, and
+   writes a line: "order 1042 received, request req-9c21".
+2. **Checkout asks Payments to charge ₹1,499.** It passes the request name along with the
+   question, so Payments knows which request it is working on.
+3. **Payments is slow tonight.** The bank takes its time, so Payments is still waiting for it.
+4. **At 2,000 ms, Checkout gives up.** Its time limit has run out. Checkout writes: "ERROR:
+   payments timed out after 2,000 ms, order 1042, request req-9c21", and shows the customer "your
+   order failed".
+5. **At 2,400 ms, the charge goes through anyway.** The bank answers 400 ms after Checkout stopped
+   waiting (2,400 ms − 2,000 ms = 400 ms). Payments writes: "card charged for order 1042, took
+   2,400 ms, request req-9c21". Nobody is listening for that answer anymore.
+6. **Each service's lines are collected.** A small program on each server sends every new line
+   to one central place, the **log store**, a database built for storing and searching log lines.
+7. **This morning you search the log store** for the customer's order, 1042, find the request
+   name `req-9c21`, and search for that. Three lines come back, from two different services, in
+   time order. They tell the whole story: Checkout stopped waiting at 2,000 ms, and the charge went
+   through 400 ms later.
+
+<Figure caption="Each service writes log lines as it works, and every line carries the request's name. A collector gathers the lines from all servers into one log store, so one search for req-9c21 shows that request's whole story across services.">
+  <MentalModel />
+</Figure>
+
+Now you know what to do: refund or complete the order, and look at why Payments was slow and
+whether Checkout's limit is too short. None of that was possible from looking at the servers this
+morning. The servers were fine; only the lines remembered.
+
+Three things made the search work, and each one is something you have to build on purpose.
+
+- **Lines with the right details.** "Card charged" alone is useless. "Card charged for order 1042,
+  took 2,400 ms" answers the question.
+- **One name for the whole request,** carried from service to service, so lines written by
+  different programs on different servers can be joined together.
+- **One place to search.** Your shop may run on 3 servers or on 300. Nobody can log in to 300
+  servers one by one at 2 AM, and many servers are replaced every day, taking their files with
+  them.
+
+There is also a cost. Every line takes a little time to write, a little space to store, and money
+to keep searchable. A shop handling 500 requests a second that writes 10 lines per request
+produces about 73 GB of logs a day, which costs around $37 a day in a typical cloud log service.
+Part 2 shows that calculation step by step. So logging well is not "write down everything"; it is
+"write down the right things, in a form you can search".
+
+An everyday picture: a ship's logbook. The crew writes down, with the time, every event that
+matters: the course changed, the engine stopped, a storm hit. When something goes wrong, the
+investigators do not need to have been there; they read the logbook. The picture breaks in one
+place. A ship has one logbook, written by hand, read by people. Your system has thousands of
+lines a second from many programs, and you will read almost none of them. You search them with
+a computer, so they must be written in a form a computer can search.
+
+## The building blocks
+
+Five ideas carry the rest of the page. Each gets a plain sentence, the reason it exists, a small
+example, and then its precise version.
+
+### A log line
+
+**What it is.** A **log line** (also called a log entry or log event) is one short record a
+program writes when something happens: when it happened, how serious it is, and what happened.
+
+**Why it exists.** A running program forgets everything the moment a request is finished. The
+log line is the only thing that survives, so it is the only way to know later what the program
+did.
+
+**Example.** At 02:14:07.311, Payments writes one line: the time, the word `INFO`, the name
+`payments`, and the text "card charged for order 1042, took 2,400 ms". That is about 170 bytes
+of text. On a laptop, writing one such line to a file took about 7 microseconds (7 millionths of a
+second) in our measurement.
+
+**The technical version.** A program usually writes log lines through a **logging library**
+(Python's `logging` module, or a library such as `pino` in Node.js), which adds the time and
+other fixed details and sends the line to one or more destinations: the screen, a file, or the
+program's **standard output** (stdout), the default place a program's printed text goes. Lines are
+**append-only**: new lines are added at the end, and old lines are never changed.
+
+### Log levels
+
+**What it is.** A **log level** is a label on each line saying how important it is, from
+"detail only a developer needs" to "something is badly broken".
+
+**Why it exists.** Programs could write far more than anyone could store or read. Levels let you
+choose, per service, how much to keep: in production you keep the important lines and switch off
+the detailed ones, and when you are hunting a bug you switch the detail back on.
+
+**Example.** Checkout writes "order 1042 received" at `INFO`, "payments timed out" at `ERROR`,
+and "cart contents: 3 items, …" at `DEBUG`. In production its level is set to `INFO`, so `INFO`
+and `ERROR` lines are written, and the `DEBUG` line is skipped.
+
+**The technical version.** The common levels, from least to most serious:
+
+| Level | Use it for | Example |
+|---|---|---|
+| `DEBUG` | details that help while finding a bug | "cart contents: 3 items" |
+| `INFO` | normal events worth recording | "order 1042 received" |
+| `WARN` | something odd that the program handled | "payments slow, took 1,900 ms" |
+| `ERROR` | an operation failed | "payments timed out after 2,000 ms" |
+| `FATAL` (or `CRITICAL`) | the program cannot continue | "cannot connect to database, exiting" |
+
+Setting a service's level to `INFO` means "write `INFO` and everything more serious". The
+OpenTelemetry standard (an open standard for logs and other monitoring data, which many tools
+follow) gives each level a number from 1 to 24 so that
+different libraries can be compared, but the five names above are what you will use day to day.
+
+### Structured logs
+
+**What it is.** A **structured log** line stores each detail as a named field, such as
+`order_id = 1042` and `took_ms = 2400`, instead of hiding the details inside a sentence.
+
+**Why it exists.** You will search logs with a computer, not read them. A computer cannot reliably
+pull "2400" out of "charged card for order 1042 in 2400 ms", because every developer words the
+sentence differently. A named field can be matched exactly: "show me every charge where `took_ms`
+is more than 2,000".
+
+**Example.** The same event, two ways:
+
+<Figure caption="The same event as a sentence and as named fields. With named fields, a search such as took_ms > 2000 finds every slow charge, whatever the sentence says.">
+  <TextVsJson />
+</Figure>
+
+The most common format for structured lines is **JSON**: curly braces around `"name": value`
+pairs, the same format many web APIs use. Each line is one complete JSON object, so a program can
+read the lines back one at a time.
+
+**The technical version.** In our measurement a JSON line cost about 7.4 microseconds to write,
+against 6.1 for a plain text line, and took 169 bytes against 90, because every field carries its
+name. That extra space is the main price of structure, and it is almost always worth paying. The
+OpenTelemetry **logs data model** (a stable standard, as of November 2026) names the fields a
+line should have: a timestamp, a severity, a body (the message), and **attributes**, its name for
+the extra named fields.
+
+### A request ID
+
+**What it is.** A **request ID** (also called a correlation ID) is a unique name given to one
+request when it first arrives, and passed along to every service that works on it, so every line
+about that request can carry the same name.
+
+**Why it exists.** Your log store holds lines from thousands of requests, mixed together by time.
+Without a shared name, you cannot tell which "card charged" line belongs to which "order
+received" line, because many requests are happening at the same moment.
+
+**Example.** Suppose Checkout handles about 500 requests a second, and every request writes one
+"card charged" line. Searching for "card charged" in the minute around 2:14 returns about
+30,000 lines: 500 a second × 60 seconds = 30,000. Searching for `request_id = req-9c21` returns exactly the three lines of that one
+customer's request.
+
+**The technical version.** The first service to see a request creates the ID, often a random
+string, and sends it to the next service in an HTTP **header**, an extra named value that travels
+with the request: commonly `X-Request-ID`, or the standard `traceparent` header from the W3C
+Trace Context recommendation, which carries a 32-character trace ID. Each service reads
+the header, adds the ID to every line it writes while working on that request, and passes it on
+to anything it calls.
+
+### Collecting logs in one place
+
+**What it is.** A **log pipeline** is the set of programs that takes lines from every server and
+delivers them into one searchable **log store**, where they are kept for a fixed time, the
+**retention period**, and then deleted.
+
+**Why it exists.** Logs left on each server are useless in practice. Servers are many, and many
+are temporary: in a cloud setup a server, or a **container** (a packaged program running in its own
+isolated space on a server), can be replaced several times a day, and its local files disappear
+with it. Searching one place is the only way to answer a question in
+minutes.
+
+**Example.** The shop runs 6 servers. On each one, a small program called an **agent** reads new
+log lines as they are written and sends them, in batches of a few hundred, to the log store.
+The store keeps lines for 30 days. A search for `req-9c21` covers all 6 servers at once and
+returns in a second or two.
+
+**The technical version.** Common agents are Fluent Bit, Vector and the OpenTelemetry Collector.
+Common log stores are Elasticsearch or OpenSearch, Grafana Loki, and the log services of each
+cloud, such as Amazon CloudWatch Logs. Part 2 shows what happens at each step of the pipeline,
+and what each step costs.
+
+:::tip[If you stop here]
+- A log is the written record of what a program did. Each line has a time, a level and what
+  happened, with the details that matter, such as the order number and how long it took.
+- Write logs as **structured** lines (named fields, usually JSON), so a computer can search them
+  exactly.
+- Give every request a **request ID** when it arrives, pass it to every service, and put it on
+  every line. One search then shows one request's whole story.
+- Send all lines to **one log store**, because servers are many and are replaced often.
+- Logging costs time, storage and money. Log the right things, not everything.
+:::
+
+## Going deeper
+
+Writing one log line takes about 7 microseconds. So how can logging become one of the largest
+items on a cloud bill, slow every request in a service to a crawl, and still not contain the one line
+you need at 2 AM?
+
+Each of those failures has a precise cause, and Part 2 takes them in turn.
+
+- **What to write.** Most useless logs are useless because of what they say, not how many there
+  are. One rich line per request often beats twenty thin ones.
+- **Carrying the request ID** across services and through a program, without passing it by hand
+  to every function.
+- **Levels and sampling** as the volume dial, and the hidden cost of lines you switched off.
+- **The pipeline,** from your program to the search box: where lines wait, how the store finds
+  them, and what you pay per gigabyte.
+- **When the pipeline is slow:** the choice between making requests wait and losing lines, which
+  every logging setup makes, usually without anyone deciding it.
+- **Security:** passwords in logs, fake log lines, and the logging library bug that let attackers
+  take over servers in 2021.
+
+## The obvious fix, and why it breaks
+
+Two fixes come to mind before any of this.
+
+**Print everything, and read the files on the server.** Add `print()` calls everywhere, and when
+something goes wrong, log in to the server and search its output with a tool such as `grep`. It
+works for one server and one developer. It breaks in three ways. First, there are many servers, and
+the request you need may have touched three of them. Second, servers in the cloud come and go:
+Kubernetes, a common system for running containers, keeps a container's output in files of at
+most 10 MiB (about 10 MB), 5 files per container by default (as of November 2026), so a busy container's
+recent history is all you get, and it disappears when the container is removed. Third, free-text
+lines from many requests are mixed together. Here is what that looks like, from the runnable
+example:
+
+```text
+1. Naive: free-text lines from two services
+  6 lines. Which charge belongs to the order that failed? The lines cannot say.
+    checkout: placing order for asha@example.com
+    checkout: placing order for ravi@example.com
+    payments: charged card ending 4242
+    payments: charged card ending 1881
+    checkout: ERROR timeout talking to payments
+    checkout: order placed
+```
+
+Two orders were in progress at once. One failed. Nothing in these lines says which charge belongs
+to the failed order, so you cannot tell which customer to refund. The lines also contain an email
+address, which is personal data you may not be allowed to keep.
+
+**Log at DEBUG everywhere, all the time.** "If I log everything, the answer will be in there." It
+will, along with five times as many lines (the sim below shows this), five times the cost, and a
+search that returns too much to read. More lines do not make the right line easier to find.
+
+### Its neighbours: logs, metrics and traces
+
+Logs are one of three kinds of data used to understand a running system, and people confuse them.
+
+| | What it records | Answers questions like | Cost grows with |
+|---|---|---|---|
+| Logs | one line per event, with details | "what exactly happened to order 1042?" | the number of events |
+| Metrics | numbers counted or measured over time | "how many orders failed per minute today?" | the number of different things counted, not the traffic |
+| Traces | the path of one request through every service, with timings | "which service made this request slow?" | the number of requests traced |
+
+The column to notice is the last one. A count such as "failed orders per minute" costs the same
+whether you handle 10 orders or 10 million, so counting with logs is the expensive way to do it.
+Use metrics for "how many" and "how often" (metrics and monitoring, coming soon), traces for
+"where did the time go" (distributed tracing, coming soon), and logs for "what exactly happened".
+
+## How it works, piece by piece
+
+### What to write: events, decisions and context
+
+A good log line answers a question someone will ask later. In practice those questions are about
+a few kinds of moments.
+
+- **Where a request crosses a boundary**: it arrives, it calls another service or the database,
+  the answer comes back. Write how long the call took and how it ended.
+- **Where the program makes a decision**: a payment is declined, a discount applies, a retry
+  starts. Write the decision and the reason.
+- **Where something fails**: write the error, and the details someone needs to understand it
+  without the code in front of them (which order, which customer ID, which step).
+
+Each of those lines needs **context**: the details that let you find it and understand it. A line
+that says `ERROR timeout` has no context. A line that says
+`ERROR payments timed out, order_id=1042, timeout_ms=2000, request_id=req-9c21` has all of it.
+
+A pattern many teams use goes one step further: the **wide event**, also called a canonical log
+line. Instead of many thin lines per request, each service writes one rich line at the end of
+each request, with every detail gathered along the way: the user, the order, the time spent in
+each call, the result, the status code. One request becomes one line with 30 or 40 fields. It is
+easier to search ("every request where the payment took over 2 seconds and the result was an
+error"), and it is cheaper than 20 lines that repeat the same request ID and service name 20
+times. In practice I'd write one wide event per request plus separate lines only for errors and
+for decisions that matter.
+
+What not to write is as important, and it is covered in the security section below: passwords,
+card numbers, tokens and personal data that you do not need.
+
+### Carrying the request ID across services and through code
+
+The request ID has to travel two ways: from service to service, and from function to function
+inside one service. The first is done with a header; the second with a feature of your language.
+
+<StepThrough
+  title="One request ID across two services"
+  actors={[
+    { id: 'browser', label: 'Browser', kind: 'client' },
+    { id: 'checkout', label: 'Checkout' },
+    { id: 'payments', label: 'Payments' },
+  ]}
+  steps={[
+    { from: 'browser', to: 'checkout', label: 'POST /orders', text: 'The order arrives with no request ID. Checkout is the first service to see it.' },
+    { from: 'checkout', to: 'checkout', label: 'id = req-9c21', text: 'Checkout creates a new random ID and stores it for this request. Every line Checkout writes from now on carries it.' },
+    { from: 'checkout', to: 'payments', label: 'X-Request-ID', text: 'Checkout calls Payments and sends the ID in a header, X-Request-ID: req-9c21.' },
+    { from: 'payments', to: 'payments', label: 'log with id', text: 'Payments reads the header and puts the same ID on every line it writes while charging the card.' },
+    { from: 'payments', to: 'checkout', label: 'charged', text: 'Payments answers. The answer is too late, but both sides wrote lines with the same ID.', tone: 'ok', dashed: true },
+  ]}
+  summary="The first service creates the ID, a header carries it to the next, and every service writes it on every line. One search for the ID then joins lines from every service the request touched."
+/>
+
+Inside a service, the request ID must reach every function that writes a line, including deep
+helper functions that know nothing about the request. Passing it as an argument to every function
+is clumsy, and someone always forgets one. Both Python and JavaScript offer a **context variable** instead:
+a value that is set once at the start of a request and can be read anywhere while that request is
+being handled, even when the server handles many requests at the same time.
+
+- In Python it is `contextvars.ContextVar`. Each request handled at the same time sees its own value.
+- In Node.js it is `AsyncLocalStorage` from `node:async_hooks`. Everything that runs inside
+  `requestContext.run({ requestId }, …)`, including code after an `await`, sees that value.
+
+The logger reads the context variable when it builds each line, so no code that writes a line
+needs to know the ID exists. The runnable example does exactly this, and its search for
+`req-9c21` returns the three lines of the failed order, from two services:
+
+```text
+  search request_id = req-9c21 -> 3 lines:
+    {"time": "18:26:12.930", "level": "INFO", "service": "checkout", "request_id": "req-9c21", "msg": "order received", "order_id": 1042}
+    {"time": "18:26:12.930", "level": "ERROR", "service": "checkout", "request_id": "req-9c21", "msg": "payments timed out", "order_id": 1042, "timeout_ms": 2000}
+    {"time": "18:26:12.930", "level": "INFO", "service": "payments", "request_id": "req-9c21", "msg": "card charged", "order_id": 1042, "amount_inr": 1499, "took_ms": 2400}
+```
+
+The example writes the three lines instantly, so all three show the moment you run it. In a real
+system the times would be 2,000 ms and 2,400 ms apart, and they would come from two servers with
+two clocks, which is why the gotchas below ask for clocks kept in step.
+
+The `traceparent` header from W3C Trace Context does the same job as `X-Request-ID` in a standard
+form, and it is what distributed tracing tools use. If you adopt tracing later, put its trace ID
+on your log lines too, and your logs and traces join up.
+
+### Levels and sampling: the volume dial
+
+Levels decide which lines are written at all. Here is what the dial does to the shop's volume.
+At `INFO`, Checkout writes about 10 lines per request; at `DEBUG`, about 50. At 500 requests a
+second:
+
+- `INFO`: 500 requests × 10 lines = 5,000 lines a second.
+- `DEBUG`: 500 requests × 50 lines = 25,000 lines a second, five times as many.
+
+Five times the lines is five times the storage bill, and, as the sim below shows, it can be more
+than the log pipeline can carry.
+
+**A switched-off line can still cost you.** Python's logging checks the level only when the
+logging call runs, and by then the message may already have been built. In this line, the
+`f"..."` string, and the expensive `cart_summary()` call inside it, are built before `debug()`
+even looks at the level:
+
+```python
+log.debug(f"cart: {cart_summary()}")
+```
+
+We measured it: with `DEBUG` switched off, that line still cost about 56 microseconds per call,
+because the message was built and then thrown away. Checking the level first,
+`if log.isEnabledFor(logging.DEBUG):`, cost 0.04 microseconds, more than a thousand times less.
+For cheap messages, passing the values as arguments, `log.debug("cart: %s", items)`, is enough:
+the message is only built if the line is written. For expensive ones, check the level first.
+
+**Sampling** is the other half of the dial: writing only some of the lines of a kind. Keep every
+error, because errors are rare and each one matters, and keep, for example, 1 in every 100
+successful requests' detailed lines. At 500 requests a second, 1 in 100 keeps 5 successful
+requests a second, which is plenty to see what normal looks like. The rule: decide per kind of
+line, never sample errors, and record the sampling rate on the line, so a count can be scaled
+back up when someone uses logs to estimate how often something happens.
+
+### The pipeline: from your program to the search box
+
+Between your `log.info(...)` call and a search result, a line passes through four stages.
+
+<Figure caption="A line goes from the app's buffer to an agent on the same machine, then to the log store, which indexes it and charges per gigabyte, and finally out of the store when its retention period ends. Each stage can be slow or full; the app's buffer is where the choice between waiting and dropping is made.">
+  <Pipeline />
+</Figure>
+
+**1. The app writes the line.** Usually to standard output, or to a local file. The logging
+library first puts the line into a **buffer**, a small area of memory where lines wait to be
+written, because writing many lines at once is much faster than writing each one alone. If the
+next stage cannot keep up, this buffer fills. What happens then is the subject of the next
+section.
+
+**2. An agent on the same machine reads the lines.** It adds labels that the app does not know or
+should not have to repeat, such as the service name, the server's name and the environment
+(`production`), and sends lines to the store in batches. Batching matters for the same reason as
+before: sending 500 lines in one network request costs far less than 500 requests.
+
+**3. The log store makes the lines searchable.** A store finds lines fast by keeping an
+**index**: a lookup table from values to the lines that contain them, like the index at the back
+of a book. Stores differ in how much they index, and that is the main trade between search speed
+and cost.
+
+- **Elasticsearch and OpenSearch** index every word of every line by default. Any search is fast,
+  and storage and memory costs are high.
+- **Grafana Loki** indexes only a few **labels**, such as `service` and `environment` (all lines
+  with the same labels form one **stream**), and scans the text of the matching lines when you search. Storage is cheap; a
+  search that cannot narrow by label scans a lot.
+
+With a labels-only store, one rule matters more than any other: a label must have few possible
+values. `service` has a handful; `request_id` has one new value per request. Loki's own
+documentation says never to use request IDs or order IDs as labels, because each new value
+creates a new indexed stream, and millions of them overwhelm the index (as of November 2026).
+Keep them as fields inside the line and search for them there. The number of possible values a
+field has is called its **cardinality**: `service` has low cardinality, `request_id` has high.
+
+**4. Retention.** Lines are kept for a fixed period, often 7 to 30 days for searchable storage,
+then deleted or moved to cheap storage that is slow to search. Longer retention is a cost and,
+for personal data, a legal risk; shorter retention means a bug reported after the period cannot
+be investigated.
+
+**What it costs, worked out.** Take the shop's numbers: 500 requests a second, 10 lines per
+request at `INFO`, about 170 bytes per JSON line.
+
+1. Lines per second: 500 × 10 = 5,000 lines.
+2. Bytes per second: 5,000 × 170 bytes = 850,000 bytes, which is 0.85 MB.
+3. Bytes per day: a day has 24 × 60 × 60 = 86,400 seconds, so 0.85 MB × 86,400 = 73,440 MB,
+   about 73 GB.
+4. Price: Amazon CloudWatch Logs charges about $0.50 per GB ingested (taken in), for standard log
+   storage in the US East region (as of November 2026). 73 GB × $0.50 = about $37 a day.
+5. Per month: $37 × 30 days = about $1,100, before storage and searches, which are charged
+   separately.
+
+Switch the same service to `DEBUG` and every number above is five times larger: about 365 GB and
+$183 a day. This arithmetic is why logging setups that were never planned end up as one of the
+largest items on a cloud bill.
+
+### When the pipeline is slow: wait or drop
+
+Here is the decision every logging setup makes, usually without anyone noticing. The app produces
+lines at some rate. The next stage, the disk, the agent or the store, accepts them at some rate.
+As long as it accepts faster, the buffer stays nearly empty. When it slows down (the store is
+overloaded, the network is slow, the disk is full), the buffer fills. And when the buffer is
+full, the logging library has only two choices:
+
+- **Wait.** The `log.info(...)` call does not return until there is space. Nothing is lost, and
+  the request that wanted to write a line waits too. If every request writes lines, every request
+  slows down to the speed of the log store.
+- **Drop.** The line is thrown away, a counter goes up, and the request carries on at full speed.
+  The request is fine; that line is gone forever.
+
+Many logging libraries wait by default. A program does its work in one or more **threads**,
+separate lines of work that run side by side. Python's standard handlers write each line in the
+same thread that is handling the request, so a slow destination slows the request directly. We measured this with a log destination
+that takes 20 ms per line, and requests that each write 4 lines:
+
+```text
+4. A destination that takes 20 ms per line
+  blocking:       80.5 ms per request (4 lines x 20 ms each)
+  non-blocking:  0.038 ms per request; of 80 lines, 50 sent, 30 dropped because the queue of 50 was full
+```
+
+When the request wrote its lines straight to the slow destination, each request took 80 ms: 4
+lines × 20 ms = 80 ms of pure waiting on logs. When it put its lines in a queue of 50 that a
+separate background thread sent, each request took 0.038 ms, about two thousand times less. The
+price is in the last part of the line: 20 requests wrote 80 lines in a burst, the queue could hold
+only 50, and the other 30 were dropped and counted.
+
+Neither choice is always right. For ordinary application logs, I'd drop and count: a slow log
+store should never take the shop down, and the drop counter tells you something was lost. For
+**audit logs**, the record of who did what that a law or a contract requires you to keep, losing
+a line may be worse than slowing down, so they often wait, or go through a separate, more
+reliable path.
+
+The sim below is the shop's Checkout service writing log lines through a buffer of 10,000 lines
+to a store that accepts 20,000 lines a second.
+
+<LogPipelineSim />
+
+Here is what to take from it. A buffer only buys time: when the store accepts fewer lines than
+the service writes, any buffer fills, and then you either lose lines or slow requests. The size of
+the buffer decides how long a slowdown you can ride out, not whether you can. In the defaults,
+the store slowing to 2,000 lines a second while the service writes 5,000 means the buffer grows
+by 3,000 lines a second (5,000 − 2,000), and 10,000 lines of room last about 3.3 seconds
+(10,000 ÷ 3,000).
+
+This is not only a laptop problem. On 14 November 2024, a configuration change in Cloudflare's
+log delivery service, combined with a safety rule that "failed open", sent far more logs into its
+buffering system than it was sized for. For about three and a half hours, around 55% of the logs
+Cloudflare should have delivered to its customers were lost. The lesson Cloudflare drew was to
+protect each buffer against sudden volume and to alert on misconfiguration early: the same wait
+or drop problem, at the scale of millions of lines a second.
+
+### Logs and security
+
+Logs are read by many people (developers, support staff, contractors), copied to other systems,
+and kept for weeks. Three security problems come from forgetting that.
+
+**Secrets in logs.** A line that records a whole login request also records the password inside
+it. A line that records a payment request records the card number. Anyone who can read the logs
+can now read those, and they stay there for the whole retention period. In September 2024, the
+Irish Data Protection Commission fined Meta €91 million for storing some users' passwords in plain
+text on its internal systems, without encryption; Meta had said in 2019 that the passwords had been
+"logged" in readable form. The fix has two layers:
+
+1. Never log whole requests or objects. Log the fields you chose.
+2. As a safety net, mask known secret field names before a line is written. The runnable example
+   adds a filter that replaces `password`, `card_number`, `token` and `authorization` with
+   `[REDACTED]`:
+
+```text
+3. Redaction
+    {"time": "18:26:12.930", "level": "INFO", "service": "login", "request_id": "req-11aa", "msg": "login attempt", "user": "asha", "password": "[REDACTED]"}
+```
+
+**Fake log lines.** If a program writes user input into a plain-text line, a user can type a
+line break followed by text that looks like a real log line, such as
+`\n2026-11-21 INFO payment approved for order 1042`, and the log now contains a line the program
+never wrote. This is **log injection** (listed as CWE-117 in the standard list of software
+weaknesses). JSON lines protect against it, because the JSON encoder turns a line break inside a
+value into the two characters `\n`, so the fake text stays inside one field of one real line.
+
+**Logging libraries that act on what they log.** In December 2021, a bug named **Log4Shell**
+(CVE-2021-44228, its number in the public list of known security bugs) was found in Log4j, one
+of the most widely used logging libraries for Java. Log4j, from
+version 2.0-beta9 to 2.14.1, did not only write text: if a logged string contained a special
+pattern starting with `${jndi:`, Log4j followed it, connected to a server named in the string,
+and could download and run code from it. Attackers only had to get such a string logged, for
+example by putting it in the User-Agent header (the header a browser sends to name itself), which
+many servers log. It received
+the highest possible severity score, 10.0, and the US Cybersecurity and Infrastructure Security
+Agency (CISA) ordered federal agencies to patch it urgently. The lessons: a logger must only write
+data, never interpret it, and logging libraries are dependencies to keep up to date like any
+other.
+
+## Choosing between them
+
+The decisions this page covered, and a sensible default for each.
+
+| Decision | Options | Default I'd start with |
+|---|---|---|
+| Format | free text, or structured (JSON) | JSON, one object per line |
+| Request ID | none, `X-Request-ID`, W3C `traceparent` | `traceparent` if you use tracing, otherwise `X-Request-ID`; on every line |
+| How many lines | many thin lines, or one wide event per request | one wide event per request, plus lines for errors and important decisions |
+| Level in production | `DEBUG`, `INFO`, `WARN` | `INFO`, with a way to switch one service to `DEBUG` for an hour |
+| Sampling | keep all, or a share | keep all errors; sample successful requests' detail if volume is high |
+| When the pipeline is slow | wait, or drop and count | drop and count for application logs; wait (or a separate path) for audit logs |
+| Store | index everything (Elasticsearch/OpenSearch), labels only (Loki), a cloud service | whatever your platform already runs; keep labels few and low-cardinality |
+| Retention | days to years | 7–30 days searchable; longer only where a rule requires it |
+
+How to choose: start with the defaults in the last column, then let two numbers drive changes.
+The first is your monthly log bill against what the logs have actually been used for. The second
+is the number of incidents where the line you needed was missing. If the bill grows and the
+second number stays at zero, you are logging too much; if the second number is not zero, add the
+missing context, not more volume.
+
+## Build it yourself
+
+The runnable examples build a logger in four steps: free text, structured JSON with a request ID,
+redaction, and a non-blocking queue. The first piece is the structured logger: a formatter that
+turns each record into one line of JSON, and a context variable that carries the request ID.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="logging_demo.py (excerpt)"
+# runnable version: examples/logging/python/logging_demo.py
+request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+class JsonFormatter(logging.Formatter):
+    """Turns a log record into one line of JSON: fixed fields first, then the event's own fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        event = {
+            "time": time.strftime("%H:%M:%S", time.gmtime(record.created)) + f".{int(record.msecs):03d}",
+            "level": record.levelname,
+            "service": record.name,
+            "request_id": request_id.get(),
+            "msg": record.getMessage(),
+        }
+        event.update(getattr(record, "fields", {}))
+        return json.dumps(event)
+
+# When a request arrives:
+#     request_id.set("req-9c21")
+# Anywhere while handling it:
+#     payments.info("card charged", extra={"fields": {"order_id": 1042, "took_ms": 2400}})
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="logging-demo.mjs (excerpt)"
+// runnable version: examples/logging/js/logging-demo.mjs
+const requestContext = new AsyncLocalStorage();
+const SECRET_KEYS = new Set(['password', 'card_number', 'token', 'authorization']);
+
+/** A tiny logger: fixed fields first, then the event's own fields, secrets masked. */
+function makeLogger(service, write) {
+  const log = (level, msg, fields = {}) => {
+    const safe = Object.fromEntries(
+      Object.entries(fields).map(([k, v]) => [k, SECRET_KEYS.has(k) ? '[REDACTED]' : v]),
+    );
+    const event = {
+      time: new Date().toISOString().slice(11, 23),
+      level,
+      service,
+      request_id: requestContext.getStore()?.requestId ?? '-',
+      msg,
+      ...safe,
+    };
+    write(JSON.stringify(event));
+  };
+  return { info: (m, f) => log('INFO', m, f), error: (m, f) => log('ERROR', m, f) };
+}
+
+// When a request arrives:
+//   requestContext.run({ requestId: 'req-9c21' }, () => handleOrder());
+// Anywhere inside handleOrder, even after an await:
+//   payments.info('card charged', { order_id: 1042, took_ms: 2400 });
+```
+  </TabItem>
+</Tabs>
+
+The second piece keeps a slow destination from slowing requests: put each line in a bounded
+queue, let a background worker send it, and when the queue is full, drop the line and count it.
+In Python the standard library has the parts (`QueueHandler` and `QueueListener`); the only
+change is to drop instead of raising an error when the queue is full.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="logging_demo.py (excerpt)"
+class DroppingQueueHandler(logging.handlers.QueueHandler):
+    """Puts records on a bounded queue; if the queue is full, drops the record and counts it."""
+
+    def __init__(self, q: queue.Queue) -> None:
+        super().__init__(q)
+        self.dropped = 0
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            self.dropped += 1  # never make the request wait for the logs
+
+# Wiring: the request thread only enqueues; a background thread does the slow sending.
+#     q = queue.Queue(maxsize=50)
+#     log.addHandler(DroppingQueueHandler(q))
+#     logging.handlers.QueueListener(q, SlowNetworkHandler()).start()
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="logging-demo.mjs (excerpt)"
+  // Non-blocking: lines go into a buffer of 50; a background loop sends them.
+  const buffer = [];
+  let sent = 0;
+  let dropped = 0;
+  let open = true;
+  const drain = (async () => {
+    while (open || buffer.length) {
+      if (buffer.length) { buffer.shift(); await sendSlowly(); sent++; } else await sleep(1);
+    }
+  })();
+  const enqueue = (line) => {
+    if (buffer.length >= 50) dropped++; // never make the request wait for the logs
+    else buffer.push(line);
+  };
+```
+  </TabItem>
+</Tabs>
+
+Both versions print the same results as the measurements earlier on this page: 80 ms per request
+when waiting on the slow destination, well under a tenth of a millisecond with the queue, and 30
+of 80 lines dropped in the burst. The `bench.py` file in the same folder produced this page's
+per-line costs and the switched-off `DEBUG` measurement.
+
+## How real systems do it
+
+**OpenTelemetry** (as of November 2026) is the open standard most tools now follow for logs,
+metrics and traces. Its logs data model is stable: timestamp, severity text and number, body,
+attributes, and the trace and span IDs that join a log line to a trace. Its Collector is a
+common agent: it receives lines from apps or files, adds labels, batches, and sends them to
+almost any store.
+
+**Python** ships `logging` with levels, handlers, formatters, filters, and `QueueHandler` and
+`QueueListener` for moving slow writing off the request thread. Libraries such as `structlog`
+make structured lines and context variables the default. **Node.js** apps commonly use `pino`,
+which writes JSON and is designed to keep logging work off the main thread, with
+`AsyncLocalStorage` for per-request context.
+
+**Kubernetes** collects whatever a container writes to standard output into files on the machine
+it runs on, rotated at 10 MiB, with 5 files kept per container by default (as of November 2026).
+An agent such as Fluent Bit or the OpenTelemetry Collector runs on every machine and ships those
+files to the store before they rotate away.
+
+**Grafana Loki** indexes only labels and keeps the text compressed in cheap object storage. Its
+documentation recommends few labels with few values each, a default limit of 15 index labels, and
+"structured metadata" for high-cardinality fields such as request IDs (as of November 2026).
+
+**Amazon CloudWatch Logs** charges per GB ingested (about $0.50 in US East for the standard class,
+$0.25 for the infrequent-access class) and per GB stored per month (about $0.03, measured after
+compression), with lower prices at very large volumes (as of November 2026). Retention is set per
+log group (CloudWatch's name for a set of related logs); the default is to keep logs forever, which is worth changing on day one.
+
+## Gotchas and war stories
+
+:::caution[Logs that never leave the server are lost with it]
+A container that crashes, or a cloud server that is replaced, takes its local log files with it,
+often including the last lines written before the crash, which are the ones you need. Ship logs
+continuously with an agent, and check that the lines from right before a crash reach the store.
+:::
+
+**Default retention is often "forever".** Some cloud log services keep every line until you set
+a retention period. Months later, storage is a large and growing part of the bill, and it holds
+personal data far longer than any policy allows. Set retention when you create a log group.
+
+**Time zones and clocks.** One server writes local time, another UTC, and a third has a clock 3
+seconds off. A request's story now appears in the wrong order. Write timestamps in UTC, in a
+standard format such as `2026-11-21T02:14:07.311Z` (ISO 8601), and keep clocks synchronised.
+
+**A label with millions of values.** Someone adds `user_id` as a label in a labels-only store, and
+the index grows until searches slow down or the store starts rejecting lines. Keep IDs as fields
+inside the line.
+
+**The disk fills with logs.** A service writing to a local file without **rotation** (closing the
+file at a size limit and starting a new one, deleting the oldest) fills the disk. Then the service
+fails, and so does everything else on that machine that needs to write. Rotate local files, and
+alert on free disk space.
+
+:::danger[Debug logging left on in production]
+Someone switches a busy service to `DEBUG` to chase a bug and forgets it. Volume and cost go up
+five times overnight, and the extra lines can be more than the pipeline carries, so the buffer
+fills and the service either drops lines or slows down. Make debug switches expire on their own,
+for example after one hour.
+:::
+
+## Trade-offs and when not to use it
+
+Logging costs CPU time on every line, memory for buffers, network to ship lines, and money per
+gigabyte stored and searched. It costs people time to decide what is worth writing. And it carries
+risk: every line is a copy of some data, kept for weeks and readable by many people.
+
+Logs are the wrong tool for some questions.
+
+- **Counting and trends** ("errors per minute", "requests per second") belong in metrics. A
+  metric costs the same at any traffic level; a count built from logs costs more with every request.
+- **Following a request's timing across many services** belongs in traces, which record how long
+  each step took and how the steps nest inside each other.
+- **Data the business depends on** (orders, payments, what a user agreed to) belongs in a
+  database, not in logs. Logs are dropped, sampled and deleted by design; a database is not.
+
+When not to add a log line: when it would be written on every request and nobody can name the
+question it answers. When not to keep logs longer: when they hold personal data and no rule
+requires it.
+
+## Interview corner
+
+Logging comes up in system design interviews as part of "how would you debug this in
+production?" and "how do you monitor this system?".
+
+**"A customer reports a failed payment. How do you investigate?"** A strong answer starts from the
+customer's identifier, finds the request ID, and searches the central log store for every line
+with that ID across services, sorted by time. It explains that this only works if a request ID is
+created at the edge, passed in a header, and written on every line.
+
+**"What would you log for this service?"** A strong answer names events at boundaries (incoming
+request, outgoing calls with timings), decisions, and errors with context; suggests structured
+JSON and one wide event per request; and says what not to log (passwords, tokens, card numbers,
+unnecessary personal data).
+
+**"Logs, metrics or traces?"** Logs for what happened to one request, metrics for how many and
+how often, traces for where the time went across services. Bonus: cost grows with events for
+logs, but not for metrics.
+
+**"Your log store goes down. What happens to the service?"** A strong answer says it depends on
+the buffer's behaviour when full, explains wait versus drop, and picks drop-and-count for normal
+logs so the log store can never take the service down.
+
+## Check yourself
+
+<details>
+<summary>1. A service handles 200 requests a second and writes 5 JSON lines of about 200 bytes per request. About how many GB of logs is that per day?</summary>
+
+About 17 GB. Lines per second: 200 × 5 = 1,000. Bytes per second: 1,000 × 200 = 200,000 bytes,
+which is 0.2 MB. Per day: 0.2 MB × 86,400 seconds = 17,280 MB, about 17 GB.
+
+</details>
+
+<details>
+<summary>2. Your service sets its level to INFO. Why can a DEBUG line whose message calls a slow function still slow every request down?</summary>
+
+In a line such as `log.debug(f"state: {expensive()}")`, the f-string, including the call to
+`expensive()`, is built before `debug()` checks the level. The
+line is not written, but the work to build it is done on every call. Check the level first with
+`isEnabledFor(logging.DEBUG)`, or pass values as arguments for cheap messages.
+
+</details>
+
+<details>
+<summary>3. Two services each log "payment failed" lines. How do you find the lines from both services for one customer's request?</summary>
+
+Search by the request ID. The first service creates it, passes it to the second in a header such
+as `X-Request-ID` or `traceparent`, and both write it on every line. Without a shared ID, lines
+from concurrent requests cannot be matched up reliably.
+
+</details>
+
+<details>
+<summary>4. The log store slows down for a minute. Your logging setup waits when its buffer is full. What do users notice?</summary>
+
+Requests get slower, possibly by seconds, because every request that writes a line waits for
+buffer space, and the buffer only empties as fast as the slow store accepts lines. With drop and
+count instead, requests stay fast, and some log lines from that minute are lost, with a counter
+saying how many.
+
+</details>
+
+<details>
+<summary>5. Why should request_id not be a label in Grafana Loki, and where should it go instead?</summary>
+
+Labels are indexed, and each new label value creates a new stream in the index. A request ID has
+a new value for every request, so the index would grow without limit. Keep it as a field inside
+the line (or in Loki's structured metadata) and search for it there.
+
+</details>
+
+## Recap
+
+- A log line records one event: time, level, what happened, and the details that answer a later
+  question. Write lines at boundaries, decisions and errors, or one wide event per request.
+- Structured (JSON) lines can be searched exactly; free text cannot. JSON also makes injected fake
+  lines harmless.
+- A request ID, created at the edge, passed in a header and kept in a context variable, joins one
+  request's lines across services.
+- Levels and sampling are the volume dial. Keep every error; watch out for messages built while
+  their level is switched off.
+- The pipeline is app buffer, agent, store, retention. Volume × bytes × 86,400 seconds × price per
+  GB is the bill; keep labels low-cardinality.
+- When the pipeline is slow, a full buffer must wait or drop. Drop and count for ordinary logs so
+  logging can never take the service down. Never log secrets.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'metrics-and-monitoring', why: 'Counting and measuring over time: the cheap way to answer "how many" and "how often".' },
+  { slug: 'distributed-tracing', why: 'Following one request through every service, with timings, and joining traces to your log lines.' },
+  { slug: 'alerting', why: 'Turning logs and metrics into a page at 2 AM only when a person really needs to act.' },
+  { slug: 'slis-slos-error-budgets', why: 'Deciding how reliable a service must be, and measuring it.' },
+  { slug: 'observability-overview', why: 'How logs, metrics and traces fit together into one picture of a running system.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [OpenTelemetry: Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/) (stable, checked November 2026) — the standard fields of a log record, severity numbers, and trace IDs on log lines.
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/) (Recommendation, 2021) — the `traceparent` header that carries one ID across services.
+- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) (living document, checked November 2026) — what to log, what never to log, and log injection.
+- [Python: Logging Cookbook](https://docs.python.org/3/howto/logging-cookbook.html) (Python 3.13 docs, checked November 2026) — `QueueHandler`, `QueueListener`, filters and context.
+- [Node.js: AsyncLocalStorage](https://nodejs.org/api/async_context.html) (Node 22 docs, checked November 2026) — carrying a request's context through asynchronous code.
+- [Kubernetes: Logging Architecture](https://kubernetes.io/docs/concepts/cluster-administration/logging/) (living docs, checked November 2026) — container output, rotation defaults and node-level agents.
+- [Grafana Loki: Label best practices](https://grafana.com/docs/loki/latest/get-started/labels/bp-labels/) (Loki 3.x, checked November 2026) — few labels, bounded values, and structured metadata for IDs.
+- [Amazon CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/) (living page, checked November 2026) — ingestion, storage and log classes.
+- [CISA: Apache Log4j Vulnerability Guidance](https://www.cisa.gov/news-events/news/apache-log4j-vulnerability-guidance) (2021–2022) — Log4Shell, affected versions and fixes.
+
+**Engineering writing and incidents**
+
+- [Cloudflare: Incident on November 14, 2024, resulting in lost logs](https://blog.cloudflare.com/cloudflare-incident-on-november-14-2024-resulting-in-lost-logs/) (2024) — a log pipeline overwhelmed by volume, and what was changed.
+- [Irish Data Protection Commission: €91 million fine of Meta](https://www.dataprotection.ie/en/news-media/press-releases/DPC-announces-91-million-fine-of-Meta) (2024) — passwords stored in plain text on internal systems.
+- [Honeycomb: Structured events are the basis of observability](https://www.honeycomb.io/blog/structured-events-basis-observability) (living blog, checked November 2026) — the case for one wide, structured event per request.

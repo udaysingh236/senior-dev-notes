@@ -5,7 +5,7 @@ tagline: Trying a failed call again usually fixes it, but uncontrolled retries c
 difficulty: intermediate
 track: resilience
 prerequisites: [timeouts, rest-api-design, latency-vs-throughput]
-next: [circuit-breakers, idempotency-keys, load-shedding]
+next: [circuit-breakers, idempotency-keys, load-shedding, logging]
 lastReviewed: 2026-11-09
 sidebar:
   order: 2
@@ -1135,6 +1135,7 @@ budget or a circuit breaker that is shared more widely.
   { slug: 'idempotency-keys', why: 'How to make a POST safe to retry: storing the key, the in-progress state and the stored response.' },
   { slug: 'load-shedding', why: 'The server-side half of escaping a retry storm: refusing work you cannot finish in time, by priority.' },
   { slug: 'message-queues', why: 'Retrying work later instead of now: a queue holds the job, and its lease spaces the attempts.' },
+  { slug: 'logging', why: 'Seeing every attempt of one request in your logs, tied together by a request ID.' },
 ]} />
 
 ## Further reading

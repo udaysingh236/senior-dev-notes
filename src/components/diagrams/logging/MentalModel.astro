@@ -1,0 +1,66 @@
+---
+// Part 1 mental model. Three services write log lines, each tagged with the request ID. A
+// collector gathers them into one log store. One search for req-9c21 returns the three lines of
+// that request, from two services, in time order.
+---
+
+<svg viewBox="0 0 400 452" width="100%" role="img" aria-labelledby="log-mm-t log-mm-d">
+  <title id="log-mm-t">Log lines from three services collected into one searchable store</title>
+  <desc id="log-mm-d">
+    Three services, checkout, payments and email, each write log lines as they work. Every line
+    carries the ID of the request it belongs to. A collector gathers the lines from all servers
+    into one log store. A search for request ID req-9c21 returns three lines in time order: checkout
+    received order 1042, checkout gave up waiting for payments after 2,000 ms, and payments
+    charged the card anyway after 2,400 ms.
+  </desc>
+  <defs>
+    <marker id="log-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <!-- services -->
+  <g stroke-width="2">
+    <rect x="4" y="4" width="122" height="52" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="139" y="4" width="122" height="52" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+    <rect x="274" y="4" width="122" height="52" rx="6" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  </g>
+  <g font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">
+    <text x="65" y="36">Checkout</text>
+    <text x="200" y="36">Payments</text>
+    <text x="335" y="36">Email</text>
+  </g>
+
+  <!-- lines flowing down -->
+  <g fill="none" stroke-width="2" style="stroke: var(--viz-flow)">
+    <path d="M65 58 L 170 118" marker-end="url(#log-mm-a)" />
+    <path d="M200 58 L 200 118" marker-end="url(#log-mm-a)" />
+    <path d="M335 58 L 230 118" marker-end="url(#log-mm-a)" />
+  </g>
+  <text x="4" y="98" font-size="15" style="fill: var(--viz-muted)">log lines</text>
+
+  <!-- collector -->
+  <rect x="110" y="122" width="180" height="44" rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <text x="200" y="150" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Collector</text>
+  <path d="M200 168 L 200 196" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#log-mm-a)" />
+
+  <!-- store -->
+  <path d="M110 208 L110 250 A90 9 0 0 0 290 250 L290 208" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <ellipse cx="200" cy="208" rx="90" ry="9" stroke-width="2" style="fill: var(--viz-store-soft); stroke: var(--viz-store)" />
+  <text x="200" y="240" font-size="17" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">Log store</text>
+  <path d="M200 262 L 200 290" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#log-mm-a)" />
+
+  <!-- search -->
+  <rect x="4" y="294" width="392" height="40" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="16" y="320" font-size="16" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">search: request_id = req-9c21</text>
+
+  <!-- results -->
+  <g font-size="15" style="font-family: var(--sl-font-mono)">
+    <rect x="4" y="344" width="392" height="30" rx="3" style="fill: var(--viz-flow-soft)" />
+    <text x="12" y="365" style="fill: var(--viz-ink)">checkout  order 1042 received</text>
+    <rect x="4" y="378" width="392" height="30" rx="3" style="fill: var(--viz-bad-soft)" />
+    <text x="12" y="399" style="fill: var(--viz-ink)">checkout  ERROR timed out, 2000 ms</text>
+    <rect x="4" y="412" width="392" height="30" rx="3" style="fill: var(--viz-flow-soft)" />
+    <text x="12" y="433" style="fill: var(--viz-ink)">payments  card charged, 2400 ms</text>
+  </g>
+</svg>

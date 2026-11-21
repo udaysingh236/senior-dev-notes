@@ -1,0 +1,19 @@
+---
+// A service writing log lines through a bounded buffer to a log store. See log-pipeline-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="logging-pipeline"
+  title="Log lines on their way to the log store"
+  description="On the left, the checkout service, with requests per second and how long a request takes. In the middle, the buffer inside the service where log lines wait, as a bar that fills up: blue when mostly empty, amber past 60%, red when full. On the right, the log store and how many lines a second it accepts. Below: lines dropped (or, in wait mode, requests waiting for space in the buffer), lines shipped, and lines written per second. The bar at the bottom turns the current volume into gigabytes and dollars a day."
+  watchFor="At the defaults, 500 requests a second write 5,000 lines a second, the store takes up to 20,000, and the buffer stays near empty: 73 GB and about $37 a day. Press 'Log store slows down': the store takes only 2,000 a second, the buffer fills in about 3 seconds, and lines start to drop while requests stay at 20 ms. Reset, switch to 'make the request wait' and press it again: nothing is dropped, and requests now take seconds. Switch the level to DEBUG: five times the lines and the cost, more than the store can take, even without any slowdown."
+  viewBox="0 0 400 240"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createLogPipelineModel } from './log-pipeline-model';
+
+  mountAll('logging-pipeline', createLogPipelineModel);
+</script>

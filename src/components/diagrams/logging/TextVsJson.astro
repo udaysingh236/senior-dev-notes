@@ -1,0 +1,36 @@
+---
+// The same event as a free-text line and as a structured (JSON) line. In the text line, the
+// order ID and the time taken are buried in a sentence; in the JSON line each is a named field a
+// search can match exactly.
+---
+
+<svg viewBox="0 0 400 352" width="100%" role="img" aria-labelledby="log-tj-t log-tj-d">
+  <title id="log-tj-t">One event as free text and as named fields</title>
+  <desc id="log-tj-d">
+    Top: a free-text line, "payments: charged card for order 1042 in 2400 ms". To find slow
+    charges you would have to guess the wording. Bottom: the same event as a structured line, one
+    named field per fact: time, level INFO, service payments, request_id req-9c21, msg card charged,
+    order_id 1042, took_ms 2400. A search such as took_ms greater than 2000 matches the field
+    exactly.
+  </desc>
+
+  <text x="4" y="22" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Free text</text>
+  <rect x="4" y="32" width="392" height="62" rx="6" stroke-width="2" style="fill: var(--viz-surface); stroke: var(--viz-stroke)" />
+  <g font-size="15" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">
+    <text x="14" y="58">payments: charged card for</text>
+    <text x="14" y="80">order 1042 in 2400 ms</text>
+  </g>
+  <text x="4" y="118" font-size="15" style="fill: var(--viz-muted)">Slow charges? Guess the wording and hope.</text>
+
+  <text x="4" y="156" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Structured (JSON)</text>
+  <rect x="4" y="166" width="392" height="150" rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <g font-size="15" style="font-family: var(--sl-font-mono)">
+    <text x="14" y="190" style="fill: var(--viz-muted)">"level":</text><text x="140" y="190" style="fill: var(--viz-ink)">"INFO"</text>
+    <text x="14" y="212" style="fill: var(--viz-muted)">"service":</text><text x="140" y="212" style="fill: var(--viz-ink)">"payments"</text>
+    <text x="14" y="234" style="fill: var(--viz-muted)">"request_id":</text><text x="140" y="234" style="fill: var(--viz-ink)">"req-9c21"</text>
+    <text x="14" y="256" style="fill: var(--viz-muted)">"msg":</text><text x="140" y="256" style="fill: var(--viz-ink)">"card charged"</text>
+    <text x="14" y="278" style="fill: var(--viz-muted)">"order_id":</text><text x="140" y="278" style="fill: var(--viz-ink)">1042</text>
+    <text x="14" y="300" style="fill: var(--viz-muted)">"took_ms":</text><text x="140" y="300" font-weight="700" style="fill: var(--viz-ink)">2400</text>
+  </g>
+  <text x="4" y="342" font-size="15" style="fill: var(--viz-ok)">Slow charges? Search took_ms &gt; 2000.</text>
+</svg>
