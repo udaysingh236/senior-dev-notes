@@ -1,0 +1,57 @@
+---
+// The latency ladder: common operations on one logarithmic scale (each dotted line is 10 times
+// the one before). Numbers from napkin-math, measured October–November 2026; hard disk and
+// network rows are 99th-percentile values. Blue-grey bars stay inside one machine, blue bars
+// cross a network.
+---
+
+<svg viewBox="0 0 400 620" width="100%" role="img" aria-labelledby="bote-ll-t bote-ll-d">
+  <title id="bote-ll-t">How long common operations take</title>
+  <desc id="bote-ll-d">
+    Eight bars on a scale where each step is ten times longer than the one before, from 100
+    nanoseconds to 1 second. Memory read, 150 nanoseconds. SSD read of 8 KB, 0.2 milliseconds.
+    Network round trip in the same zone, 0.25 milliseconds. Redis get in the same zone, 0.3
+    milliseconds. Round trip to the next zone, 1 millisecond. Hard disk read, 25 milliseconds.
+    Round trip to the next region, 50 milliseconds. United States to Singapore, 200 milliseconds.
+  </desc>
+  <text x="6" y="22" font-size="18" font-style="italic" style="fill: var(--viz-muted)">each dotted line: 10 times longer</text>
+  <line x1="6.0" y1="60" x2="6.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="42.0" y1="60" x2="42.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="78.0" y1="60" x2="78.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="114.0" y1="60" x2="114.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="150.0" y1="60" x2="150.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="186.0" y1="60" x2="186.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="222.0" y1="60" x2="222.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <line x1="258.0" y1="60" x2="258.0" y2="548" stroke-width="1" stroke-dasharray="2 4" style="stroke: var(--viz-stroke)" />
+  <text x="6.0" y="52" font-size="18" text-anchor="start" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">100 ns</text>
+  <text x="150.0" y="52" font-size="18" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">1 ms</text>
+  <text x="258.0" y="52" font-size="18" text-anchor="middle" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">1 s</text>
+  <text x="6" y="92" font-size="20" style="fill: var(--viz-ink)">Memory read</text>
+  <rect x="6" y="100" width="6.3" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="20.3" y="117" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">150 ns</text>
+  <text x="6" y="152" font-size="20" style="fill: var(--viz-ink)">SSD read, 8 KB</text>
+  <rect x="6" y="160" width="118.8" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="132.8" y="177" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">0.2 ms</text>
+  <text x="6" y="212" font-size="20" style="fill: var(--viz-ink)">Round trip, same zone</text>
+  <rect x="6" y="220" width="122.3" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="136.3" y="237" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">0.25 ms</text>
+  <text x="6" y="272" font-size="20" style="fill: var(--viz-ink)">Redis get, same zone</text>
+  <rect x="6" y="280" width="125.2" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="139.2" y="297" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">0.3 ms</text>
+  <text x="6" y="332" font-size="20" style="fill: var(--viz-ink)">Round trip, next zone</text>
+  <rect x="6" y="340" width="144.0" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="158.0" y="357" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">1 ms</text>
+  <text x="6" y="392" font-size="20" style="fill: var(--viz-ink)">Hard disk read</text>
+  <rect x="6" y="400" width="194.3" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="208.3" y="417" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">25 ms</text>
+  <text x="6" y="452" font-size="20" style="fill: var(--viz-ink)">Round trip, next region</text>
+  <rect x="6" y="460" width="205.2" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="219.2" y="477" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">50 ms</text>
+  <text x="6" y="512" font-size="20" style="fill: var(--viz-ink)">US to Singapore</text>
+  <rect x="6" y="520" width="226.8" height="20" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="240.8" y="537" font-size="20" font-weight="700" style="fill: var(--viz-ink); font-family: var(--sl-font-mono)">200 ms</text>
+  <rect x="6" y="566" width="18" height="16" rx="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="32" y="580" font-size="18" style="fill: var(--viz-ink)">inside one machine</text>
+  <rect x="6" y="594" width="18" height="16" rx="2" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="32" y="608" font-size="18" style="fill: var(--viz-ink)">crosses a network</text>
+</svg>

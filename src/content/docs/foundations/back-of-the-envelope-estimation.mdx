@@ -1,0 +1,830 @@
+---
+title: Back-of-the-Envelope Estimation
+description: How to work out, in a few minutes and with round numbers, how many requests a second, servers, storage and network a system will need, explained from zero with one chat app of 10 million users. Powers of ten, bytes and bits, per day to per second, average and peak, how much one server can do, the latency numbers worth knowing in 2026, ranges, and how to check an estimate.
+tagline: How to work out, in a few minutes and with round numbers, roughly how many servers, how much storage and how much network a system will need, before you build it.
+difficulty: beginner
+track: foundations
+prerequisites: [latency-vs-throughput, how-the-web-works]
+next: [percentiles-and-tail-latency, partitioning-and-sharding, autoscaling, url-shortener]
+lastReviewed: 2026-11-23
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/back-of-the-envelope-estimation/MentalModel.astro';
+import DailyCurve from '../../../components/diagrams/back-of-the-envelope-estimation/DailyCurve.astro';
+import LatencyLadder from '../../../components/diagrams/back-of-the-envelope-estimation/LatencyLadder.astro';
+
+## The question
+
+Someone asks you: "We are building a chat app. If 10 million people use it every day, how many
+servers do we need? Will the messages fit on one database?" Nobody has built it yet, so there is
+nothing to measure. Do you say "it depends", or can you give an answer that is good enough to
+decide something?
+
+The short answer: you can, in about five minutes, with a pen. Write down a few guesses you can
+defend (how many messages one person sends a day, how big one message is), multiply and divide
+them step by step, and round every number so the arithmetic stays small. The result will not be
+exact. It will tell you whether you need about 5 servers, about 50 or about 500, and whether the
+data fits on one disk or needs many. That is usually all the decision needs. Engineers call this a
+**back-of-the-envelope estimate**: a calculation small enough to do on the back of an envelope.
+
+## The idea in plain words
+
+We will follow one example through the whole page: a chat app. Every number below is a guess
+written down on purpose, and the page says so each time. The method is the point, not the numbers.
+
+1. **Write down what you know or can guess.** 10 million people open the app each day. Each one
+   sends about 40 messages a day, and opens a chat or scrolls back about 100 times a day. Each of
+   those actions is one request to our servers.
+2. **Count the work for one day.** Sending: 10 million people × 40 messages = 400 million
+   messages a day. Reading: 10 million × 100 = 1 billion requests a day. Together, 400 million +
+   1,000 million = 1.4 billion requests a day.
+3. **Turn "a day" into "a second".** Servers are sized by how much they do each second. A day has
+   24 hours × 60 minutes × 60 seconds = 86,400 seconds. So 1.4 billion ÷ 86,400 = about 16,000
+   requests every second, on average.
+4. **Plan for the busiest hour, not the average.** People chat in the evening, not at 4 AM. We
+   guess the busiest hour is 3 times the average: 16,000 × 3 = about 48,000 requests a second.
+5. **Turn requests into servers.** Suppose one server can safely handle about 1,000 requests a
+   second (the building blocks show where that number comes from). Then 48,000 ÷ 1,000 = about 48,
+   so roughly 50 servers at the busiest hour.
+6. **Turn messages into storage.** A byte is the space of about one letter of text. One stored
+   message, with its text, who sent it, when, and its share of the database's lookup tables, takes
+   about 200 bytes. 400 million messages × 200 bytes = 80,000,000,000 bytes, which is 80 GB a day
+   (a gigabyte, GB, is a billion bytes). Over a year: 80 GB × 365 = 29,200 GB, which is 29.2 TB (a
+   terabyte, TB, is 1,000 GB). We keep 3 copies of every message on different machines so a broken
+   disk loses nothing: 29.2 TB × 3 = 87.6 TB, about 88 TB a year.
+7. **Read the answer, and decide.** About 50 app servers: an ordinary fleet, nothing exotic.
+   About 88 TB a year, growing every year: that does not fit on one database machine, whose
+   disks hold a few terabytes. So the design must split messages across many database machines
+   from the start. That one conclusion is worth more than any of the exact numbers.
+
+<Figure caption="An estimate is a chain of small steps: people, times what each one does, gives work per day; divided by seconds in a day, it gives work per second; times the busiest-hour factor, it gives the peak; divided by what one server can do, it gives the number of servers.">
+  <MentalModel />
+</Figure>
+
+Notice what we did not do. We did not know the real numbers, and we did not need them. If the
+real number of messages per person is 30 instead of 40, each person makes 130 requests a day
+instead of 140. That is 10 fewer in every 140, about 7% fewer, so about 50 servers becomes about
+46. It does not become 5 or 500. Estimates are good at telling sizes apart, and that is the
+job: choosing between "one database" and "many", or "one region" and "several".
+
+The same method answers other questions. How much data leaves our servers each second? How much
+memory would it take to keep today's messages ready in fast memory? How long would it take to copy
+all our data to a new machine? Each one is a chain of the same small steps: what one thing costs,
+times how many, per second or per day.
+
+An everyday picture: planning food for a wedding. Nobody knows exactly how many guests will come
+or how much each will eat. But "about 300 guests, about 250 grams of rice each, so about 75 kg"
+tells you to order sacks, not packets, and to book the big kitchen. The picture breaks in one
+place: a caterer can run to the shop if the rice runs out, while a database that is too small for
+its data cannot be fixed in an evening. That is why estimates matter most before you build.
+
+## The building blocks
+
+Six small ideas carry the rest of the page. Each gets a plain sentence, the reason it matters, a
+small example, and then its precise version.
+
+### Big numbers and powers of ten
+
+**What it is.** A power of ten is 10 multiplied by itself some number of times, and it is a short
+way to write big numbers by counting their zeros.
+
+**Why it matters.** Estimates multiply and divide numbers like 10 million and 86,400 all the time.
+Counting zeros is much easier than long multiplication, and much harder to get wrong.
+
+**Example.** A quick refresher: 10³ means 10 × 10 × 10 = 1,000, which is 1 followed by 3 zeros. So
+a thousand is 10³, a million is 10⁶ (6 zeros), and a billion is 10⁹ (9 zeros). To multiply, add
+the zeros: 10 million × 100 is 10⁷ × 10² = 10⁹, a billion, because 7 zeros + 2 zeros = 9 zeros.
+To divide, take them away: a billion ÷ 100,000 is 10⁹ ÷ 10⁵ = 10⁴, which is 10,000.
+
+**The technical version.** Write each number as a small number times a power of ten: 1.4 billion
+is 1.4 × 10⁹, and 86,400 is about 0.86 × 10⁵. Multiply the small numbers together, add the
+powers, and you are rarely more than one small multiplication away from the answer. The words
+that go with the powers are worth knowing by heart:
+
+| Word | Power | Data unit | Size |
+|---|---|---|---|
+| thousand | 10³ | kilobyte, KB | 1,000 bytes |
+| million | 10⁶ | megabyte, MB | 1,000,000 bytes |
+| billion | 10⁹ | gigabyte, GB | 1,000,000,000 bytes |
+| trillion | 10¹² | terabyte, TB | 1,000 GB |
+| quadrillion | 10¹⁵ | petabyte, PB | 1,000 TB |
+
+The thing to notice: each row is a thousand times the row above it, so moving one row down is
+"add three zeros".
+
+### Bytes and bits
+
+**What it is.** A **byte** is the unit computers use for sizes of data: one byte holds one letter of
+plain English text. A **bit** is one eighth of a byte, a single 0 or 1.
+
+**Why it matters.** Data on disk and in memory is measured in bytes (GB, TB). Network speeds are
+measured in bits per second (Mbit/s, Gbit/s). Mixing the two makes an estimate 8 times wrong
+without anyone noticing.
+
+**Example.** A 200-byte message is 200 × 8 = 1,600 bits. A network link of 1 Gbit/s carries 1
+billion bits a second; divided by 8, that is 125 million bytes, or 125 MB, a second. So "1 Gbit/s"
+and "125 MB/s" are the same speed.
+
+**The technical version.** Lowercase b means bits and uppercase B means bytes: 1 Gb/s is bits, 1
+GB is bytes. In this page, KB, MB, GB and TB mean powers of 1,000, which is how disk makers and
+network speeds count. Operating systems often count in powers of 1,024 instead and write KiB, MiB,
+GiB, TiB. The gap grows with size: a TiB is about 10% bigger than a TB. That is why a new "1 TB"
+disk shows up as about 931 GB on some computers. For an estimate, the 10% does not matter; the 8×
+between bits and bytes does.
+
+### From per day to per second
+
+**What it is.** A **rate** is how many things happen in a stretch of time, and estimates usually
+convert a daily total into a rate per second.
+
+**Why it matters.** People describe usage per day ("40 messages a day"), but servers are sized per
+second: a server handles so many requests a second, a link carries so many bits a second.
+
+**Example.** A day has 24 × 60 × 60 = 86,400 seconds. One million requests a day is 1,000,000 ÷
+86,400 = about 12 requests a second. That one fact is worth remembering: **a million a day is about
+12 a second**. Our chat app's 1.4 billion requests a day is 1,400 times a million, so it is about
+1,400 × 12 = 16,800 requests a second. The exact division gives 16,204; the shortcut was within 4%.
+
+**The technical version.** In your head, round 86,400 up to 100,000 (10⁵). Then 1.4 billion ÷
+100,000 = 14,000 a second. That answer is about 14% low, because we divided by a number about 16%
+too big, which is fine for an estimate and much faster. Two more conversions come up often: a year
+has 365 × 86,400 = 31,536,000 seconds, about 31.5 million; and a month of 30 days has 2,592,000
+seconds, about 2.6 million.
+
+### Average and peak
+
+**What it is.** The **average** rate is the total for the day spread evenly over every second. The
+**peak** is the rate in the busiest stretch of the day, and the **peak factor** is how many times
+bigger the peak is than the average.
+
+**Why it matters.** Traffic is never even. If you buy servers for the average, they are too few
+every evening, exactly when most people are using the app.
+
+**Example.** The chart below shows an illustrative day of our chat app. At 4 AM it gets about a
+quarter of the average; at 9 PM about 3 times the average. The day's 1.4 billion requests average
+16,204 a second, but at 9 PM the servers see about 16,204 × 3 = 48,612 a second (the script below
+prints 48,611, because it does not round the average first).
+
+<Figure caption="An illustrative day of the chat app. The dashed line is the average, 16,000 requests a second. The real curve sinks far below it at night and rises to about 3 times it in the evening. Servers must be sized for the top of the curve, not the dashed line.">
+  <DailyCurve />
+</Figure>
+
+**The technical version.** The peak factor depends on the product and the audience. An app used
+in one time zone has a sharper evening peak than one used around the world, because worldwide
+users spread the load across the clock. Events add their own peaks on top: a festival sale, a cricket
+final, a train-ticket booking window that opens at 10 AM. When you have real traffic data, take the
+factor from it. When you do not, 2 to 3 for daily rhythm is a common starting guess, and events can
+be 10 times or more. Write down which you chose.
+
+### How much one server can do
+
+**What it is.** The **capacity** of one server is how many requests a second it can handle while
+still answering quickly.
+
+**Why it matters.** It is the number that turns "48,000 requests a second" into "about 50
+servers". It is also the number people most often pull out of the air.
+
+**Example.** Suppose one chat request needs 5 milliseconds of a processor's time: reading the
+request, checking who the user is, talking to the database, writing the reply. A **core** is one
+of the processor's independent workers; a typical cloud server has 8 of them. One core can do
+1,000 ms ÷ 5 ms = 200 requests a second, so 8 cores can do 8 × 200 = 1,600 requests a second if
+they are busy every moment. We plan to keep each server only about 60% busy, so 1,600 × 0.6 = 960,
+which we round to 1,000 requests a second.
+
+**The technical version.** Why only 60%? A server close to 100% busy makes requests wait in a
+**queue**, a line of requests waiting their turn, and that wait grows very fast as the server
+fills up. The [latency vs throughput](/foundations/latency-vs-throughput/) page explains why. The
+5 ms is the number to measure, not guess, as soon as any version of the code exists: run a
+**load test**, a program that sends more and more requests to one server, and note the rate at
+which answers start to slow down. Until then, say clearly that it is a guess.
+
+### Orders of magnitude
+
+**What it is.** An **order of magnitude** is a factor of 10. Two numbers are "the same order of
+magnitude" if one is less than about 10 times the other.
+
+**Why it matters.** It tells you how right an estimate needs to be. Most design decisions change
+only when a number moves by 10 times or more: 5 servers and 50 servers need different designs;
+48 servers and 52 servers do not.
+
+**Example.** Our chat app needs "about 50 servers". If every guess were a little off and the true
+number were 30 or 80, the design would be the same: a fleet of identical app servers behind a
+load balancer. If the true number were 500, the design would change, because 500 servers usually
+means several data centres and a team whose whole job is running them. The estimate's job is to tell 50 from 500.
+
+**The technical version.** A good estimate aims to be within a factor of 2 or 3 of the truth, and
+must not be off by 10 times. That is why rounding is not cheating: rounding 86,400 to 100,000
+changes the answer by 14%, far inside a factor of 2, and makes the arithmetic something you can
+do while talking.
+
+:::tip[If you stop here]
+- An estimate is a chain of small steps: people × what each does = work per day; ÷ 86,400
+  seconds = work per second; × the peak factor = the busiest moment; ÷ what one server does = servers.
+- Write every guess down. 10 million users × 140 requests each is 1.4 billion requests a day,
+  about 16,000 a second on average, about 48,000 at the evening peak, about 50 servers.
+- Storage is the number of things × the size of one × the number of copies, over the time you keep
+  it: 400 million messages × 200 bytes × 3 copies is about 88 TB a year.
+- Round freely. The goal is the right size (5, 50 or 500), not the exact number. A million a day is
+  about 12 a second.
+- The point is a decision: here, that messages will not fit on one database machine.
+:::
+
+## Going deeper
+
+You do the estimate, it says 50 servers, the team builds it, and launch week needs 150. Which step
+was wrong? Each guess was reasonable on its own. And how would you have known, before launch,
+which guess deserved an hour of research and which one did not matter? Part 2 answers this, and
+then gives you the numbers worth knowing by heart in 2026: how long a memory read, a disk read
+and a trip across the world really take, so your estimates are about time as well as size.
+
+The answer has four parts:
+
+- **Breaking a question into guesses**, and why a chain of guesses is more accurate than any one
+  of them.
+- **The four estimates that come up most**: requests a second, storage, network, and memory.
+- **Estimating time**: the latency numbers worth knowing, and what they say about a design.
+- **Ranges and checks**: which assumption moves the answer, and how to test an estimate against
+  reality.
+
+## The obvious fix, and why it breaks
+
+The first estimate most people write looks like step 3 of Part 1, then stops: total requests a day,
+divided by seconds in a day, divided by what one server does. For our chat app, that gives 1.4
+billion ÷ 86,400 = 16,204 requests a second, and 16,204 ÷ 1,000 = 16 servers. Then, for the
+network, it takes the data sent out each second and writes it down in the wrong unit. The runnable
+example does exactly this:
+
+```text
+Naive (average traffic, bytes read as bits):
+  16,204 requests/s -> 16 servers
+  outgoing data: 116 Mbit/s   <- wrong: that number was MB/s
+```
+
+Both numbers are badly wrong, and in the dangerous direction. The servers are sized for the
+average, so every evening, when traffic is 3 times the average, they are a third of what is needed.
+The network figure was 116 MB per second, not megabits, and it is an average too. The careful
+version, later on this page, gets 347 MB/s at the peak, which is 2.8 Gbit/s: about 24 times the
+naive figure (8 times from bits and bytes, 3 times from the peak).
+
+The other common failure is the opposite: **precision theatre**. Someone builds a spreadsheet with
+forty inputs, each to three decimal places, and presents "48,611 requests a second". It looks more
+trustworthy than "about 50,000", but it is not, because every input is still a guess. Worse,
+forty inputs hide which three matter. An estimate is only as good as its weakest guess, so a short
+chain with the guesses in plain view beats a long one.
+
+### Its neighbours: estimation, capacity planning and load testing
+
+| | When | Inputs | Good for |
+|---|---|---|---|
+| Back-of-the-envelope estimate | before building, in minutes | guesses and known base numbers | choosing between designs; spotting what will not fit |
+| Capacity planning | for a running system, every few months | real traffic, growth trends | buying and reserving machines ahead of growth |
+| Load test | once code exists | a real server and generated traffic | measuring what one server can really do |
+
+The row to notice is the first: an estimate is the only one of the three you can do before any
+code exists. It does not replace the other two. It tells you which design is worth building and
+testing at all.
+
+## How it works, piece by piece
+
+### Breaking a question into guesses
+
+Large questions are impossible to guess directly. "How many requests a second will our chat app
+get?" has no gut-feeling answer. "How many messages does one person send a day?" does: you can look
+at your own phone. The skill is to break the large question into small factors that each have a
+defensible guess, then multiply them back together. This is called **Fermi decomposition**, after
+the physicist Enrico Fermi, who was famous for estimating things this way.
+
+For any question about a system, the factors are almost always the same five:
+
+1. **How many** users, devices or things (10 million people a day).
+2. **How often** each one acts (40 sends and 100 fetches a day).
+3. **How big** each action or item is (200 bytes a message, 50 messages a fetch).
+4. **How uneven** the load is over time (peak factor of 3).
+5. **How long** you keep it, and how many copies (a year, 3 copies).
+
+A chain of guesses is often more accurate than you would expect, because errors partly cancel. If
+you guess 40 messages a day and the truth is 60, while you guess 200 bytes and the truth is 140,
+the storage estimate is 40 × 200 = 8,000 bytes per person a day against a true 60 × 140 = 8,400:
+only 5% off, though each guess was off by about 30% to 50%. Errors do not always cancel, of course;
+when every guess leans the same way, they add up. That is what the ranges later on this page check.
+
+Keep the chain short. If you need more than about six assumptions, the estimate is trying to be a
+model; step back and find the factors that matter. The napkin-math project, a set of base numbers
+and exercises for this kind of estimate, gives the same advice.
+
+### Estimating requests a second
+
+This is Part 1's chain, done carefully, and the script on this page prints every step:
+
+```text
+Careful (peak, units, copies):
+  messages sent per day:    400,000,000
+  requests per day:         1,400,000,000
+  average requests/s:       16,204
+  peak requests/s (x3):    48,611
+  app servers at peak:      49
+```
+
+Two habits make this estimate trustworthy.
+
+**Split reads and writes.** A **write** changes stored data (sending a message); a **read** only
+looks at it (opening a chat). Here there are 100 reads for every 40 writes, so reads are 100 ÷ 140
+= about 71% of requests. The split matters because reads and writes are fixed differently later:
+reads can be served from copies and from fast memory, while every write must reach the main
+database. A system with 100 reads per write and one with 100 writes per read need different designs
+even at the same total.
+
+**Size for the peak, then add room.** The 49 servers already assume each server is only 60% busy
+at the peak. Two more reasons to add a little: a server may fail at the busiest moment, and new
+code may be slower than the old. With a spare 20%, 49 × 1.2 = about 59; call it 60. Saying "about
+50 to 60 servers" is a better answer than either number on its own.
+
+### Estimating storage
+
+Storage is the estimate teams most often get wrong, because it keeps growing. The chain is:
+
+> items a day × bytes per item × days kept × copies
+
+For our chat app, from the script:
+
+```text
+  new data per day:         80 GB (one copy)
+  new data per year:        29.2 TB (one copy), 87.6 TB with 3 copies
+```
+
+Three things change the answer a lot, and each is often forgotten.
+
+**What "one item" really costs.** The text of a short chat message might be 60 bytes. The stored
+row adds who sent it, which chat, when, a unique id, and its share of the **indexes**, the lookup
+tables a database keeps so it can find rows fast (see
+[database indexing](/databases/database-indexing/)). That is why we used 200 bytes, not 60. A
+common rule is to double the size of the raw data for indexes and storage overhead until you can
+measure the real figure.
+
+**Copies.** Data you cannot lose is kept on several machines, usually 3, so that one failed disk or
+machine loses nothing (see [replication](/databases/replication/)). Backups are another full copy
+or more on top. Every copy multiplies the storage.
+
+**Growth.** Messages are never deleted in most chat apps, so each year adds to the last. Year one:
+88 TB. Year two: 88 + 88 = 176 TB, and more if the app grows. After five years at today's rate:
+88 × 5 = 440 TB.
+
+**Reading the answer.** Suppose one database machine holds about 8 TB of data comfortably, on a
+couple of large disks. Year one's 88 TB needs 88 ÷ 8 = 11 such machines, and five years' 440 TB
+needs 440 ÷ 8 = 55. So the design needs
+**sharding**: splitting the messages across many database machines, each holding a part, for
+example by chat id (see [partitioning and sharding](/databases/partitioning-and-sharding/)). That
+conclusion came from the estimate, before any code existed.
+
+A real system for comparison: in 2023 Discord wrote that it stored trillions of messages and ran
+its main message database on 177 machines before moving to 72 machines with 9 TB of disk each.
+Our app is far smaller, but the shape of the answer is the same: messages outgrow one machine
+early.
+
+### Estimating network
+
+The chain is: requests a second × bytes per request or reply. The direction that is usually bigger
+is the data going **out** to users, because one read returns many messages.
+
+Here, one fetch returns up to 50 messages of 200 bytes: 50 × 200 = 10,000 bytes, 10 KB. At the
+peak there are 3 times the average fetch rate. The average fetch rate is 1 billion fetches a day ÷
+86,400 = 11,574 a second, so the peak is 11,574 × 3 = 34,722 fetches a second. Then:
+
+- Out per second at peak: 34,722 × 10,000 bytes = 347,220,000 bytes, about 347 MB/s.
+- In bits: 347 MB/s × 8 = about 2,778 Mbit/s, or 2.8 Gbit/s.
+
+```text
+  outgoing data at peak:    347 MB/s = 2.8 Gbit/s
+```
+
+Is 2.8 Gbit/s a lot? Spread over 50 servers, it is about 56 Mbit/s each (2,800 ÷ 50 = 56), which
+any cloud server handles without trouble; a single cloud machine in 2026 can usually move a few gigabytes
+a second over its network card. So the network is not this app's problem. It would be for an app
+that sends photos or video: change 200-byte messages to 2 MB photos and the same chain gives 10,000
+times more data, enough to force a design change. Network estimates matter most when the items are
+big.
+
+### Estimating memory for a cache
+
+A **cache** is a copy of frequently read data kept in fast memory, so most reads skip the slower
+database (see [caching strategies](/caching/caching-strategies/)). The estimate here asks: if we
+keep the most-read data in memory, how much memory is that?
+
+Most chat reads are of recent messages. Suppose we keep the last 24 hours of messages in memory:
+that is one day of new data, 80 GB from the storage estimate, one copy. Memory is far more
+expensive per GB than disk, but 80 GB fits in 2 cache servers of 64 GB each (2 × 64 = 128 GB, with
+room to spare). Keeping a full week would be 80 × 7 = 560 GB, about 9 such servers. The estimate
+turns "should we cache?" into "is one day enough, and is 2 servers a fair price?", which is a
+question a team can actually decide.
+
+### Estimating time: the latency numbers worth knowing
+
+So far we estimated sizes. Estimates about time need a different set of base numbers: how long the
+common operations take. Here they are on one scale, from a memory read to a request across the
+world. **Latency** is the time one operation takes from start to finish.
+
+A quick refresher on the small units first. A millisecond (ms) is a thousandth of a second. A
+microsecond (µs) is a thousandth of a millisecond. A nanosecond (ns) is a thousandth of a
+microsecond. So 1 ms = 1,000 µs = 1,000,000 ns.
+
+<Figure caption="How long common operations take, as of November 2026, on one scale where each step to the right is 10 times longer. A read from memory is about a million times faster than a request from the United States to Singapore. Numbers from the napkin-math measurements on cloud servers; disk and network figures are the slow end: 99 in every 100 operations are at least this fast.">
+  <LatencyLadder />
+</Figure>
+
+The figure's numbers, in a table you can keep. The thing to notice is the gap between rows that
+stay inside one machine and rows that cross a network: everything that crosses a network is at
+least a quarter of a millisecond.
+
+| Operation | Time | In milliseconds |
+|---|---|---|
+| Read from memory at a random place | 150 ns | 0.00015 ms |
+| Read 8 KB at a random place on an SSD | 200 µs | 0.2 ms |
+| Network round trip inside one data centre zone | 250 µs | 0.25 ms |
+| Get a value from Redis or Memcached in the same zone | 25 µs + network | about 0.3 ms |
+| Network round trip to another zone in the same region | 1 ms | 1 ms |
+| Read at a random place on a spinning hard disk | 25 ms | 25 ms |
+| Round trip to another region on the same continent | 50 ms | 50 ms |
+| Round trip from the United States to Singapore | 200 ms | 200 ms |
+
+The memory, SSD, network and Redis figures come from napkin-math, measured on cloud servers in
+October and November 2026. A **zone** is one data centre or a group of nearby ones; a **region** is
+a group of zones in one city or area. The famous earlier list of these numbers, from Jeff Dean at
+Google in 2009, started this habit; its disk and network numbers are out of date now, so use a
+recent list.
+
+**Where the long numbers come from.** Light in a glass fibre travels at about 200,000 km a second,
+two thirds of its speed in empty space. So 1,000 km of fibre takes 1,000 ÷ 200,000 = 0.005 s, 5 ms,
+one way, and 10 ms there and back. TeleGeography, which tracks the world's cables, uses the same
+rule of thumb: about 10 ms of round trip per 1,000 km. Mumbai to Singapore is about 3,900 km in a
+straight line, which is 3.9 thousands of km, so no network can do the round trip in less than
+3.9 × 10 ms = 39 ms. Real
+cables are longer than straight lines, and equipment on the way adds time, so real round trips are
+higher; TeleGeography puts India within about 70 ms of a data centre in Singapore.
+
+**What the numbers tell you about a design.** Take a page that runs 30 database queries one after
+another (the [N+1 queries](/databases/n-plus-one-queries/) problem). Each query fetches one row
+by its id, which takes about 0.04 ms inside the database plus a 0.25 ms round trip in the same zone, so about 0.3
+ms. Then 30 × 0.3 ms = 9 ms. Annoying, but survivable. Now put the database in another region,
+50 ms or more away: 30 × 50 ms = 1,500 ms, a second and a half, for the same page. The estimate tells you,
+before anyone writes the code, that "app in Mumbai, database in Singapore" cannot work with this
+page, while "both in the same zone" can.
+
+**Time to move data.** Throughput numbers answer a different question: how long a big job takes.
+An SSD reads around 5 GB a second at best, and a cloud network card moves around 3 GB a second.
+How long to copy one database machine's 8 TB to a new machine over the network? 8 TB is 8,000 GB,
+and 8,000 GB ÷ 3 GB a second = about 2,700 seconds, which is 2,700 ÷ 60 = 45 minutes, at best. In
+practice the copy shares the network with live traffic, so plan for hours. That number decides how
+long the system runs with one copy missing after a machine dies, and so how many copies you need.
+
+:::caution[Disk numbers come in two kinds]
+Disk makers advertise the best case. Samsung's 990 PRO SSD lists up to 1.4 million random reads a
+second, but only when about 32 requests are waiting at once; one request at a time, its datasheet
+lists about 22,000 a second. Your database, answering one query at a time, sees the second number.
+Always ask: at what **queue depth** (how many requests are waiting at once), and is that the
+average or the slow end?
+:::
+
+### Ranges: which guess matters?
+
+Every guess has a likely value and a plausible low and high. Run the estimate at the lows, at the
+likely values and at the highs, and you get a range instead of one number. Then change one guess at
+a time, keeping the others at their likely values, to see which guess moves the answer most. This
+is called a **sensitivity check**. Here is the script's output for the number of servers:
+
+```text
+With ranges (servers at peak):
+  low 15, likely 49, high 146
+  only 'users' uncertain: 39 to 58
+  only 'sends' uncertain: 42 to 56
+  only 'fetches' uncertain: 35 to 66
+  only 'peak' uncertain: 32 to 81
+```
+
+Read it in two steps. First, the full range: 15 to 146 servers. That is about a factor of 10
+between the ends, which says "tens of servers, not hundreds or a handful", and that is enough for
+the design. Second, the one-at-a-time rows: the peak factor (2 to 5) moves the answer the most, from
+32 to 81 servers; the number of users, which sounds like the most important input, moves it only
+from 39 to 58. So the hour of research goes to the peak factor: look at a similar app's traffic, or find
+out when your users are online. This is how you would have known which guess was dangerous in the
+"we needed 150" question at the start of Part 2.
+
+### Checking an estimate
+
+An estimate you cannot check is a guess with extra steps. Four checks catch most mistakes.
+
+1. **Units on every line.** Write the unit next to every number and let it cancel: messages/day ×
+   bytes/message = bytes/day. If the units at the end are not the units you wanted, a step is wrong.
+   This catches the bits-and-bytes error in the naive estimate.
+2. **Work it the other way.** Start from the answer and walk back. "50 servers at 1,000 requests a
+   second is 50,000 a second at the peak." Not all 10 million people are online at 9 PM; suppose a
+   quarter are, 2.5 million. Then each online person makes 50,000 ÷ 2,500,000 = 0.02 requests a
+   second, one every 50 seconds, a little over one a minute. Does someone chatting in the evening
+   send or open about one message a minute? Roughly, yes. If the walk back had said one request an
+   hour, or ten a second, a guess would be wrong.
+3. **Compare with something real.** Find a public number for a similar system, such as Discord's
+   message storage above, or your own company's existing services. If your estimate is 100 times
+   bigger or smaller than a similar real system, find out why before you trust it.
+4. **Compare with the round version.** Do it again in your head with powers of ten: 10⁷ people ×
+   140 = 1.4 × 10⁹ requests a day; ÷ 10⁵ seconds = 14,000 a second; × 3 = 42,000; ÷ 1,000 = 42
+   servers. The careful answer, 49, is close. If the two disagree by more than 2 times, one of them
+   has a mistake.
+
+## Choosing between them
+
+The estimates on this page, with the chain for each and what usually goes wrong.
+
+| Estimate | The chain | What it decides | The usual mistake |
+|---|---|---|---|
+| Requests a second | people × actions a day ÷ 86,400 × peak factor | number of servers, need for a load balancer | sizing for the average |
+| Storage | items a day × bytes each × days kept × copies | one database or many (sharding) | forgetting indexes, copies and growth |
+| Network | requests a second × bytes each | whether bandwidth limits the design | bits and bytes mixed up |
+| Memory for a cache | the hot data's size | how many cache servers | caching everything instead of what is read most |
+| Time for one request | sum of the operations it waits for, in order | where to put servers and data | network round trips counted as free |
+| Time for a big job | data size ÷ throughput | recovery time, number of copies | using the advertised best case |
+
+How to choose: start with whatever decision is on the table. If the question is "one database or
+many?", do storage first. If it is "one region or several?", do the time estimate. You rarely need
+all six for one decision, and an estimate nobody needed is padding.
+
+## Build it yourself
+
+The runnable example writes the assumptions at the top, then estimates four ways: naive, careful,
+in your head, and with ranges. Here is the careful part: the assumptions sit in one block at the
+top, the peak is applied before servers are counted, and copies are applied to storage.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="estimate.py (excerpt)"
+# runnable version: examples/back-of-the-envelope-estimation/python/estimate.py
+SECONDS_PER_DAY = 24 * 60 * 60  # 86,400
+
+# --- Assumptions: every estimate starts with a short, written list ---
+DAILY_USERS = 10_000_000       # people who open the app on a given day
+SENDS_PER_USER = 40            # messages each one sends a day
+FETCHES_PER_USER = 100         # times each one opens a chat or scrolls (one request each)
+MESSAGE_BYTES = 200            # one stored message: text plus ids, time, index share
+MESSAGES_PER_FETCH = 50        # one fetch returns up to 50 messages
+PEAK_FACTOR = 3                # busiest hour vs the day's average (illustrative)
+COPIES = 3                     # replicas of every message
+REQS_PER_SERVER = 1_000        # what one app server serves at a safe 60% busy
+
+sends_per_day = DAILY_USERS * SENDS_PER_USER
+fetches_per_day = DAILY_USERS * FETCHES_PER_USER
+avg = (sends_per_day + fetches_per_day) / SECONDS_PER_DAY
+peak = avg * PEAK_FACTOR
+servers = peak / REQS_PER_SERVER
+peak_fetches = fetches_per_day / SECONDS_PER_DAY * PEAK_FACTOR
+out_bytes = peak_fetches * MESSAGES_PER_FETCH * MESSAGE_BYTES
+per_day_gb = sends_per_day * MESSAGE_BYTES / 1e9
+per_year_tb = per_day_gb * 365 / 1e3
+per_year_tb_all_copies = per_year_tb * COPIES
+# peak 48,611 req/s -> 49 servers; out 347 MB/s = 2.8 Gbit/s
+# 80 GB/day; 29.2 TB/year, 87.6 TB with 3 copies
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="estimate.mjs (excerpt)"
+// runnable version: examples/back-of-the-envelope-estimation/js/estimate.mjs
+const SECONDS_PER_DAY = 24 * 60 * 60; // 86,400
+
+// --- Assumptions: every estimate starts with a short, written list ---
+const DAILY_USERS = 10_000_000; // people who open the app on a given day
+const SENDS_PER_USER = 40; // messages each one sends a day
+const FETCHES_PER_USER = 100; // times each one opens a chat or scrolls (one request each)
+const MESSAGE_BYTES = 200; // one stored message: text plus ids, time, index share
+const MESSAGES_PER_FETCH = 50; // one fetch returns up to 50 messages
+const PEAK_FACTOR = 3; // busiest hour vs the day's average (illustrative)
+const COPIES = 3; // replicas of every message
+const REQS_PER_SERVER = 1_000; // what one app server serves at a safe 60% busy
+
+const sendsPerDay = DAILY_USERS * SENDS_PER_USER;
+const fetchesPerDay = DAILY_USERS * FETCHES_PER_USER;
+const avg = (sendsPerDay + fetchesPerDay) / SECONDS_PER_DAY;
+const peak = avg * PEAK_FACTOR;
+const servers = peak / REQS_PER_SERVER;
+const peakFetches = (fetchesPerDay / SECONDS_PER_DAY) * PEAK_FACTOR;
+const outBytes = peakFetches * MESSAGES_PER_FETCH * MESSAGE_BYTES;
+const perDayGb = (sendsPerDay * MESSAGE_BYTES) / 1e9;
+const perYearTb = (perDayGb * 365) / 1e3;
+const perYearTbAllCopies = perYearTb * COPIES;
+// peak 48,611 req/s -> 49 servers; out 347 MB/s = 2.8 Gbit/s
+// 80 GB/day; 29.2 TB/year, 87.6 TB with 3 copies
+```
+  </TabItem>
+</Tabs>
+
+The range part gives each uncertain guess a low and a high, and recomputes the answer with one guess
+moved at a time:
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="estimate.py (excerpt)"
+low = {"users": 8e6, "sends": 20, "fetches": 60, "peak": 2}
+high = {"users": 12e6, "sends": 60, "fetches": 150, "peak": 5}
+base = {"users": 10e6, "sends": 40, "fetches": 100, "peak": 3}
+
+def servers(a: dict[str, float]) -> float:
+    return a["users"] * (a["sends"] + a["fetches"]) / SECONDS_PER_DAY * a["peak"] / REQS_PER_SERVER
+
+print(f"low {servers(low):,.0f}, likely {servers(base):,.0f}, high {servers(high):,.0f}")
+for name in base:  # move one guess at a time; the widest row is the guess to research
+    lo, hi = servers({**base, name: low[name]}), servers({**base, name: high[name]})
+    print(f"only '{name}' uncertain: {lo:,.0f} to {hi:,.0f}")
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="estimate.mjs (excerpt)"
+const low = { users: 8e6, sends: 20, fetches: 60, peak: 2 };
+const high = { users: 12e6, sends: 60, fetches: 150, peak: 5 };
+const base = { users: 10e6, sends: 40, fetches: 100, peak: 3 };
+const servers = (a) =>
+  (((a.users * (a.sends + a.fetches)) / SECONDS_PER_DAY) * a.peak) / REQS_PER_SERVER;
+
+console.log(`low ${n(servers(low))}, likely ${n(servers(base))}, high ${n(servers(high))}`);
+// n() formats a number with commas, as in the full file
+for (const name of Object.keys(base)) { // move one guess at a time; the widest row matters most
+  const lo = servers({ ...base, [name]: low[name] });
+  const hi = servers({ ...base, [name]: high[name] });
+  console.log(`only '${name}' uncertain: ${n(lo)} to ${n(hi)}`);
+}
+```
+  </TabItem>
+</Tabs>
+
+In practice, a spreadsheet does the same job and is easier to share with a team; the point of the
+code is to show the steps, not to replace a spreadsheet. Whatever the tool, keep the assumptions
+in one visible block at the top, with a note on where each came from.
+
+## How real systems do it
+
+**Google's SRE Workbook** (2018, kept as history) describes the habit in its chapter on
+"non-abstract large system design": every whiteboard design must end in concrete counts of
+machines, memory, disks and network, worked out from rough but stated assumptions. Its worked
+example sizes a dashboard from one machine up to several data centres, asking at each step whether
+the design is possible, feasible and resilient.
+
+**The napkin-math project** by Simon Eskildsen keeps a table of base numbers measured on current
+cloud servers (last measured October and November 2026) alongside exercises for practice. It is the
+source of this page's latency table, and its advice is the same as this page's: few assumptions,
+units on every number, and aim for the right power of ten.
+
+**Discord's message store** is a public example of storage growing past one machine. Discord
+reported in 2023 that its messages database had grown from 12 machines in 2017 to 177 at the start
+of 2022, and that it moved to 72 machines of a faster database, each with 9 TB of disk. A
+storage estimate of the kind on this page, run each year with the latest growth, is what tells a
+team that such a move is coming before the database tells them.
+
+**Cloud cost calculators** from AWS, Google Cloud and Azure take exactly these estimates as input:
+number of servers, storage in TB, data sent out in GB a month. Teams usually run the estimate first,
+then put its numbers into the calculator to get a monthly price. The calculator is only as good as
+the estimate that feeds it.
+
+## Gotchas and war stories
+
+:::caution[Sizing for the average]
+The most common mistake on this page. An app sized for 16,000 requests a second meets 48,000 every
+evening. Always ask "when is the busiest hour, and how much busier is it?" and size for that.
+:::
+
+**Forgetting what grows.** Requests a second stay roughly flat if users stay flat; storage grows
+every single day, even with no new users. An estimate of "29 TB" is true only for the first year.
+State the time frame next to every storage number.
+
+**Mixing KB and KiB, or MB and Mbit.** The first is a 2% to 10% error and does not matter. The
+second is an 8× error and does. When a number came from somewhere else, check which unit it was in.
+
+**Trusting the best case.** Advertised disk and network speeds are measured under ideal conditions,
+with many requests at once and nothing else running. Use the slow end, or a measured number from a
+list such as napkin-math, and say which you used.
+
+:::danger[An estimate treated as a promise]
+An estimate is a tool for choosing a design, not a commitment to a budget. When "about 50 servers"
+turns into "the plan says 49 servers" in someone's spreadsheet, nobody plans for the range. Always
+give the range and the guess it depends on most ("15 to 150, mostly depending on the evening
+peak"), and replace guesses with measurements as soon as there is something to measure.
+:::
+
+**Spending an hour on the wrong guess.** Precise research on the number of users, when the peak
+factor moves the answer more than twice as much, is time lost. Run the one-at-a-time check first, then
+research the widest row.
+
+## Trade-offs and when not to use it
+
+An estimate costs minutes and gives you a size, not a number. That is its strength and its limit.
+
+- **Do not use it for money you will be billed.** Use the cloud provider's calculator, with real
+  prices, once the estimate has picked the design.
+- **Do not use it once you can measure.** For a running system, real traffic data and a load test
+  beat any estimate. Re-run the estimate only to ask "what if we grow 10 times?"
+- **Do not stack estimates on estimates.** An estimate of cache memory built on an estimate of
+  traffic built on an estimate of users carries all three errors. Past about six guesses, the
+  answer is a story, not a number.
+
+## Interview corner
+
+System design interviews often open with an estimate: "design a chat app for 10 million daily
+users". Interviewers do not check your arithmetic to the digit. They watch whether you state
+assumptions, round sensibly, size for the peak, and use the numbers to make a design choice.
+
+**"How many requests a second?"** State users and actions per user, multiply, divide by about
+100,000 seconds, multiply by a peak factor and say why you chose it. Remember: a million a day is
+about 12 a second.
+
+**"How much storage?"** Items a day × bytes each × days × copies. Mention indexes and replicas,
+and state the time frame: "about 30 TB a year, 90 TB with 3 copies, growing".
+
+**"Will it fit on one machine?"** Compare with a machine's real size: a few TB of disk, tens to
+hundreds of GB of memory. If not, say what you will split and by what (sharding by chat id).
+
+**"How fast can it be?"** Use the latency numbers: same-zone round trip 0.25 ms, cross-region 50
+ms, 10 ms per 1,000 km of fibre. Count the round trips in one request.
+
+## Check yourself
+
+<details>
+<summary>1. A photo app has 2 million daily users who each upload 2 photos a day. How many uploads a second on average, and at a peak of 4 times the average?</summary>
+
+2 million × 2 = 4 million uploads a day. A million a day is about 12 a second, so 4 million a day
+is about 4 × 12 = 48 a second on average. At 4 times the average, 48 × 4 = about 190 a second.
+
+</details>
+
+<details>
+<summary>2. Each photo is stored at 2 MB, with 3 copies. How much new storage a year?</summary>
+
+4 million photos a day × 2 MB = 8 million MB = 8,000 GB = 8 TB a day. Over a year, 8 TB × 365 =
+2,920 TB, about 2.9 PB. With 3 copies, about 8.8 PB a year. Photos, not requests, decide this
+design: it needs a storage service built for files measured in petabytes, such as Amazon S3, not a
+database.
+
+</details>
+
+<details>
+<summary>3. A link is 10 Gbit/s. How many MB can it carry in one second?</summary>
+
+10 Gbit/s is 10,000 Mbit/s. Divide by 8 bits per byte: 10,000 ÷ 8 = 1,250 MB a second.
+
+</details>
+
+<details>
+<summary>4. Your app server is in Mumbai and your database in a region about 2,000 km away. A page makes 10 database queries one after another. What is the least time those queries can take?</summary>
+
+At about 10 ms of round trip per 1,000 km of fibre, 2,000 km is at least 20 ms per round trip. 10
+queries one after another is 10 × 20 = 200 ms, before the database does any work. Moving the
+database to the same zone, at about 0.25 ms a round trip, would make it 10 × 0.25 = 2.5 ms.
+
+</details>
+
+<details>
+<summary>5. Your estimate's range is 15 to 146 servers. A colleague says it is useless because the range is too wide. What do you answer?</summary>
+
+The range says "tens of servers", not "a handful" and not "hundreds", and that is enough to choose
+the design. The one-at-a-time check shows which guess makes it wide (here the peak factor); a little
+research on that one guess will narrow it more than refining everything else.
+
+</details>
+
+## Recap
+
+- An estimate is a short chain: how many × how often × how big × how uneven × how long and how many
+  copies. Write every guess down.
+- Per day to per second: divide by 86,400, about 100,000 in your head. A million a day is about 12 a
+  second; a year is about 31.5 million seconds.
+- Size for the peak, not the average, and keep servers about 60% busy at the peak.
+- Storage is items × bytes × days × copies, plus indexes, and it grows every day.
+- Bits are for networks, bytes for data: divide Gbit/s by 8 for GB/s.
+- Latency numbers to know: memory about 150 ns, SSD read about 0.2 ms, same-zone round trip about
+  0.25 ms, cross-region about 50 ms, 10 ms per 1,000 km of fibre.
+- Give a range and name the guess that moves it most; check with units, by working backwards, and
+  against a real system.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'percentiles-and-tail-latency', why: 'Why the slow end of the latency numbers, not the average, decides how a system feels.' },
+  { slug: 'partitioning-and-sharding', why: 'What to do when the storage estimate says the data will not fit on one machine.' },
+  { slug: 'autoscaling', why: 'Letting the number of servers follow the daily curve instead of always paying for the peak.' },
+  { slug: 'url-shortener', why: 'A full design that starts with exactly this kind of estimate.' },
+]} />
+
+## Further reading
+
+**Measurements and official docs**
+
+- [napkin-math](https://github.com/sirupsen/napkin-math) by Simon Eskildsen (measured October–November 2026) — base latency and throughput numbers from current cloud servers, plus estimation techniques and practice problems.
+- [Samsung 990 PRO NVMe SSD datasheet](https://download.semiconductor.samsung.com/resources/data-sheet/Samsung_NVMe_SSD_990_PRO_Datasheet_Rev.1.0_10129514072296.pdf) (2022) — advertised random reads at a deep queue next to one-at-a-time reads.
+
+**Engineering writing**
+
+- [TeleGeography: It's Time To Learn About Latency](https://resources.telegeography.com/its-time-to-learn-about-latency) (2025) — the speed of light in fibre and the 10 ms per 1,000 km rule.
+- [Discord: How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages) (2023) — real message storage at scale, to check your own estimates against.
+
+**History**
+
+- [Google SRE Workbook: Introducing Non-Abstract Large System Design](https://sre.google/workbook/non-abstract-design/) (2018, kept as history) — turning a whiteboard design into concrete machine, disk and network counts.
+- Jeff Dean, "Numbers Everyone Should Know" (2009 talk, kept as history) — the original latency list; its disk and network numbers are out of date, so use napkin-math for current values.

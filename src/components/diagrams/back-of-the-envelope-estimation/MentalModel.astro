@@ -1,0 +1,43 @@
+---
+// Part 1 mental model: the chain of small steps from people to servers, with the page's numbers.
+---
+
+<svg viewBox="0 0 400 484" width="100%" role="img" aria-labelledby="bote-mm-t bote-mm-d">
+  <title id="bote-mm-t">From people to servers in five steps</title>
+  <desc id="bote-mm-d">
+    Five boxes from top to bottom, joined by arrows labelled with one operation each. 10 million
+    people use the app each day; times 140 requests each gives 1.4 billion requests a day; divided
+    by 86,400 seconds in a day gives about 16,000 a second on average; times 3 for the evening peak
+    gives about 48,000 a second at the busiest hour; divided by 1,000 per server gives about 50
+    servers to handle the peak.
+  </desc>
+  <defs>
+    <marker id="bote-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="392" height="60" rx="6" stroke-width="2" style="fill: var(--viz-client-soft); stroke: var(--viz-client)" />
+  <text x="16" y="31" font-size="18" font-weight="700" style="fill: var(--viz-ink)">10 million people</text>
+  <text x="16" y="53" font-size="16" style="fill: var(--viz-ink)">use the app each day</text>
+  <path d="M40 66 L 40 104" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#bote-mm-a)" />
+  <text x="58" y="92" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">× 140 requests each</text>
+  <rect x="4" y="108" width="392" height="60" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="135" font-size="18" font-weight="700" style="fill: var(--viz-ink)">1.4 billion requests</text>
+  <text x="16" y="157" font-size="16" style="fill: var(--viz-ink)">a day</text>
+  <path d="M40 170 L 40 208" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#bote-mm-a)" />
+  <text x="58" y="196" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">÷ 86,400 seconds in a day</text>
+  <rect x="4" y="212" width="392" height="60" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="239" font-size="18" font-weight="700" style="fill: var(--viz-ink)">about 16,000 a second</text>
+  <text x="16" y="261" font-size="16" style="fill: var(--viz-ink)">on average</text>
+  <path d="M40 274 L 40 312" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#bote-mm-a)" />
+  <text x="58" y="300" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">× 3 for the evening peak</text>
+  <rect x="4" y="316" width="392" height="60" rx="6" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="16" y="343" font-size="18" font-weight="700" style="fill: var(--viz-ink)">about 48,000 a second</text>
+  <text x="16" y="365" font-size="16" style="fill: var(--viz-ink)">at the busiest hour</text>
+  <path d="M40 378 L 40 416" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#bote-mm-a)" />
+  <text x="58" y="404" font-size="17" font-style="italic" style="fill: var(--viz-muted); font-family: var(--sl-font-mono)">÷ 1,000 per server</text>
+  <rect x="4" y="420" width="392" height="60" rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="447" font-size="18" font-weight="700" style="fill: var(--viz-ink)">about 50 servers</text>
+  <text x="16" y="469" font-size="16" style="fill: var(--viz-ink)">to handle the peak</text>
+</svg>

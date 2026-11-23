@@ -33,7 +33,7 @@ function-calling-and-tools → eval-driven-development
 | # | Topic | Slug | Post # | Status |
 |---|---|---|---|---|
 | 1 | What happens when you type a URL | how-the-web-works | new | published (2026-10-18) |
-| 2 | Back-of-the-envelope estimation | back-of-the-envelope-estimation | new | planned |
+| 2 | Back-of-the-envelope estimation | back-of-the-envelope-estimation | new | published (2026-11-23) |
 | 3 | Latency vs throughput | latency-vs-throughput | 89, 90 | published (2026-10-25) |
 | 4 | Percentiles, P99 and tail latency | percentiles-and-tail-latency | 91, 92 | planned |
 | 5 | Monolith vs microservices | monolith-vs-microservices | new | planned |

@@ -1,0 +1,30 @@
+---
+// An illustrative day of the chat app: requests per second hour by hour, relative to the daily
+// average. The hourly values average exactly 1 (the dashed line); the 9 PM peak is 3 times it.
+---
+
+<svg viewBox="0 0 400 300" width="100%" role="img" aria-labelledby="bote-dc-t bote-dc-d">
+  <title id="bote-dc-t">One day of traffic: average and peak</title>
+  <desc id="bote-dc-d">
+    A line chart over 24 hours, from midnight to midnight. Traffic falls to about a quarter of the
+    average around 4 AM, stays near the average through the day, and climbs in the evening to a
+    peak of about 3 times the average at 9 PM, about 48,000 requests a second. A dashed line marks
+    the daily average of about 16,000 requests a second.
+  </desc>
+  <line x1="44" y1="256" x2="388" y2="256" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <line x1="44" y1="256" x2="44" y2="40" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <path d="M44,256 L44.0 174.9 L51.2 188.9 L65.5 216.8 L79.8 233.6 L94.2 239.2 L108.5 240.5 L122.8 239.2 L137.2 230.8 L151.5 216.8 L165.8 205.7 L180.2 200.1 L194.5 202.9 L208.8 202.9 L223.2 194.5 L237.5 200.1 L251.8 205.7 L266.2 208.5 L280.5 205.7 L294.8 200.1 L309.2 183.3 L323.5 160.9 L337.8 127.4 L352.2 70.0 L366.5 121.8 L380.8 160.9 L388.0 174.9 L388,256 Z" style="fill: var(--viz-flow-soft)" />
+  <polyline points="44.0,174.9 51.2,188.9 65.5,216.8 79.8,233.6 94.2,239.2 108.5,240.5 122.8,239.2 137.2,230.8 151.5,216.8 165.8,205.7 180.2,200.1 194.5,202.9 208.8,202.9 223.2,194.5 237.5,200.1 251.8,205.7 266.2,208.5 280.5,205.7 294.8,200.1 309.2,183.3 323.5,160.9 337.8,127.4 352.2,70.0 366.5,121.8 380.8,160.9 388.0,174.9" fill="none" stroke-width="2.5" stroke-linejoin="round" style="stroke: var(--viz-flow)" />
+  <line x1="44" y1="194" x2="388" y2="194" stroke-width="2" stroke-dasharray="6 5" style="stroke: var(--viz-ink)" />
+  <text x="52" y="184" font-size="16" style="fill: var(--viz-ink)">average: about 16,000/s</text>
+  <circle cx="352.2" cy="70.0" r="5" style="fill: var(--viz-warn)" />
+  <text x="340.2" y="56.0" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink)">9 PM peak: 3 × average</text>
+  <text x="340.2" y="78.0" font-size="15" text-anchor="end" style="fill: var(--viz-ink)">about 48,000/s</text>
+  <text x="108.5" y="251" font-size="14" text-anchor="middle" style="fill: var(--viz-ink)">4 AM: a quarter</text>
+  <text x="44" y="278" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">0:00</text>
+  <text x="130" y="278" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">6 AM</text>
+  <text x="216" y="278" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">noon</text>
+  <text x="302" y="278" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">6 PM</text>
+  <text x="380" y="278" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">24:00</text>
+  <text x="36" y="34" font-size="15" style="fill: var(--viz-muted)">requests a second</text>
+</svg>

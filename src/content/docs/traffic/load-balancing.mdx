@@ -5,7 +5,7 @@ tagline: How requests get shared across many servers, and why giving every serve
 difficulty: intermediate
 track: traffic
 prerequisites: [proxy-lb-gateway, latency-vs-throughput]
-next: [consistent-hashing, health-checks-and-probes, service-discovery]
+next: [consistent-hashing, health-checks-and-probes, service-discovery, back-of-the-envelope-estimation]
 lastReviewed: 2026-11-07
 sidebar:
   order: 2
@@ -1067,6 +1067,7 @@ backend, at the cost of uneven client counts.
   { slug: 'consistent-hashing', why: 'When the same key must reach the same backend: ring hashing, Maglev, and bounded loads.' },
   { slug: 'health-checks-and-probes', why: 'Designing the checks that feed the ejection filter, and liveness against readiness.' },
   { slug: 'service-discovery', why: 'Where the pool comes from, and how fast it learns about new and dead backends.' },
+  { slug: 'back-of-the-envelope-estimation', why: 'Working out how many backends the pool needs at the busiest hour, before you build it.' },
 ]} />
 
 ## Further reading
