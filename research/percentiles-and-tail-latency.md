@@ -82,4 +82,13 @@ See the page's Further reading section (all sources above, with years).
 
 ## Fresher read
 
-(to be filled during the fresher read; must be empty before publishing)
+Done 2026-11-23 by a fresh reader with no research context, after the author's own publishing read.
+It found 33 items. All were fixed: undefined terms (dashboard, fleet, load test, labels, Prometheus,
+OpenTelemetry, Datadog, significant digits, Go runtime), missing working (14×, 1.09 to the 27th
+power, the 447th rank, the 91 slow requests and 0.8 s backlog, 5% of calls past their p95), the
+per-server p99s that are histogram estimates, the 244 vs 243.7 rounding, the unlabelled hedging
+row, a hard jump in interview question 2, the 2^(2^−scale) formula (dropped), repeated material
+(Discord story, hedging during an outage, timeout bump, averaging p99s, "describes nobody"), and
+three uses of "obvious".
+
+Open items: none.

@@ -23,7 +23,7 @@ import FanoutSim from '../../../components/sims/percentiles-and-tail-latency/Fan
 
 ## The question
 
-Your team's dashboard says the API answers in 58 ms on average. That looks healthy. Yet users
+Your team's dashboard (the page of live charts it watches) says the API answers in 58 ms on average. That looks healthy. Yet users
 keep saying the app sometimes hangs for a second or more. Is the dashboard lying, or are the users?
 
 Neither. The average mixes many fast requests and a few very slow ones into one number that
@@ -69,7 +69,7 @@ an online shop. Every number in Part 1 is illustrative, and the page says where 
    p99 (and often the p99.9, 999 in 1,000) to know what the unlucky ones feel like. Never judge
    speed by the average alone.
 
-<Figure caption="The ten requests sorted. The p50 (48 ms) and p90 (60 ms) are real requests someone waited for. The average, 244 ms, sits far above nine of them and far below the tenth: it describes nobody.">
+<Figure caption="The ten requests sorted. The p50 (48 ms) and p90 (60 ms) are real requests someone waited for. The average, 244 ms (243.7 rounded), sits far above nine of them and far below the tenth.">
   <MentalModel />
 </Figure>
 
@@ -148,7 +148,8 @@ annoyed, and the average cannot see its shape.
 
 Read the chart left to right: 120 requests took under 25 ms, 610 took 25 to 50 ms, and so on down
 to 3 requests that took between 1 and 2 seconds. The ranges get wider to the right so the tail fits
-on the page. The p50 is 40 ms. The average is 58 ms, pulled right by the tail. The p99 is 460 ms,
+on the page, and "1k" and "2k" mean 1,000 and 2,000 ms. The p50, average and p99 below were worked
+out from the 1,000 raw times, not from the bars. The p50 is 40 ms. The average is 58 ms, pulled right by the tail. The p99 is 460 ms,
 deep in the tail. The tail holds 50 of the 1,000 requests: 30 + 12 + 5 + 3 = 50 took over 100 ms.
 
 **The technical version.** Latency distributions are usually **right-skewed**: bunched at the
@@ -232,16 +233,17 @@ the real questions are elsewhere:
 - **Combining them.** Dashboards show the p99 per server, per minute, per region. Those numbers
   cannot be averaged or added like counts. Getting a fleet-wide or hour-long p99 needs the right
   kind of summary from the start.
-- **Measuring them honestly.** The most common load-testing setup hides exactly the slow requests
+- **Measuring them honestly.** A **load test** is a program that sends many requests to a system
+  to measure it. The most common load-test setup hides exactly the slow requests
   you are trying to find.
 - **Shrinking the tail.** Knowing where slow requests come from (waiting in queues, pauses inside
   the program, requests that miss a fast path) and which techniques cut them, at what cost.
 
 The rest of the page takes these one at a time.
 
-## The obvious fix, and why it breaks
+## The first fix people try, and why it breaks
 
-The obvious way to get a fleet-wide p99 is to have each server compute its own p99 and average
+The first idea most teams have for a fleet-wide p99 is to have each server compute its own p99 and average
 them on the dashboard. Here is what that does with two servers. Server A handles 9,000 requests,
 all fast. Server B handles 1,000 requests, and 150 of them are slow because of a failing disk.
 
@@ -254,13 +256,17 @@ p99 of the merged histogram     667 ms   <- estimate from bucket counts
 exact p99 of all requests       697 ms   <- needs every value
 ```
 
-This is the output of `histogram.py` from the examples folder. The average of the two p99s is
-508 ms: (50 + 967) ÷ 2 = 508.5. But no request took anywhere near 508 ms: fast requests took 20 to
-50 ms and slow ones 600 to 900 ms. The true p99 of all 10,000 requests is 697 ms. Here is where
+This is the output of `histogram.py` from the examples folder. Each server's p99 is itself an
+estimate from a compact summary the server keeps (explained later), which is why server B shows
+967 ms although its slow requests took 600 to 900 ms; that does not change the lesson. The average
+of the two p99s is (50 + 967) ÷ 2 = 508.5, about 508 ms.
+
+But no request took anywhere near 508 ms: fast requests took 20 to 50 ms and slow ones 600 to
+900 ms. The true p99 of all 10,000 requests is 697 ms. Here is where
 that comes from: 9,000 + 1,000 = 10,000 requests, so the p99 is the 9,900th in sorted order
 (99 ÷ 100 × 10,000 = 9,900). Of the 10,000, 150 are slow, so the 10,000 − 150 = 9,850 fast ones
 come first. The 9,900th request is therefore the 9,900 − 9,850 = 50th of the slow ones, and it took
-697 ms. The two middle lines of the output, about histograms, are explained later on this page.
+697 ms. The line about the merged histogram is explained later on this page.
 
 Averaging fails because a p99 has already thrown away the information you need: how many requests
 each server had and where they fell. Server A's 9,000 requests count nine times as much as server
@@ -334,7 +340,8 @@ The real 990th request took 460 ms, so the guess is close here, but only by luck
 anywhere from 250 to 500 ms.
 
 **The technical version.** That "spread evenly" guess is called **linear interpolation**, and it
-is what `histogram_quantile` does in Prometheus, a widely used open-source monitoring system. The error depends entirely on the bucket
+is what `histogram_quantile` does in Prometheus, a widely used open-source monitoring system
+(a monitoring system collects numbers from your servers and draws the dashboard). The error depends entirely on the bucket
 width around the percentile you care about. Prometheus's own documentation shows a case where the
 true p95 is about 220 ms, the bucket is 200 to 300 ms, and the estimate comes out at 295 ms (as of
 November 2026). The lesson: put narrow buckets where your targets are. If the SLO says 300 ms, have
@@ -350,13 +357,16 @@ buckets of 10 ms would need 60,000 ms ÷ 10 ms = 6,000 buckets to reach 60 secon
 with far fewer, and every estimate is off by about the same *percentage* instead of the same number
 of milliseconds.
 
-**Example.** Start at 1 ms and make each bucket 9% wider: 1.00, 1.09, 1.19, 1.30 ms and so on.
-After about 27 buckets you reach 10 ms; every 27 more multiplies by 10 again. So 1 ms to 100 s,
+**Example.** Start at 1 ms and make each bucket edge 9% bigger than the last, which means
+multiplying by 1.09 each time: 1.00, 1.09, 1.19, 1.30 ms and so on. Multiplying by 1.09 twenty-seven
+times gives about 10.3, so after about 27 buckets you reach 10 ms, and every 27 more multiplies by
+10 again. So 1 ms to 100 s,
 which is 5 steps of ×10, takes about 5 × 27 = 135 buckets. A value guessed from the middle of its
 bucket is then never off by more than about half the 9%, roughly 4–5%.
 
-**The technical version.** OpenTelemetry's **exponential histogram** sets the growth factor from a
-`scale` number, with bucket edges at powers of 2^(2^−scale). Its default holds up to 160 buckets,
+**The technical version.** OpenTelemetry, an open standard for recording metrics from programs,
+defines an **exponential histogram** whose growth factor comes from a `scale` setting: the higher
+the scale, the narrower the buckets. Its default holds up to 160 buckets,
 which the specification says covers 1 ms to 100 s with under 5% relative error (the error
 as a share of the value itself) (as of November 2026).
 Prometheus's newer **native histograms** use the same idea, and its documentation now recommends
@@ -377,7 +387,8 @@ The same holds across time. To get the p99 for an hour, add up the hour's 60 per
 and estimate once. Never average 60 per-minute p99s.
 
 In Prometheus, the rule takes this shape: sum the bucket rates across servers, keeping the bucket
-label (`le`, "less or equal", the bucket's upper edge), and only then estimate. The `rate(...[5m])` part turns each bucket's ever-growing counter into
+label (`le`, "less or equal", the bucket's upper edge), and only then estimate. A **label** is a tag attached to each counter (here `le`, and `service`);
+`sum by (le)` adds up the counters of all servers that share the same `le`. The `rate(...[5m])` part turns each bucket's ever-growing counter into
 "requests per second over the last 5 minutes".
 
 ```promql
@@ -404,17 +415,19 @@ buckets as values arrive and still merges across servers.
 **Example.** A sketch with a 1% relative error promise reports a true p99 of 460 ms as somewhere
 between 460 × 0.99 = 455.4 ms and 460 × 1.01 = 464.6 ms, whatever the traffic looked like.
 
-**The technical version.** DDSketch, used by Datadog's distribution metrics, keeps exponential
+**The technical version.** DDSketch, used by the distribution metrics of Datadog (a commercial
+monitoring service), keeps exponential
 buckets so the error is relative to the value; Datadog computes percentiles across all hosts from
 these merged sketches (as of November 2026). HdrHistogram, a popular library for load tests and
 benchmarks, does the same with a fixed memory size set by the range and the number of significant
-digits you ask for: 3 significant digits means at most 0.1% error. OpenTelemetry's exponential
+digits you ask for: 3 significant digits (each value kept to its first three digits, so 1,234 ms
+is stored as about 1,230 ms) means at most 0.1% error. OpenTelemetry's exponential
 histogram above is a sketch of this family too.
 
 ### Where the tail comes from
 
 Knowing how to measure the tail leads to the next question: why do some requests take 20 times
-longer than the rest, on the same code and the same server? The usual causes, in the rough order
+longer than the rest (1,000 ms against 50 ms, say), on the same code and the same server? The usual causes, in the rough order
 experienced engineers check them:
 
 1. **Waiting in a queue.** When requests arrive faster than a server can start them, they wait.
@@ -425,7 +438,7 @@ experienced engineers check them:
 2. **Pauses inside the program.** Languages such as Java, Go, C# and JavaScript periodically stop
    to clean up memory that is no longer used, called **garbage collection**. Most pauses are short;
    occasional ones stop every request being worked on at that moment. In 2020, Discord described a Go service
-   whose latency spiked about every 2 minutes, because the Go runtime of the time forced a garbage
+   whose latency spiked about every 2 minutes, because the Go runtime (the part of Go that manages memory) of the time forced a garbage
    collection at least every 2 minutes (the garbage collection page, coming soon, covers this).
 3. **Missing the fast path.** A request whose data is in a cache (a fast copy kept in memory)
    answers in microseconds, millionths of a second; one that misses goes to the database or disk. Most requests hit; the misses are the tail.
@@ -468,7 +481,8 @@ formula's column within a few tenths of a percent.
 
 Notice also the first row's p99, 503 ms. With one call per page, a page is one call, so this is
 also the p99 of a single call. With exactly 1 slow call in 100, the call p99 sits right
-on the edge between fast and slow: in the sim it flickers between about 50 and about 600 ms. A
+on the edge between fast and slow: out of 1,000 calls, about 10 are slow, so the 990th in sorted
+order is the last fast call if exactly 10 are slow, and a slow one if 11 are. Random luck decides, in the sim it flickers between about 50 and about 600 ms. A
 problem that hits 1% of calls can hide right behind the p99 and show only in the p99.9. That is
 one reason teams with large fan-out watch the p99.9.
 
@@ -506,10 +520,13 @@ the server freezes completely, as in a long garbage-collection pause.
 
 The top row waits for each answer. One request is caught in the freeze and waits about a second.
 During that second, the test sends nothing, so the 1,000 ÷ 20 = 50 requests it planned for that
-second shrink to that one request: 49 are never sent. It records 451 requests, one of them slow,
-and reports a p99 of 10 ms. The bottom row keeps sending on schedule. Requests pile up during the
-freeze, and after it the server needs about 0.8 s more to work through the backlog, so 91 requests
-are slow and the p99 is 960 ms.
+second shrink to that one request: 49 are never sent. It records 451 requests, one of them slow.
+Its p99 is the 447th of 451 (99 ÷ 100 × 451 = 446.5, rounded up), and only the 451st is slow, so
+the p99 is a fast 10 ms. The bottom row keeps sending on schedule. About 50 requests pile up during
+the freeze. After it, the server finishes one every 10 ms while a new one arrives every 20 ms, so
+the pile shrinks by one every 20 ms and takes most of another second to clear. The program shows that every
+request sent from 5.0 s to 6.8 s waits over 100 ms: 1.8 s ÷ 0.02 s = 90 gaps, so 91 requests. That is about 18
+in 100, so the p99 lands among them, at 960 ms.
 
 ```text
 waits for each answer   451 requests   p50    10 ms   p99    10 ms   max  1010 ms   over 100 ms: 1
@@ -553,6 +570,7 @@ finishes by 50 + 50 = 100 ms. Here is what that does to pages of 10 calls:
 
 ```text
 N = 10 with hedging after 50 ms
+    N   page p50   page p99   pages over 100 ms
    10      48 ms      97 ms               0.1%   extra calls sent: 1.0%
 ```
 
@@ -560,12 +578,13 @@ The page p99 drops from 1,401 ms to 97 ms, and slow pages from 9.7% to 0.1%, for
 Try it in the simulation above with "Hedge a call after" set to 50 ms.
 
 **The technical version.** Dean and Barroso's 2013 paper *The Tail at Scale* (kept here as history)
-described hedging and suggested waiting until about the call's p95 before sending the copy, which
-limits the extra traffic to about 5%. Two cautions apply. Hedging is only safe for calls that can
+described hedging and suggested waiting until about the call's p95 before sending the copy. Only 5 calls in 100 are
+slower than their p95, so at most about 5% of calls get a copy. Two cautions apply. Hedging is only safe for calls that can
 be repeated without harm, such as reads, or writes made safe with
 [idempotency keys](/messaging/idempotency-keys/). And if every server becomes slow at once, every
-call gets hedged and traffic doubles exactly when the system is weakest. Marc Brooker (2023)
-suggests capping hedges, for example with a token bucket that allows about 5% extra calls (a
+call gets hedged and traffic doubles exactly when the system is weakest, so cap hedges at a small
+share of traffic and stop hedging when the called service's errors rise. Marc Brooker (2023)
+suggests capping for example with a token bucket that allows about 5% extra calls (a
 counter that refills at a fixed rate and lets a hedge through only while it has tokens left; the
 [rate limiting](/resilience/rate-limiting/) page explains it).
 
@@ -824,31 +843,19 @@ finished percentiles?
 ## Gotchas and war stories
 
 :::caution[Averaging percentiles on a dashboard]
-The most common mistake is not in the code at all: a dashboard panel that takes "p99 per server"
-and applies `avg` across servers, or a weekly report that averages daily p99s. The result looks
-reasonable and is wrong, usually too low, as the two-server example showed. Check how every
-percentile panel is built.
+The two-server mistake from earlier hides in dashboard setup more than in code: a panel that
+applies `avg` to "p99 per server", or a weekly report built from daily p99s. Open every
+percentile panel and check where its numbers come from.
 :::
 
 **A good average hides a bad deploy.** A change that makes 2% of requests take 3 seconds longer
 moves the average by only 2 ÷ 100 × 3,000 = 60 ms. On a busy dashboard that looks like noise; in
 the p99 it is a jump from tens of milliseconds to seconds. Alert on the tail.
 
-**A freeze every two minutes.** Discord's 2020 write-up about a Go service shows the
-pattern: regular spikes in latency every two minutes, invisible in averages and obvious in the
-tail percentiles over time. The cause was in the language runtime, not the service's code. When
-the tail has a rhythm, look for something periodic: garbage collection, a scheduled job, a cache
-refresh, a log file being rotated.
-
-:::danger[Hedging during an outage]
-Hedging copies slow calls. When a dependency becomes slow for everybody, every call is slow, every
-call is copied, and the dependency gets twice the traffic at its weakest moment. Cap hedges at a
-small share of traffic, and stop hedging when the dependency's error rate rises.
-:::
-
-**Timeouts that land in the tail.** A timeout set at 1 second when the dependency's p99.9 is
-1.2 seconds fails healthy calls every day. The second bump in a latency histogram, exactly at the
-timeout value, is the tell.
+**When the tail has a rhythm.** Spikes that repeat on a schedule, like the Discord case earlier on
+this page, point to something periodic rather than to the request's code: garbage collection, a
+scheduled job, a cache refresh, a log file being rotated. Line the spikes up against those
+schedules before reading any code.
 
 **Percentiles of percentiles in SLO reports.** "99% of minutes had a p99 under 300 ms" is not the
 same promise as "99% of requests finished under 300 ms". The first can be true while the busiest
@@ -861,8 +868,8 @@ Percentiles are the right summary for "how fast does it feel", and the wrong one
 questions.
 
 - **Cost and capacity need totals, not percentiles.** How much CPU a service uses, or how many
-  servers it needs, depends on the total work, which is average × count. The average is the right
-  number there.
+  servers it needs, depends on total work, so the average (first row of the table above) is the
+  right number there.
 - **Tail percentiles need volume.** On a service with 100 requests an hour, a p99.9 does not exist
   and a p99 is close to the max. Look at the slowest few requests directly, with their logs or
   traces.
@@ -887,16 +894,16 @@ Typical questions:
 1. **"Why do we use p99 instead of average latency?"** Cover: the average mixes fast and slow
    requests into a number nobody experienced and can be dragged by a few outliers or hide them;
    percentiles describe real requests; the tail is what users remember.
-2. **"A page calls 50 services. Each has a p99 of 100 ms. What is the page's p99?"** Cover: at
-   least 100 ms, likely much more; the page waits for its slowest call; the chance all 50 are under
-   their p99 is 0.99⁵⁰, about 0.6, so about 40% of pages include at least one call past its p99;
-   the page's p99 is therefore well above 100 ms, near the services' p99.9 or worse.
+2. **"A page calls 50 services. Each has a p99 of 100 ms. What is the page's p99?"** Cover: the page waits for its slowest call; the chance all 50 are under
+   their p99 is 0.99⁵⁰, about 0.6, so about 40% of pages include at least one call slower than
+   100 ms. With 40% of pages past 100 ms, the page's p99 is far above 100 ms: it is set by how slow
+   the services' slowest calls are, so their p99.9 matters more than their p99.
 3. **"How would you compute p99 across 200 servers?"** Cover: never average per-server p99s;
    export histograms or sketches, merge by adding bucket counts, estimate once; choose bucket edges
    near the SLO.
 4. **"Your load test says p99 is 20 ms, production says 800 ms. Why?"** Cover: coordinated
    omission in a closed-loop test, a test that never reached production's load or data size, warm
-   caches in the test, and production causes such as garbage collection and noisy neighbours.
+   caches in the test, and production causes such as garbage collection and other programs sharing the machine.
 
 ## Check yourself
 
