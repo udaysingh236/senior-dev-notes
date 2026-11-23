@@ -21,10 +21,11 @@ The plain rewrite of the DNS post (#2), 2026-11-20, shows the intended tone.
 |---|---|---|
 | 0 | Introduction to Senior Dev Notes | posted |
 | 1 | What happens when you type a URL (`foundations/how-the-web-works`) | posted |
-| 2 | DNS (`networking/dns`) | drafted 2026-11-20 |
-| 3 | TCP vs UDP | next |
+| 2 | DNS (`networking/dns`) | posted (assumed, not confirmed) |
+| 3 | TCP vs UDP (`networking/tcp-vs-udp`) | drafted 2026-11-23 |
+| 4 | TLS | next |
 
-Then: TLS → REST API design → latency vs throughput → load balancing → caching strategies →
+Then: REST API design → latency vs throughput → load balancing → caching strategies →
 database indexing → connection pooling → N+1 queries → timeouts → retries and backoff →
 idempotency keys → rate limiting → circuit breakers → message queues → replication, then the
 pages off the starter path (IRCTC Tatkal, proxy vs LB vs gateway, DPoP, Google Authenticator,
