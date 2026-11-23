@@ -69,6 +69,13 @@ and the old point has been rewritten here. Every new or rewritten page must meet
    ago; give a short refresher with tiny numbers before the page leans on it (see "Maths
    refreshers").
 
+16. **Fit the page to the topic, not to the template** (November 2026). A simulation, many
+   diagrams and a long Part 2 deep dive are not required on every page. If a topic is small
+   enough that a fresher understands it fully without them, skip the sim, keep only the diagrams
+   that teach something, and keep Part 2 short or drop sections that would only be padding. Say
+   in the final report what was skipped and why. Part 1, the four steps for every new concept and
+   the fresher read are still required on every page.
+
 No published page meets the November standard yet. Every page published before November 2026 will
 be rewritten with `/add-topic --update`, one page per session, starting with Google Authenticator
 (the pilot) and then latency vs throughput. The first page Uday approves under these rules becomes

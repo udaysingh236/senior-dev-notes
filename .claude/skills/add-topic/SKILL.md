@@ -179,7 +179,7 @@ Fix anything that fails. Don't publish with known failures.
 - [ ] Reading time fits the topic (usually 40–60 min, 75 at most), with no padding and no squeezed explanations
 - [ ] Every term defined on first use; no banned words (simply, just, obviously, trivially, easy)
 - [ ] Every user note from Phase 0 is covered
-- [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption
+- [ ] Diagrams and sim meet the minimums in `visuals.md`, each with a caption, or were skipped for a small topic with the reason stated in the final report (style guide, standing feedback 16)
 - [ ] Every code example ran; page snippets match the files in `examples/`
 - [ ] Changeable facts carry "as of <Month YYYY>" with a source
 - [ ] Every source is from 2020 or later (except standards still in force), with its year shown in Further reading

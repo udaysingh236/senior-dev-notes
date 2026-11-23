@@ -8,6 +8,10 @@ Every page should let the reader see the idea, and where it moves, watch it move
 
 ## Minimum per topic
 
+These minimums apply to topics big enough to need them. For a small topic, the owner's rule
+wins (style guide, standing feedback 16): skip the sim and any diagram that would not teach
+something, and say so in the final report. The Part 1 mental-model diagram stays.
+
 - One mental-model diagram in Part 1 ("The idea in plain words"): the simplest picture of the
   idea, a handful of boxes, plain labels, no internals. A fresher should understand it from its
   caption alone.
