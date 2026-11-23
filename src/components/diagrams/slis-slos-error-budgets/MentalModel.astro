@@ -1,0 +1,46 @@
+---
+// Part 1 mental model: measure (SLI), target (SLO), the room left between them (error budget),
+// and the decision the budget drives. Numbers from the page's checkout example.
+---
+
+<svg viewBox="0 0 400 420" width="100%" role="img" aria-labelledby="slo-mm-t slo-mm-d">
+  <title id="slo-mm-t">From a measurement to a decision</title>
+  <desc id="slo-mm-d">
+    Four boxes from top to bottom. One, the SLI, what you measure: the share of checkout requests
+    that succeed in under 1 second. Two, the SLO, the target: 99.9% of them over 30 days. Three,
+    the error budget, what is allowed to fail: 0.1% of 1,080,000 requests, which is 1,080 failed
+    requests a month. Four, the decision: budget left, keep shipping new features; budget used up,
+    work on reliability first.
+  </desc>
+  <defs>
+    <marker id="slo-mm-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" style="fill: var(--viz-flow)" />
+    </marker>
+  </defs>
+
+  <rect x="4" y="4" width="392" height="78" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="30" font-size="17" font-weight="700" style="fill: var(--viz-ink)">1. SLI: what you measure</text>
+  <text x="16" y="52" font-size="15" style="fill: var(--viz-ink)">share of checkouts that succeed</text>
+  <text x="16" y="72" font-size="15" style="fill: var(--viz-ink)">in under 1 second</text>
+  <path d="M200 84 L 200 106" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#slo-mm-a)" />
+
+  <rect x="4" y="110" width="392" height="66" rx="6" stroke-width="2" style="fill: var(--viz-server-soft); stroke: var(--viz-server)" />
+  <text x="16" y="136" font-size="17" font-weight="700" style="fill: var(--viz-ink)">2. SLO: the target</text>
+  <text x="16" y="160" font-size="15" style="fill: var(--viz-ink)">99.9% of them, over 30 days</text>
+  <path d="M200 178 L 200 200" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#slo-mm-a)" />
+
+  <rect x="4" y="204" width="392" height="78" rx="6" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="16" y="230" font-size="17" font-weight="700" style="fill: var(--viz-ink)">3. Error budget: allowed to fail</text>
+  <text x="16" y="252" font-size="15" style="fill: var(--viz-ink)">0.1% of 1,080,000 requests</text>
+  <text x="16" y="272" font-size="15" style="fill: var(--viz-ink)">= 1,080 failed requests a month</text>
+  <path d="M200 284 L 200 306" fill="none" stroke-width="2" style="stroke: var(--viz-flow)" marker-end="url(#slo-mm-a)" />
+
+  <rect x="4" y="310" width="190" height="104" rx="6" stroke-width="2" style="fill: var(--viz-ok-soft); stroke: var(--viz-ok)" />
+  <text x="16" y="338" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Budget left</text>
+  <text x="16" y="362" font-size="15" style="fill: var(--viz-ink)">keep shipping</text>
+  <text x="16" y="382" font-size="15" style="fill: var(--viz-ink)">new features</text>
+  <rect x="206" y="310" width="190" height="104" rx="6" stroke-width="2" style="fill: var(--viz-bad-soft); stroke: var(--viz-bad)" />
+  <text x="218" y="338" font-size="16" font-weight="700" style="fill: var(--viz-ink)">Budget used up</text>
+  <text x="218" y="362" font-size="15" style="fill: var(--viz-ink)">fix reliability</text>
+  <text x="218" y="382" font-size="15" style="fill: var(--viz-ink)">first</text>
+</svg>

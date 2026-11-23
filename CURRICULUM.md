@@ -208,7 +208,7 @@ function-calling-and-tools → eval-driven-development
 | 3 | Metrics and monitoring | metrics-and-monitoring | 101, 103 | planned |
 | 4 | Distributed tracing | distributed-tracing | 102 | planned |
 | 5 | Alerting | alerting | 104 | planned |
-| 6 | SLIs, SLOs and error budgets | slis-slos-error-budgets | 106, 107, 108 | planned |
+| 6 | SLIs, SLOs and error budgets | slis-slos-error-budgets | 106, 107, 108 | published (2026-11-23) |
 | 7 | Incident response and on-call | incident-response-and-on-call | 109, 110 | planned |
 | 8 | Postmortems | postmortems | 111 | planned |
 
