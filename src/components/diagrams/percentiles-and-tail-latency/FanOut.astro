@@ -1,0 +1,49 @@
+---
+// A page that waits for 10 backend calls made at the same time. Nine answer in 26-47 ms, one in
+// 1,000 ms, so the page takes 1,000 ms. Bars are drawn to scale (0.3 units per ms).
+---
+
+<svg viewBox="0 0 400 320" width="100%" role="img" aria-labelledby="ptl-fo-t ptl-fo-d">
+  <title id="ptl-fo-t">A page is as slow as its slowest call</title>
+  <desc id="ptl-fo-d">
+    Ten bars on a time line, one per backend call, all starting at the same moment. Nine are short,
+    taking between 26 and 47 milliseconds. Call 7 is long and amber: 1,000 milliseconds. A line at
+    the end of call 7 marks when the page is ready, at 1,000 ms, because the page needs all ten answers.
+  </desc>
+  <text x="20" y="28" font-size="17" font-weight="700" style="fill: var(--viz-ink)">one page sends 10 calls at once</text>
+  <text x="20" y="52" font-size="15" style="fill: var(--viz-muted)">time in ms, drawn to scale</text>
+  <line x1="72" y1="64" x2="72" y2="272" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <text x="64" y="83" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 1</text>
+  <rect x="72" y="72" width="10.5" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="88.5" y="84" font-size="14" style="fill: var(--viz-ink)">35</text>
+  <text x="64" y="103" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 2</text>
+  <rect x="72" y="92" width="12.6" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="90.6" y="104" font-size="14" style="fill: var(--viz-ink)">42</text>
+  <text x="64" y="123" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 3</text>
+  <rect x="72" y="112" width="8.4" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="86.4" y="124" font-size="14" style="fill: var(--viz-ink)">28</text>
+  <text x="64" y="143" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 4</text>
+  <rect x="72" y="132" width="14.1" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="92.1" y="144" font-size="14" style="fill: var(--viz-ink)">47</text>
+  <text x="64" y="163" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 5</text>
+  <rect x="72" y="152" width="9.3" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="87.3" y="164" font-size="14" style="fill: var(--viz-ink)">31</text>
+  <text x="64" y="183" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 6</text>
+  <rect x="72" y="172" width="11.7" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="89.7" y="184" font-size="14" style="fill: var(--viz-ink)">39</text>
+  <text x="64" y="203" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 7</text>
+  <rect x="72" y="192" width="300.0" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="230" y="204" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">1,000 ms</text>
+  <text x="64" y="223" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 8</text>
+  <rect x="72" y="212" width="13.2" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="91.2" y="224" font-size="14" style="fill: var(--viz-ink)">44</text>
+  <text x="64" y="243" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 9</text>
+  <rect x="72" y="232" width="7.8" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="85.8" y="244" font-size="14" style="fill: var(--viz-ink)">26</text>
+  <text x="64" y="263" font-size="14" text-anchor="end" style="fill: var(--viz-muted)">call 10</text>
+  <rect x="72" y="252" width="9.9" height="14" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="87.9" y="264" font-size="14" style="fill: var(--viz-ink)">33</text>
+  <line x1="372" y1="64" x2="372" y2="272" stroke-width="2.5" style="stroke: var(--viz-bad)" />
+  <text x="380" y="292" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink)">page ready: 1,000 ms</text>
+  <text x="20" y="314" font-size="15" style="fill: var(--viz-muted)">the page needs every answer, so it waits for call 7</text>
+</svg>

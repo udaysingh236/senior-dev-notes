@@ -1,0 +1,19 @@
+---
+// Pages that call N backends at once; one slow call makes the whole page slow. See fanout-model.ts.
+import SimShell from '../../sim/SimShell.astro';
+---
+
+<SimShell
+  name="percentiles-fanout"
+  title="One slow call in a hundred, spread across many calls per page"
+  description="Ten pages arrive every second. Each page calls a number of backends at the same time, drawn at the top as a grid of small squares, one per call: blue for a fast call, amber for a slow one, green for a slow call that a hedged second copy answered quickly. Below, two time lines on a log scale from 10 ms to 2 s show recent calls and recent pages as dots, each with a green p50 marker and a red p99 marker. A page is ready when its slowest call answers."
+  watchFor="At the defaults (10 calls per page, 1 slow call in 100), the call p99 flickers between about 50 ms and about 600 ms: exactly 1 call in 100 is slow, so the p99 sits on the edge between fast and slow. The pages are not on the edge: about 1 page in 10 is slow, and the page p99 sits near 1.4 s. Drag 'Calls per page' to 100 and the page p50 itself jumps to about 800 ms, because almost two pages in three now contain a slow call. Then set 'Hedge a call after' to 50 ms: slow squares turn green, the page p99 falls to about 100 ms, and the extra calls stay at about 1%."
+  viewBox="0 0 400 320"
+/>
+
+<script>
+  import { mountAll } from '../../sim/shell';
+  import { createFanoutModel } from './fanout-model';
+
+  mountAll('percentiles-fanout', createFanoutModel);
+</script>

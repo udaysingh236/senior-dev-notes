@@ -1,0 +1,992 @@
+---
+title: Percentiles, P99 and Tail Latency
+description: What the average, p50 and p99 of response times really tell you, explained from zero with ten requests to one API. Why the average hides the slow requests, why a slow 1% of requests reaches far more than 1% of users, how monitoring tools store and combine percentiles, how load tests can hide slow requests, and what makes the slowest requests faster.
+tagline: Why the average response time hides your slowest requests, what p50 and p99 mean, and why a few slow requests end up slowing most of your users.
+difficulty: beginner
+track: foundations
+prerequisites: [latency-vs-throughput]
+next: [slis-slos-error-budgets, timeouts, metrics-and-monitoring, load-shedding, garbage-collection]
+lastReviewed: 2026-11-23
+sidebar:
+  order: 4
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+import Figure from '../../../components/Figure.astro';
+import NextTopics from '../../../components/NextTopics.astro';
+import MentalModel from '../../../components/diagrams/percentiles-and-tail-latency/MentalModel.astro';
+import LongTail from '../../../components/diagrams/percentiles-and-tail-latency/LongTail.astro';
+import FanOut from '../../../components/diagrams/percentiles-and-tail-latency/FanOut.astro';
+import Buckets from '../../../components/diagrams/percentiles-and-tail-latency/Buckets.astro';
+import CoordinatedOmission from '../../../components/diagrams/percentiles-and-tail-latency/CoordinatedOmission.astro';
+import FanoutSim from '../../../components/sims/percentiles-and-tail-latency/FanoutSim.astro';
+
+## The question
+
+Your team's dashboard says the API answers in 58 ms on average. That looks healthy. Yet users
+keep saying the app sometimes hangs for a second or more. Is the dashboard lying, or are the users?
+
+Neither. The average mixes many fast requests and a few very slow ones into one number that
+describes nobody. To see what users really get, line the requests up from fastest to slowest and
+read off positions in the line: "half of the requests were faster than this", "99 in 100 were
+faster than this". Those positions are called **percentiles**, and the slow end of the line is
+called the **tail**. The tail matters more than its size suggests: one page of an app makes many
+requests, so a slow request that happens only 1 time in 100 ends up slowing a large share of pages.
+
+## The idea in plain words
+
+We will follow one example through the page: an API that returns the data for a product page in
+an online shop. Every number in Part 1 is illustrative, and the page says where each one comes from.
+
+1. **Measure ten requests.** Ten requests arrive and take, in the order they arrived, 45, 52, 40,
+   2,000, 48, 55, 42, 60, 50 and 45 milliseconds (ms; a millisecond is a thousandth of a second).
+   Nine are quick. One, the fourth, took two full seconds.
+2. **Take the average, and see it fail.** Add all ten: the nine quick ones make 437 ms, plus 2,000
+   is 2,437 ms. Divide by 10: 243.7 ms. Nobody waited 243.7 ms. Nine people waited between 40 and
+   60 ms, and one waited 2,000 ms. The average is too slow to describe the nine and much too fast
+   to describe the one.
+3. **Sort them instead.** Fastest to slowest: 40, 42, 45, 45, 48, 50, 52, 55, 60, 2,000. Now
+   every request has a position, from 1st (fastest) to 10th (slowest).
+4. **Read off the middle.** Look at the 5th request in the sorted line: 48 ms. Half the requests
+   (5 of 10) took 48 ms or less. This is the **p50**, the 50th percentile, also called the
+   **median**. It describes a typical request honestly.
+5. **Read off the slow end.** The 9th request took 60 ms, so 9 in 10 requests took 60 ms or less.
+   That is the **p90**. The 10th, the slowest, is the **max**: 2,000 ms. Together, p50, p90 and
+   max tell the real story in three numbers: "usually about 48 ms, nearly always 60 ms or less,
+   but sometimes 2 seconds".
+6. **Do the same with real traffic.** Real APIs serve thousands of requests a minute, so we look
+   further into the slow end. Out of 1,000 sorted requests, the 990th is the **p99**: 99 in 100
+   requests were at least that fast, and 1 in 100 was slower. For our API over one minute, the
+   p50 is 40 ms, the average is 58 ms, and the p99 is 460 ms (the building blocks below show
+   these 1,000 requests in a chart).
+7. **Notice who meets the slow 1%.** One page of the shop does not make one request; to show a
+   product it asks ten other services (separate programs, often on other servers) at once (price, stock, reviews, delivery date and so on) and waits
+   for all ten. If each request has a 1-in-100 chance of being slow, a page with ten of them has
+   about a 1-in-10 chance that at least one is slow (the building blocks below work this out), and
+   the whole page waits for that one. So a
+   problem that touches 1% of requests touches about 10% of pages.
+8. **Decide what to watch.** Watch the p50 to know what a typical request feels like, and the
+   p99 (and often the p99.9, 999 in 1,000) to know what the unlucky ones feel like. Never judge
+   speed by the average alone.
+
+<Figure caption="The ten requests sorted. The p50 (48 ms) and p90 (60 ms) are real requests someone waited for. The average, 244 ms, sits far above nine of them and far below the tenth: it describes nobody.">
+  <MentalModel />
+</Figure>
+
+In the figure, each bar is one request, sorted from fastest to slowest, and the tall amber bar is
+drawn with a break because it is too tall to fit. The p50 and p90 land on real bars; the
+dashed average line touches none of them.
+
+An everyday picture: a dabbawala delivery round in Mumbai. If you ask "how long does a lunchbox take
+to arrive?", the honest answer is not the average. It is "usually 2 hours, almost always under 2
+and a half, and on monsoon days a few take 5". The average of those mixes monsoon days into normal
+days and describes neither. The picture breaks in one place: on a monsoon day every lunchbox is
+late together, while in a computer system the slow requests are usually scattered among fast ones,
+one here and one there, which is exactly what makes them hard to see.
+
+## The building blocks
+
+Five small ideas carry the rest of the page. Each gets a plain sentence, the reason it matters, a
+small example, and then its precise version.
+
+### The average (mean), and why one value can drag it
+
+**What it is.** The average, also called the **mean**, is what you get when you add up all the
+values and divide by how many there are.
+
+**Why it matters here.** It is the number most dashboards show first, and it has one weakness that
+this whole page is about: a single very large value pulls it a long way.
+
+**Example.** A quick refresher with three requests of 40, 50 and 60 ms: 40 + 50 + 60 = 150, and
+150 ÷ 3 = 50 ms. Now make the third request 2,000 ms instead: 40 + 50 + 2,000 = 2,090, and
+2,090 ÷ 3 = about 697 ms. One request changed, and the average jumped from 50 to 697 ms, about 14
+times higher (697 ÷ 50 ≈ 14). Going the other way, a few slow requests mixed into thousands of fast ones barely move it:
+that is how our API can have an average of 58 ms and still make some users wait seconds.
+
+**The technical version.** For values x₁ to xₙ, the mean is (x₁ + x₂ + … + xₙ) ÷ n. It uses every
+value, so it is useful for totals: "average 58 ms × 1,000 requests = 58,000 ms of work". It is
+the wrong tool for "what does one user feel", because it describes the sum, not any single request.
+
+### Percentiles: p50, p90, p99
+
+**What it is.** A percentile answers "how slow were the requests at this position, once I sort
+them all from fastest to slowest?"
+
+**Why it exists.** It describes real requests, so it cannot be dragged by one extreme value the
+way the average can, and it lets you ask about any part of the line: the middle, or the slow end.
+
+**Example.** Sort 1,000 requests. The p50 is the 500th: half took that long or less. The p90 is
+the 900th. The p99 is the 990th: 990 requests took that long or less, and the 10 behind it were
+slower. The **p99.9** is the 999th: only 1 in 1,000 was slower. With our ten sorted requests, the
+p50 is the 5th (48 ms) and the p90 is the 9th (60 ms). Ten requests are too few for a p99: there
+is no "99th in 100" position, so the slowest one stands in for it.
+
+**The technical version.** The p-th percentile is the smallest value that p percent of the values
+are at or below. One common way to compute it, called **nearest rank**: sort the n values, compute
+the position p ÷ 100 × n, round it up to a whole number, and take the value at that position.
+For p90 of our ten: 90 ÷ 100 × 10 = 9, so the 9th value, 60 ms. Writing "p99" is short for "the 99th
+percentile". A related word you will meet is **quantile**: the same idea written as a fraction, so
+the 0.99 quantile is the p99.
+
+### Distribution and the tail
+
+**What it is.** The **distribution** of response times is the shape you get when you count how
+many requests took each amount of time. The **tail** is the thin, long stretch at the slow end of
+that shape, and **tail latency** means the response times out in that stretch (latency is the time
+one request takes from start to finish; the [latency vs throughput](/foundations/latency-vs-throughput/)
+page covers it in depth).
+
+**Why it matters.** Response times are almost never spread evenly. Most requests bunch up near
+the fast end, and a few stretch far out to the right. That long thin stretch is where users get
+annoyed, and the average cannot see its shape.
+
+**Example.** Here is one minute of our product API, 1,000 requests, counted into time ranges.
+
+<Figure caption="Most of the 1,000 requests took 25 to 50 ms. A thin tail of 50 requests took over 100 ms, and the slowest took up to 2 seconds. The p99, 460 ms, sits inside that tail, far beyond both the p50 and the average.">
+  <LongTail />
+</Figure>
+
+Read the chart left to right: 120 requests took under 25 ms, 610 took 25 to 50 ms, and so on down
+to 3 requests that took between 1 and 2 seconds. The ranges get wider to the right so the tail fits
+on the page. The p50 is 40 ms. The average is 58 ms, pulled right by the tail. The p99 is 460 ms,
+deep in the tail. The tail holds 50 of the 1,000 requests: 30 + 12 + 5 + 3 = 50 took over 100 ms.
+
+**The technical version.** Latency distributions are usually **right-skewed**: bunched at the
+left with a long tail to the right. Some are **bimodal**, with two separate bumps, for example
+"answered from memory" around 5 ms and "had to read the disk" around 200 ms. In both shapes, the
+mean and the p50 fall in different places, and neither describes the tail. Only percentiles from
+the tail (p99, p99.9) and the max do.
+
+### Chances, and multiplying them
+
+**What it is.** A **probability** is a number from 0 to 1 that says how likely something is: 0
+means never, 1 means always.
+
+**Why it matters here.** To see why a rare slow request reaches many users, we need to combine
+chances: "what is the chance that all ten requests on a page are fast?"
+
+**Example.** A refresher with counts first. If 1 request in 100 is slow, the chance a request is
+slow is 1 ÷ 100 = 0.01, which is 1%. The chance it is fast is 99 ÷ 100 = 0.99, or 99%. The two add
+up to 1, because a request is either one or the other. For two requests that do not affect each
+other, the chance both are fast is 0.99 × 0.99 = 0.9801, about 98%. Each extra request multiplies
+by 0.99 again.
+
+**The technical version.** For independent events (events that do not affect each other), the
+chance that all of them happen is the product of their chances. Multiplying the same number
+several times is a **power**: 0.99 × 0.99 × 0.99 is written 0.99³. A tiny refresher: 2³ means
+2 × 2 × 2 = 8. So the chance that N independent requests are all fast is 0.99 to the power N,
+written 0.99ᴺ, and the chance that at least one is slow is 1 minus that.
+
+### Fan-out: a page is as slow as its slowest call
+
+**What it is.** **Fan-out** is when one request from a user becomes many requests inside your
+system, sent at the same time, and the answer waits for all of them.
+
+**Why it matters.** Modern apps are built from many small services, so fan-out is everywhere. A
+product page asks for price, stock, reviews, recommendations, delivery date and more. The page
+cannot be shown until the last answer arrives, so the page's time is the time of its slowest call.
+
+**Example.** One page sends 10 calls at once. Nine answer in 26 to 47 ms, and one, call 7, takes
+1,000 ms. The page is ready at 1,000 ms.
+
+<Figure caption="Ten calls start together. Nine finish in under 50 ms, but the page needs all ten answers, so it is ready only when call 7 answers, at 1,000 ms.">
+  <FanOut />
+</Figure>
+
+Each bar is one call, drawn to scale on a time line. Nine bars are tiny because 50 ms is short next
+to a full second; the long amber bar decides when the page is ready.
+
+Now the chance. Each call is fast with chance 0.99. All ten are fast with chance 0.99¹⁰. Worked
+out one multiplication at a time, the chance that the first 2, 3, 4 … 10 calls are all fast is:
+0.980, 0.970, 0.961, 0.951, 0.941, 0.932, 0.923, 0.914 and 0.904. So 90.4% of pages have no slow call, and the other
+100% − 90.4% = 9.6% have at least one. A 1-in-100 problem per call became about a 1-in-10
+problem per page.
+
+**The technical version.** If each call is slow with chance s, and a page makes N calls, the share
+of pages with at least one slow call is 1 − (1 − s)ᴺ. With s = 1% and N = 100: 0.99¹⁰⁰ is about
+0.366, so 1 − 0.366 = 0.634, about 63% of pages are slow. At that size of fan-out, the slow end of
+one service becomes the normal experience of the whole app.
+
+:::tip[If you stop here]
+- The average mixes fast and slow requests into a number nobody experienced. One very slow request
+  can drag it a long way, and a few slow ones among thousands can hide in it.
+- Sort the requests and read positions instead: the p50 (median) is the middle, the p99 is the
+  request that 99 in 100 beat, the p99.9 the one that 999 in 1,000 beat.
+- The slow end of that line is the tail. Watch it with p99, p99.9 and the max.
+- One user action usually makes many requests, and waits for the slowest. If 1 call in 100 is slow,
+  about 1 page in 10 with ten calls is slow, and about 63 in 100 with a hundred calls.
+:::
+
+## Going deeper
+
+Every one of your 40 servers reports a p99 of 120 ms. What is the p99 of the whole fleet, all 40 together? Not
+120 ms, necessarily, and not their average either: you cannot compute it from those 40 numbers at
+all. And the p99 your users' pages see is different again, because each page waits for many calls.
+
+That is the hard part of percentiles in production. Defining them on ten requests is the small part;
+the real questions are elsewhere:
+
+- **Storing them.** A busy service handles millions of requests a minute. Keeping every response
+  time to sort later is too expensive, so tools keep a compact summary. Which summary still
+  gives honest percentiles?
+- **Combining them.** Dashboards show the p99 per server, per minute, per region. Those numbers
+  cannot be averaged or added like counts. Getting a fleet-wide or hour-long p99 needs the right
+  kind of summary from the start.
+- **Measuring them honestly.** The most common load-testing setup hides exactly the slow requests
+  you are trying to find.
+- **Shrinking the tail.** Knowing where slow requests come from (waiting in queues, pauses inside
+  the program, requests that miss a fast path) and which techniques cut them, at what cost.
+
+The rest of the page takes these one at a time.
+
+## The obvious fix, and why it breaks
+
+The obvious way to get a fleet-wide p99 is to have each server compute its own p99 and average
+them on the dashboard. Here is what that does with two servers. Server A handles 9,000 requests,
+all fast. Server B handles 1,000 requests, and 150 of them are slow because of a failing disk.
+
+```text
+server A:  9000 requests   p99 about     50 ms
+server B:  1000 requests   p99 about    967 ms
+
+average of the two p99s         508 ms   <- wrong: no request took this
+p99 of the merged histogram     667 ms   <- estimate from bucket counts
+exact p99 of all requests       697 ms   <- needs every value
+```
+
+This is the output of `histogram.py` from the examples folder. The average of the two p99s is
+508 ms: (50 + 967) ÷ 2 = 508.5. But no request took anywhere near 508 ms: fast requests took 20 to
+50 ms and slow ones 600 to 900 ms. The true p99 of all 10,000 requests is 697 ms. Here is where
+that comes from: 9,000 + 1,000 = 10,000 requests, so the p99 is the 9,900th in sorted order
+(99 ÷ 100 × 10,000 = 9,900). Of the 10,000, 150 are slow, so the 10,000 − 150 = 9,850 fast ones
+come first. The 9,900th request is therefore the 9,900 − 9,850 = 50th of the slow ones, and it took
+697 ms. The two middle lines of the output, about histograms, are explained later on this page.
+
+Averaging fails because a p99 has already thrown away the information you need: how many requests
+each server had and where they fell. Server A's 9,000 requests count nine times as much as server
+B's 1,000, and a plain average treats them as equal. Averaging p99s across minutes fails for the
+same reason: a quiet minute with 10 requests counts as much as a busy one with 10,000.
+
+Two neighbouring ideas get confused with percentiles:
+
+- **A percentage is not a percentile.** "1% of requests were slow" is a count. "The p99 is 460 ms"
+  is a time. They are linked (if the p99 is 460 ms, about 1% of requests took longer than 460 ms),
+  but they answer different questions.
+- **A percentile is not a target.** "Our p99 is 300 ms" is a measurement. "99% of requests must
+  finish within 300 ms" is a target, called a service level objective (SLO); the [SLIs, SLOs and error
+  budgets](/observability/slis-slos-error-budgets/) page covers how teams set and track them.
+
+The fix for combining is to keep the shape of the distribution, not the finished percentile, and
+compute the percentile at the very end. The next sections show how.
+
+## How it works, piece by piece
+
+### Computing a percentile exactly
+
+Start with the exact method, because every shortcut is measured against it: keep every response
+time, sort them, and pick the right position. This is the nearest-rank method from Part 1.
+
+Two details matter in practice. The first is that tools disagree on the in-between cases. With
+10 values, nearest rank says the p50 is the 5th value (48 ms). Another common method,
+**interpolation**, says the middle of 10 values lies halfway between the 5th and the 6th, so it
+reports (48 + 50) ÷ 2 = 49 ms. Spreadsheets, Python's `statistics` module and databases each have
+their own default. On thousands of values the difference is tiny; on a handful it is not, so when
+two tools disagree, check the method before you check the code.
+
+The second detail is sample size, and it matters far more. A p99 needs at least 100 values to mean
+anything, because with 100 values the p99 is the 99th, one step from the slowest. With 50 values,
+nearest rank gives 99 ÷ 100 × 50 = 49.5, rounded up to 50: the p99 is the slowest request, the max.
+A p99.9 needs at least 1,000 values for the same reason.
+
+:::caution[A p99 over a quiet minute is a guess]
+A service handling 2 requests a second serves 2 × 60 = 120 requests a minute. Its per-minute p99 is
+then the 119th of 120 (99 ÷ 100 × 120 = 118.8, rounded up to 119), the second-slowest request of
+the minute. One unlucky request moves the line. Use longer windows, such as 5 or 10 minutes, for
+quiet services.
+:::
+
+Sorting every value works for a load test or an offline report. It does not work inside a busy
+service: at 10,000 requests a second, one minute is 10,000 × 60 = 600,000 values per server, and
+the dashboard wants the p99 over hours and across many servers.
+
+### Storing latency cheaply: histograms
+
+**What it is.** A **histogram** is a set of counters, one per time range, where each request adds
+1 to the counter for the range its time falls in. Each time range is called a **bucket**.
+
+**Why it exists.** It turns millions of values into a handful of numbers. The chart of 1,000 requests
+in Part 1 was a histogram: eight buckets, eight counters, describing 1,000 requests. With 8 buckets,
+the cost is 8 counters whether the server handled a thousand requests or a billion.
+
+**Example: estimating the p99 from buckets.** A histogram no longer knows each request's exact
+time, only which bucket it landed in. To estimate the p99 of our 1,000 requests, add the bucket
+counts from the fast end until the running total reaches 990, then guess inside that bucket.
+
+<Figure caption="The running total passes 990 inside the 250–500 ms bucket. That bucket holds 12 requests; assuming they are spread evenly, the 10th of them sits at about 458 ms. The true value could be anywhere in the bucket.">
+  <Buckets />
+</Figure>
+
+Step by step: the first five buckets hold 120 + 610 + 160 + 60 + 30 = 980 requests, all under
+250 ms. The 990th request is therefore 990 − 980 = the 10th request inside the next bucket, 250 to
+500 ms, which holds 12. If those 12 are spread evenly over the 250 ms width of the bucket, the 10th
+is 10 ÷ 12 of the way across: 250 × 10 ÷ 12 = about 208 ms past the start, so 250 + 208 = 458 ms.
+The real 990th request took 460 ms, so the guess is close here, but only by luck: it could have been
+anywhere from 250 to 500 ms.
+
+**The technical version.** That "spread evenly" guess is called **linear interpolation**, and it
+is what `histogram_quantile` does in Prometheus, a widely used open-source monitoring system. The error depends entirely on the bucket
+width around the percentile you care about. Prometheus's own documentation shows a case where the
+true p95 is about 220 ms, the bucket is 200 to 300 ms, and the estimate comes out at 295 ms (as of
+November 2026). The lesson: put narrow buckets where your targets are. If the SLO says 300 ms, have
+a bucket edge at exactly 300 ms, so "how many requests were under 300 ms" is a count, not a guess.
+
+#### Exponential buckets
+
+**What they are.** Buckets whose width grows by the same factor each time, for example each bucket
+about 9% wider than the one before.
+
+**Why they exist.** Response times span a huge range, from a millisecond to a minute. Equal-width
+buckets of 10 ms would need 60,000 ms ÷ 10 ms = 6,000 buckets to reach 60 seconds; widths that grow cover the range
+with far fewer, and every estimate is off by about the same *percentage* instead of the same number
+of milliseconds.
+
+**Example.** Start at 1 ms and make each bucket 9% wider: 1.00, 1.09, 1.19, 1.30 ms and so on.
+After about 27 buckets you reach 10 ms; every 27 more multiplies by 10 again. So 1 ms to 100 s,
+which is 5 steps of ×10, takes about 5 × 27 = 135 buckets. A value guessed from the middle of its
+bucket is then never off by more than about half the 9%, roughly 4–5%.
+
+**The technical version.** OpenTelemetry's **exponential histogram** sets the growth factor from a
+`scale` number, with bucket edges at powers of 2^(2^−scale). Its default holds up to 160 buckets,
+which the specification says covers 1 ms to 100 s with under 5% relative error (the error
+as a share of the value itself) (as of November 2026).
+Prometheus's newer **native histograms** use the same idea, and its documentation now recommends
+them over the older fixed-bucket histograms.
+
+### Combining servers and time windows
+
+Histograms combine perfectly, and that is their real superpower. Two histograms with the same
+bucket edges merge by adding their counters, bucket by bucket. Then you estimate the percentile
+once, from the merged counters.
+
+Back to servers A and B: merge their histograms and estimate, and you get 667 ms against the exact
+697 ms (the 30 ms gap is the bucket width at work: the slow requests all sit in one 500–1,000 ms
+bucket). Average their p99s and you get 508 ms. The histogram is approximately right; the average
+of p99s is confidently wrong.
+
+The same holds across time. To get the p99 for an hour, add up the hour's 60 per-minute histograms
+and estimate once. Never average 60 per-minute p99s.
+
+In Prometheus, the rule takes this shape: sum the bucket rates across servers, keeping the bucket
+label (`le`, "less or equal", the bucket's upper edge), and only then estimate. The `rate(...[5m])` part turns each bucket's ever-growing counter into
+"requests per second over the last 5 minutes".
+
+```promql
+# p99 across all servers of a service, over the last 5 minutes
+histogram_quantile(0.99,
+  sum by (le) (rate(http_request_duration_seconds_bucket{service="product-api"}[5m])))
+```
+
+:::danger[Summaries cannot be combined]
+Some metric libraries offer a **summary**, which computes percentiles inside each server and
+exports only the finished p50 and p99. Prometheus's documentation states that quantiles from
+summaries cannot be aggregated (as of November 2026). If you will ever need a p99 across servers,
+export a histogram.
+:::
+
+### Sketches: percentiles with a promised error
+
+**What it is.** A **sketch** is a small, mergeable summary of many values, designed so that any
+percentile read from it is within a promised error of the true one.
+
+**Why it exists.** Fixed buckets make you guess the right edges in advance. A sketch picks its
+buckets as values arrive and still merges across servers.
+
+**Example.** A sketch with a 1% relative error promise reports a true p99 of 460 ms as somewhere
+between 460 × 0.99 = 455.4 ms and 460 × 1.01 = 464.6 ms, whatever the traffic looked like.
+
+**The technical version.** DDSketch, used by Datadog's distribution metrics, keeps exponential
+buckets so the error is relative to the value; Datadog computes percentiles across all hosts from
+these merged sketches (as of November 2026). HdrHistogram, a popular library for load tests and
+benchmarks, does the same with a fixed memory size set by the range and the number of significant
+digits you ask for: 3 significant digits means at most 0.1% error. OpenTelemetry's exponential
+histogram above is a sketch of this family too.
+
+### Where the tail comes from
+
+Knowing how to measure the tail leads to the next question: why do some requests take 20 times
+longer than the rest, on the same code and the same server? The usual causes, in the rough order
+experienced engineers check them:
+
+1. **Waiting in a queue.** When requests arrive faster than a server can start them, they wait.
+   Most requests find a short line; an unlucky few arrive right behind a burst. The waiting, not
+   the work, becomes their response time, and it grows sharply as the server gets busier. The
+   [latency vs throughput](/foundations/latency-vs-throughput/) page shows why a server at 90%
+   busy makes requests wait many times their working time.
+2. **Pauses inside the program.** Languages such as Java, Go, C# and JavaScript periodically stop
+   to clean up memory that is no longer used, called **garbage collection**. Most pauses are short;
+   occasional ones stop every request being worked on at that moment. In 2020, Discord described a Go service
+   whose latency spiked about every 2 minutes, because the Go runtime of the time forced a garbage
+   collection at least every 2 minutes (the garbage collection page, coming soon, covers this).
+3. **Missing the fast path.** A request whose data is in a cache (a fast copy kept in memory)
+   answers in microseconds, millionths of a second; one that misses goes to the database or disk. Most requests hit; the misses are the tail.
+4. **Sharing the machine.** Another program on the same machine (a backup, a log upload, a
+   neighbour on the same cloud host) takes the CPU, disk or network for a moment.
+5. **Retries and timeouts.** A request whose first attempt was lost waits for a timeout and a
+   retry, so its time is the timeout plus a second attempt. That makes a second bump in the
+   distribution at exactly the timeout value, a sign worth recognising on a histogram.
+
+The pattern across all five: tail latency is usually caused by something *intermittent*, outside
+the request's own code. That is why reading the slow endpoint's code rarely finds the cause, and why a
+histogram over time, next to other events on the machine, usually does.
+
+### Fan-out: why the tail becomes everyone's problem
+
+Part 1 worked out the fan-out chances with a formula. The simulation below lets you watch them
+happen. Each page calls a number of backend services at once; each call is fast (20 to 50 ms) except with
+a small chance, when it takes 500 to 1,500 ms.
+
+The two time lines use a **log scale**: each step along the axis multiplies the time by the same
+amount, instead of adding the same amount. That lets 10 ms and 2 seconds both fit on one line, with
+50, 100 and 500 ms evenly readable in between.
+
+<FanoutSim />
+
+What you saw matches the numbers from `percentiles.py`, which builds 100,000 pages for each case:
+
+```text
+100,000 pages, each calling N backends in parallel (page time = slowest call)
+    N   page p50   page p99   pages over 100 ms   predicted 1 - 0.99^N
+    1      35 ms     503 ms               1.0%                 1.0%
+   10      48 ms    1401 ms               9.7%                 9.6%
+  100     813 ms    1490 ms              63.6%                63.4%
+```
+
+Read the rows top to bottom. With one call per page, 1% of pages are slow, as expected. With 10,
+the share of slow pages is 9.7%, and the page p99 is a slow call's time, 1.4 seconds. With 100, the
+p50 itself is slow: a *typical* page now waits for a slow call. The measured column matches the
+formula's column within a few tenths of a percent.
+
+Notice also the first row's p99, 503 ms. With one call per page, a page is one call, so this is
+also the p99 of a single call. With exactly 1 slow call in 100, the call p99 sits right
+on the edge between fast and slow: in the sim it flickers between about 50 and about 600 ms. A
+problem that hits 1% of calls can hide right behind the p99 and show only in the p99.9. That is
+one reason teams with large fan-out watch the p99.9.
+
+Fan-out has a second shape: **calls in a chain**, where service A calls B, which calls C. The times
+add up instead of taking the slowest, but the effect on the tail is similar: every extra step in
+the chain is another chance to be unlucky. Marc Brooker's 2021 analysis of both shapes concludes
+that no single summary number is enough, and that you should watch both the high percentiles and
+the end-to-end time a user actually experiences.
+
+:::note[From the trenches]
+The number that matters is the one at the user's edge. Teams often have every service green on
+its own p99 while the app feels slow, because nobody owns the p99 of the page that calls all of
+them. Measure that page, and set the per-service targets from it, tighter the more calls the page
+makes.
+:::
+
+### Measuring honestly: coordinated omission
+
+**What it is.** **Coordinated omission** is a measuring mistake where the tool that sends test
+requests slows down whenever the system slows down, and so skips measuring exactly the moments
+when the system is slow. The term was coined by Gil Tene, who wrote HdrHistogram.
+
+**Why it matters.** Most load tests run a loop: send a request, wait for the answer, record the
+time, send the next. That is called a **closed loop**. Real users do not wait for each other: they
+keep arriving on their own schedule, which is called an **open loop**. When the server freezes,
+a closed-loop test stops sending, and the requests it would have sent are never measured.
+
+**Example.** A server answers each request in 10 ms. A test wants to send 50 requests a second for
+10 seconds, which is 50 × 10 = 500 requests, one every 1,000 ÷ 50 = 20 ms. From 5.0 s to 6.0 s,
+the server freezes completely, as in a long garbage-collection pause.
+
+<Figure caption="The same 1-second freeze, measured two ways. The test that waits for each answer records one slow request and reports a p99 of 10 ms. The test that sends on schedule sees 91 slow requests and a p99 of 960 ms.">
+  <CoordinatedOmission />
+</Figure>
+
+The top row waits for each answer. One request is caught in the freeze and waits about a second.
+During that second, the test sends nothing, so the 1,000 ÷ 20 = 50 requests it planned for that
+second shrink to that one request: 49 are never sent. It records 451 requests, one of them slow,
+and reports a p99 of 10 ms. The bottom row keeps sending on schedule. Requests pile up during the
+freeze, and after it the server needs about 0.8 s more to work through the backlog, so 91 requests
+are slow and the p99 is 960 ms.
+
+```text
+waits for each answer   451 requests   p50    10 ms   p99    10 ms   max  1010 ms   over 100 ms: 1
+sends on schedule       500 requests   p50    10 ms   p99   960 ms   max  1010 ms   over 100 ms: 91
+```
+
+**The technical version.** The fix is to measure each request's time from when it *should* have
+been sent, not when it was sent: an open-loop load generator, or correction in the recorder
+(HdrHistogram's `recordValueWithExpectedInterval` adds back the requests a stall swallowed). A 2021
+ScyllaDB post on the topic notes that many benchmark tools do not correct for this by default. Check
+which one you use before trusting its p99.
+
+### Cutting the tail
+
+Now the useful part: what makes the slow requests faster. In practice I'd go down this list in
+order, because the first items are cheap and the last ones cost extra traffic.
+
+1. **Remove the cause.** Find what the slow requests have in common (a queue, a pause, a cache
+   miss) using the list above, and fix that. This is the only technique that costs nothing to run.
+2. **Keep servers out of the busy zone.** Queueing grows sharply as a server approaches full use,
+   so leaving spare capacity cuts the tail more than it cuts the average.
+3. **Make fan-out smaller.** Fewer calls per page means fewer chances to be unlucky. Batch several
+   lookups into one call, or cache rarely changing answers near the page.
+4. **Set timeouts from percentiles.** A timeout a little above the p99.9 of the service you call cuts off the
+   truly stuck calls without failing healthy ones; the [timeouts](/resilience/timeouts/) page shows
+   how to pick the number.
+5. **Hedge the slow calls.** Explained next.
+
+#### Hedged requests
+
+**What it is.** A **hedged request** is a second copy of a call, sent to another server when the
+first has not answered after a short wait; whichever answers first wins and the other is ignored.
+
+**Why it exists.** If slowness is intermittent, the second server is very likely fast at that
+moment. You pay a little extra traffic to skip most of the tail.
+
+**Example.** Our calls take 20 to 50 ms, except 1 in 100, which takes 500 to 1,500 ms. If a call
+has not answered after 50 ms, send a copy. Only the slow calls pass 50 ms, so only about 1% of
+calls get a copy. The copy starts at 50 ms and is almost always fast, so the call almost always
+finishes by 50 + 50 = 100 ms. Here is what that does to pages of 10 calls:
+
+```text
+N = 10 with hedging after 50 ms
+   10      48 ms      97 ms               0.1%   extra calls sent: 1.0%
+```
+
+The page p99 drops from 1,401 ms to 97 ms, and slow pages from 9.7% to 0.1%, for 1% more calls.
+Try it in the simulation above with "Hedge a call after" set to 50 ms.
+
+**The technical version.** Dean and Barroso's 2013 paper *The Tail at Scale* (kept here as history)
+described hedging and suggested waiting until about the call's p95 before sending the copy, which
+limits the extra traffic to about 5%. Two cautions apply. Hedging is only safe for calls that can
+be repeated without harm, such as reads, or writes made safe with
+[idempotency keys](/messaging/idempotency-keys/). And if every server becomes slow at once, every
+call gets hedged and traffic doubles exactly when the system is weakest. Marc Brooker (2023)
+suggests capping hedges, for example with a token bucket that allows about 5% extra calls (a
+counter that refills at a fixed rate and lets a hedge through only while it has tokens left; the
+[rate limiting](/resilience/rate-limiting/) page explains it).
+
+## Choosing what to watch
+
+| Number | What it tells you | When to use it |
+|---|---|---|
+| Average | total work: average × count = time spent | capacity and cost estimates; never alone for speed |
+| p50 | what a typical request feels like | the everyday experience; spotting a change that slows everything |
+| p90 / p95 | the slow end of normal | most user-facing dashboards and SLOs |
+| p99 | the unlucky 1 in 100 | services called many times per user action; most SLOs |
+| p99.9 | the unlucky 1 in 1,000 | high fan-out back ends, storage, payments |
+| Max | the single worst request | finding freezes and stuck requests; noisy, so watch the trend |
+
+The thing to notice: each row looks further into the tail, and needs more requests to be
+trustworthy. A p99.9 over 500 requests is a guess. How to choose: start with p50 and p99 for every
+user-facing endpoint, add p99.9 where one user action fans out to many calls, keep the max on the
+same chart to catch freezes, and turn the one the user feels into an SLO.
+
+## Build it yourself
+
+Three small programs carry the whole page: the exact percentile, a mergeable histogram, and the
+load-test trap. The full versions, with the fan-out and hedging runs, are in
+[`examples/percentiles-and-tail-latency/`](https://github.com/udaysingh236/senior-dev-notes/tree/main/examples/percentiles-and-tail-latency).
+
+First, the naive average next to an exact nearest-rank percentile, on the ten requests from Part 1.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="percentiles.py"
+import math
+
+ten_ms = [45, 52, 40, 2000, 48, 55, 42, 60, 50, 45]
+
+def average(values: list[float]) -> float:
+    """The naive summary: add everything up, divide by how many."""
+    return sum(values) / len(values)
+
+def percentile(values: list[float], p: float) -> float:
+    """Nearest-rank percentile: sort, then take the value at rank ceil(p/100 * n)."""
+    ordered = sorted(values)
+    rank = math.ceil(p / 100 * len(ordered))  # 1-based rank
+    return ordered[max(rank, 1) - 1]
+
+print(f"average  {average(ten_ms):7.1f} ms   <- nobody waited this long")
+for p in (50, 90, 100):
+    print(f"p{p:<3}     {percentile(ten_ms, p):7.1f} ms")
+# average    243.7 ms   <- nobody waited this long
+# p50         48.0 ms
+# p90         60.0 ms
+# p100      2000.0 ms
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="percentiles.mjs"
+const tenMs = [45, 52, 40, 2000, 48, 55, 42, 60, 50, 45];
+
+/** The naive summary: add everything up, divide by how many. */
+const average = (values) => values.reduce((a, b) => a + b, 0) / values.length;
+
+/** Nearest-rank percentile: sort, then take the value at rank ceil(p/100 * n). */
+function percentile(values, p) {
+  const ordered = [...values].sort((a, b) => a - b); // numeric sort, not the default text sort
+  const rank = Math.ceil((p / 100) * ordered.length); // 1-based rank
+  return ordered[Math.max(rank, 1) - 1];
+}
+
+const ms = (v, w = 7) => v.toFixed(1).padStart(w);
+console.log(`average  ${ms(average(tenMs))} ms   <- nobody waited this long`);
+for (const p of [50, 90, 100]) console.log(`p${String(p).padEnd(3)}     ${ms(percentile(tenMs, p))} ms`);
+// average    243.7 ms   <- nobody waited this long
+// p50         48.0 ms
+// p90         60.0 ms
+// p100      2000.0 ms
+```
+  </TabItem>
+</Tabs>
+
+The JavaScript version passes a comparison function to `sort` on purpose: without one, JavaScript
+sorts numbers as text, and 2000 lands before 40.
+
+Second, the production shape: a histogram that each server fills, that merges by adding counters,
+and that estimates a percentile with the "spread evenly" guess. This is the code behind the
+two-server output earlier on the page.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="histogram.py"
+import bisect
+import math
+
+# Upper edges of the buckets, in ms. The last bucket catches everything slower.
+BOUNDS_MS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, math.inf]
+
+class Histogram:
+    def __init__(self) -> None:
+        self.counts = [0] * len(BOUNDS_MS)
+
+    def record(self, ms: float) -> None:
+        self.counts[bisect.bisect_left(BOUNDS_MS, ms)] += 1
+
+    def merge(self, other: "Histogram") -> None:
+        # Merging is adding counts bucket by bucket. This is why histograms
+        # combine and finished percentiles do not.
+        self.counts = [a + b for a, b in zip(self.counts, other.counts)]
+
+    def percentile(self, p: float) -> float:
+        """Find the bucket holding the p-th percentile, then guess linearly inside it."""
+        target = p / 100 * sum(self.counts)  # requests at or below the answer
+        seen = 0
+        for i, count in enumerate(self.counts):
+            if seen + count >= target and count > 0:
+                lower = BOUNDS_MS[i - 1] if i > 0 else 0
+                upper = BOUNDS_MS[i]
+                if math.isinf(upper):
+                    return lower  # cannot guess inside an open-ended bucket
+                return lower + (upper - lower) * (target - seen) / count
+            seen += count
+        return 0.0
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="histogram.mjs"
+// Upper edges of the buckets, in ms. The last bucket catches everything slower.
+const BOUNDS_MS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, Infinity];
+
+class Histogram {
+  counts = new Array(BOUNDS_MS.length).fill(0);
+
+  record(ms) {
+    this.counts[BOUNDS_MS.findIndex((upper) => ms <= upper)] += 1;
+  }
+
+  merge(other) {
+    // Merging is adding counts bucket by bucket. This is why histograms
+    // combine and finished percentiles do not.
+    this.counts = this.counts.map((c, i) => c + other.counts[i]);
+  }
+
+  /** Find the bucket holding the p-th percentile, then guess linearly inside it. */
+  percentile(p) {
+    const target = (p / 100) * this.counts.reduce((a, b) => a + b, 0); // at or below the answer
+    let seen = 0;
+    for (let i = 0; i < this.counts.length; i++) {
+      const count = this.counts[i];
+      if (seen + count >= target && count > 0) {
+        const lower = i > 0 ? BOUNDS_MS[i - 1] : 0;
+        const upper = BOUNDS_MS[i];
+        if (upper === Infinity) return lower; // cannot guess inside an open-ended bucket
+        return lower + ((upper - lower) * (target - seen)) / count;
+      }
+      seen += count;
+    }
+    return 0;
+  }
+}
+```
+  </TabItem>
+</Tabs>
+
+Third, the load-test trap. The two testers below share one simulated server that freezes from
+5.0 s to 6.0 s. The only difference is the line that decides when to send the next request, and
+which moment each latency is measured from.
+
+<Tabs syncKey="lang">
+  <TabItem label="Python">
+```python title="load_test.py"
+def closed_loop() -> list[float]:
+    """Naive tester: send, WAIT for the answer, then send the next one.
+    Latency is measured from when the request was actually sent."""
+    latencies, now, free_at = [], 0.0, 0.0
+    while now < RUN_MS:
+        done = server_finish(now, free_at)
+        free_at = done
+        latencies.append(done - now)
+        now = max(now + INTERVAL_MS, done)  # cannot send the next one before this answer
+    return latencies
+
+def open_loop() -> list[float]:
+    """Correct tester: send on schedule whatever happens (like real users do).
+    Latency is measured from when the request was SUPPOSED to be sent."""
+    latencies, free_at = [], 0.0
+    for planned in range(0, RUN_MS, INTERVAL_MS):
+        done = server_finish(planned, free_at)
+        free_at = done
+        latencies.append(done - planned)
+    return latencies
+# waits for each answer   451 requests   p50    10 ms   p99    10 ms   ...   over 100 ms: 1
+# sends on schedule       500 requests   p50    10 ms   p99   960 ms   ...   over 100 ms: 91
+```
+  </TabItem>
+  <TabItem label="JavaScript">
+```js title="load-test.mjs"
+/** Naive tester: send, WAIT for the answer, then send the next one.
+ *  Latency is measured from when the request was actually sent. */
+function closedLoop() {
+  const latencies = [];
+  let now = 0;
+  let freeAt = 0;
+  while (now < RUN_MS) {
+    const done = serverFinish(now, freeAt);
+    freeAt = done;
+    latencies.push(done - now);
+    now = Math.max(now + INTERVAL_MS, done); // cannot send the next one before this answer
+  }
+  return latencies;
+}
+
+/** Correct tester: send on schedule whatever happens (like real users do).
+ *  Latency is measured from when the request was SUPPOSED to be sent. */
+function openLoop() {
+  const latencies = [];
+  let freeAt = 0;
+  for (let planned = 0; planned < RUN_MS; planned += INTERVAL_MS) {
+    const done = serverFinish(planned, freeAt);
+    freeAt = done;
+    latencies.push(done - planned);
+  }
+  return latencies;
+}
+// waits for each answer   451 requests   p50    10 ms   p99    10 ms   ...   over 100 ms: 1
+// sends on schedule       500 requests   p50    10 ms   p99   960 ms   ...   over 100 ms: 91
+```
+  </TabItem>
+</Tabs>
+
+## How real systems do it
+
+**Prometheus.** The most common open-source monitoring system stores **metrics**: numbers a program
+records over time, such as requests served. It offers two kinds for latency. A
+**classic histogram** has bucket edges you choose in your code; every server exports one counter
+per bucket, and `histogram_quantile` estimates percentiles at query time with the linear guess from
+this page, after `sum by (le)` has merged the servers. A **native histogram** uses exponential
+buckets chosen automatically, which gives smaller, predictable errors; Prometheus's documentation
+recommends native histograms over both classic histograms and summaries, though they need a newer
+export format that not every tool reads yet (as of November 2026). A setup that tends to work:
+classic histograms with edges at your SLO thresholds while you migrate, native histograms for new services.
+
+**OpenTelemetry.** The vendor-neutral standard for metrics, logs and traces (records of where
+one request spent its time) records request
+durations as histograms too. Its explicit-bucket histogram defaults to edges at 0, 5, 10, 25, 50,
+75, 100, 250, 500, 750, 1,000, 2,500, 5,000, 7,500 and 10,000 (in whatever unit you record, usually
+milliseconds). Those defaults are a starting point, not a fit for your service: if your p99 target is
+200 ms and the nearest edges are 100 and 250, every estimate near the target is a guess across a
+150 ms gap. Its exponential histogram defaults to at most 160 buckets and adjusts its scale to the
+data (as of November 2026).
+
+**Datadog and HdrHistogram.** Datadog's distribution metrics send raw values from each host to its
+servers, which combine them with DDSketch, so a p99 across a thousand hosts is computed over all
+their requests together rather than averaged from per-host numbers (as of November 2026).
+HdrHistogram is the common choice inside load-testing tools and benchmarks, for the bounded error
+and the coordinated-omission correction described above. Whatever tool you use, the question to
+ask is the same: does the p99 on this chart come from merged distributions, or from averaging
+finished percentiles?
+
+## Gotchas and war stories
+
+:::caution[Averaging percentiles on a dashboard]
+The most common mistake is not in the code at all: a dashboard panel that takes "p99 per server"
+and applies `avg` across servers, or a weekly report that averages daily p99s. The result looks
+reasonable and is wrong, usually too low, as the two-server example showed. Check how every
+percentile panel is built.
+:::
+
+**A good average hides a bad deploy.** A change that makes 2% of requests take 3 seconds longer
+moves the average by only 2 ÷ 100 × 3,000 = 60 ms. On a busy dashboard that looks like noise; in
+the p99 it is a jump from tens of milliseconds to seconds. Alert on the tail.
+
+**A freeze every two minutes.** Discord's 2020 write-up about a Go service shows the
+pattern: regular spikes in latency every two minutes, invisible in averages and obvious in the
+tail percentiles over time. The cause was in the language runtime, not the service's code. When
+the tail has a rhythm, look for something periodic: garbage collection, a scheduled job, a cache
+refresh, a log file being rotated.
+
+:::danger[Hedging during an outage]
+Hedging copies slow calls. When a dependency becomes slow for everybody, every call is slow, every
+call is copied, and the dependency gets twice the traffic at its weakest moment. Cap hedges at a
+small share of traffic, and stop hedging when the dependency's error rate rises.
+:::
+
+**Timeouts that land in the tail.** A timeout set at 1 second when the dependency's p99.9 is
+1.2 seconds fails healthy calls every day. The second bump in a latency histogram, exactly at the
+timeout value, is the tell.
+
+**Percentiles of percentiles in SLO reports.** "99% of minutes had a p99 under 300 ms" is not the
+same promise as "99% of requests finished under 300 ms". The first can be true while the busiest
+minutes, where most requests live, were slow. Count requests under the threshold instead; the
+[SLIs, SLOs and error budgets](/observability/slis-slos-error-budgets/) page builds SLOs this way.
+
+## Trade-offs and when not to use it
+
+Percentiles are the right summary for "how fast does it feel", and the wrong one for several other
+questions.
+
+- **Cost and capacity need totals, not percentiles.** How much CPU a service uses, or how many
+  servers it needs, depends on the total work, which is average × count. The average is the right
+  number there.
+- **Tail percentiles need volume.** On a service with 100 requests an hour, a p99.9 does not exist
+  and a p99 is close to the max. Look at the slowest few requests directly, with their logs or
+  traces.
+- **Histograms cost memory per label.** A metrics system stores each counter as a **time series**,
+  one stored line of numbers over time, and a label such as `endpoint` or `server` splits it into
+  one series per value. Each bucket is one series per combination of labels.
+  A histogram with 15 buckets, split by 50 endpoints and 20 servers, is 15 × 50 × 20 = 15,000
+  series. Keep labels on latency histograms few.
+- **A percentile does not say why.** It tells you the tail exists, not what caused it. Pair it
+  with tracing, which shows where the time went inside one slow request.
+- **Cutting the tail has a price.** Spare capacity costs servers, hedging costs traffic, and both
+  can be wasted if the tail comes from one bug that a fix would remove. Measure first.
+
+## Interview corner
+
+Percentiles show up in two ways in interviews: as a direct question ("what is p99 and why not the
+average?"), and inside system design questions, when you state latency targets for the design. A
+strong candidate says "p99 under 200 ms at 10,000 requests a second", never "fast".
+
+Typical questions:
+
+1. **"Why do we use p99 instead of average latency?"** Cover: the average mixes fast and slow
+   requests into a number nobody experienced and can be dragged by a few outliers or hide them;
+   percentiles describe real requests; the tail is what users remember.
+2. **"A page calls 50 services. Each has a p99 of 100 ms. What is the page's p99?"** Cover: at
+   least 100 ms, likely much more; the page waits for its slowest call; the chance all 50 are under
+   their p99 is 0.99⁵⁰, about 0.6, so about 40% of pages include at least one call past its p99;
+   the page's p99 is therefore well above 100 ms, near the services' p99.9 or worse.
+3. **"How would you compute p99 across 200 servers?"** Cover: never average per-server p99s;
+   export histograms or sketches, merge by adding bucket counts, estimate once; choose bucket edges
+   near the SLO.
+4. **"Your load test says p99 is 20 ms, production says 800 ms. Why?"** Cover: coordinated
+   omission in a closed-loop test, a test that never reached production's load or data size, warm
+   caches in the test, and production causes such as garbage collection and noisy neighbours.
+
+## Check yourself
+
+<details>
+<summary>1. Five requests take 10, 12, 11, 13 and 500 ms. What are the average and the p50?</summary>
+
+The average is (10 + 12 + 11 + 13 + 500) ÷ 5 = 546 ÷ 5 = 109.2 ms. Sorted: 10, 11, 12, 13, 500, so
+the p50 is the 3rd value: 50 ÷ 100 × 5 = 2.5, rounded up to 3, which is 12 ms. Four of the five
+requests took about 11 ms; the average describes none of them.
+
+</details>
+
+<details>
+<summary>2. One server reports a p99 of 40 ms over 9,000 requests, another 900 ms over 1,000 requests. Is the combined p99 about 470 ms?</summary>
+
+No. (40 + 900) ÷ 2 = 470 ms ignores that the first server had nine times the requests, and that a
+p99 has thrown away where the other requests fell. You need the two distributions, for example
+histograms with the same buckets: add their counters and estimate the p99 from the totals.
+
+</details>
+
+<details>
+<summary>3. A page calls 20 services in parallel. Each is slow 1 time in 100. Roughly what share of pages is slow?</summary>
+
+The chance all 20 are fast is 0.99²⁰, about 0.82. So about 1 − 0.82 = 0.18, roughly 18% of pages
+have at least one slow call and are slow. That is 18 times the per-call rate.
+
+</details>
+
+<details>
+<summary>4. What would happen to a closed-loop load test's p99 if the server froze for 2 seconds instead of 1?</summary>
+
+Almost nothing. The test still records one slow request during the freeze, because it stops sending
+while it waits, so its p99 stays near the normal 10 ms. An open-loop test would see about twice as
+many slow requests and a higher p99. A longer freeze makes the closed-loop test's error worse, not
+its result.
+
+</details>
+
+<details>
+<summary>5. Your histogram has buckets at 100, 250 and 500 ms, and your SLO says 300 ms. What is wrong?</summary>
+
+There is no bucket edge at 300 ms, so the number of requests under 300 ms has to be guessed by
+spreading the 250–500 ms bucket evenly. Add an edge at exactly 300 ms, so the count of requests
+meeting the SLO is exact.
+
+</details>
+
+## Recap
+
+- The average describes total work, not what any user felt; one outlier drags it, and a few
+  outliers among thousands hide in it.
+- Percentiles sort the requests and read positions: p50 is typical, p99 and p99.9 are the tail,
+  the max catches freezes. They need volume: 100 values for a p99, 1,000 for a p99.9.
+- Fan-out turns a rare slow call into a common slow page: 1 − 0.99ᴺ of pages, about 10% at 10 calls
+  and 63% at 100.
+- Store latency as histograms or sketches, merge by adding counts, estimate at the end. Never
+  average percentiles across servers or time.
+- Load tests must send on schedule (open loop) or correct for coordinated omission, or they hide the
+  tail.
+- Cut the tail by removing its cause, keeping servers out of the busy zone, shrinking fan-out,
+  timeouts above the p99.9, and capped hedged requests.
+
+## Where to go next
+
+<NextTopics items={[
+  { slug: 'slis-slos-error-budgets', why: 'Turn the percentile users feel into a target, and decide how much slowness you can afford.' },
+  { slug: 'timeouts', why: 'Pick timeouts from a dependency\'s p99.9, so the tail is cut without failing healthy calls.' },
+  { slug: 'metrics-and-monitoring', why: 'Where histograms live: counters, gauges, labels and the dashboards built on them.' },
+  { slug: 'load-shedding', why: 'Keep a server out of the busy zone where queueing builds the tail.' },
+  { slug: 'garbage-collection', why: 'One of the commonest sources of tail latency, and how runtimes keep pauses short.' },
+]} />
+
+## Further reading
+
+**Specs and official docs**
+
+- [Prometheus: Histograms and summaries](https://prometheus.io/docs/practices/histograms/) (living docs, read November 2026) — how `histogram_quantile` estimates, why summaries do not aggregate, and the move to native histograms.
+- [OpenTelemetry metrics SDK specification](https://opentelemetry.io/docs/specs/otel/metrics/sdk/) and [data model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) (living spec, read November 2026) — default bucket edges, exponential histograms, scale and relative error.
+- [Datadog: Distributions](https://docs.datadoghq.com/metrics/distributions/) (living docs, read November 2026) — percentiles computed across hosts from merged sketches.
+- [HdrHistogram](https://github.com/HdrHistogram/HdrHistogram) (living README, read November 2026) — fixed-memory histograms with bounded error, and correction for coordinated omission.
+
+**Engineering blogs**
+
+- [Marc Brooker: Tail latency might matter more than you think](https://brooker.co.za/blog/2021/04/19/latency.html) (2021) — how fan-out and serial chains amplify the tail, with a simple model.
+- [Marc Brooker: Erasure coding versus tail latency](https://brooker.co.za/blog/2023/01/06/erasure/) (2023) — hedging's costs, and capping hedges with a token bucket.
+- [Marc Brooker: Lorenz and Little, how much does your tail cost?](https://brooker.co.za/blog/2026/07/29/lorenz-and-little.html) (2026) — what the slowest requests cost in capacity.
+- [ScyllaDB: On coordinated omission](https://www.scylladb.com/2021/04/22/on-coordinated-omission/) (2021) — the measurement trap, and which benchmark tools avoid it.
+- [Discord: Why Discord is switching from Go to Rust](https://discord.com/blog/why-discord-is-switching-from-go-to-rust) (2020) — latency spikes every two minutes from garbage collection, seen in the tail.
+
+**Papers (kept as history)**
+
+- [Jeffrey Dean and Luiz André Barroso: The Tail at Scale](https://research.google/pubs/the-tail-at-scale/) (2013, kept as history) — the paper that named the fan-out problem and introduced hedged and tied requests.

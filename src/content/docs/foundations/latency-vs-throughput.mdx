@@ -368,7 +368,7 @@ Two lessons follow. **Adding workers** raises throughput only for the stage they
 until that stage stops being the slowest; past that point, extra workers only add more requests waiting
 at the next bottleneck, often the database. And **parallelism does not lower the latency of one
 request** unless that request is itself split into parts that run at once, in which case its latency
-becomes that of its slowest part (the percentiles page, coming soon, covers why that makes the slowest
+becomes that of its slowest part (the [percentiles page](/foundations/percentiles-and-tail-latency/) covers why that makes the slowest
 requests matter so much).
 
 ### Why more servers stop helping
@@ -485,7 +485,7 @@ October 2026).
 **Averages.** The average hides the shape. A service with a 20 ms average can have one request in a
 hundred taking two seconds, and those are the ones users remember. Report **percentiles** instead: the
 p50 is the latency half of all requests beat, and the p99 is the latency 99 in 100 requests beat, so it
-shows the slowest 1%. Percentiles have their own page (coming soon).
+shows the slowest 1%. Percentiles have [their own page](/foundations/percentiles-and-tail-latency/).
 
 **Averaged utilisation.** "60% CPU over the last minute" can be 100% for 30 seconds and 20% for the
 other 30. The queue built up in the 100% half; the one-minute average hides it. Look at utilisation over

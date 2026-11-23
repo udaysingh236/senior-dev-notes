@@ -1,0 +1,52 @@
+---
+// One illustrative minute of the product API: 1,000 requests counted into time ranges.
+// p50 about 40 ms, average about 58 ms, p99 about 460 ms; 50 requests took over 100 ms.
+---
+
+<svg viewBox="0 0 400 334" width="100%" role="img" aria-labelledby="ptl-lt-t ptl-lt-d">
+  <title id="ptl-lt-t">A long tail: 1,000 requests counted by how long they took</title>
+  <desc id="ptl-lt-d">
+    A bar chart of 1,000 requests. 120 took under 25 ms, 610 took 25 to 50 ms, 160 took 50 to
+    75 ms, 60 took 75 to 100 ms. Then a thin tail: 30 took 100 to 250 ms, 12 took 250 to 500 ms,
+    5 took 500 ms to 1 second and 3 took 1 to 2 seconds. Markers show the p50 at about 40 ms, the
+    average at about 58 ms and the p99 at about 460 ms, inside the tail.
+  </desc>
+  <line x1="40" y1="250" x2="382" y2="250" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <rect x="44" y="214.6" width="36" height="35.4" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="62" y="208.6" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">120</text>
+  <rect x="86" y="70.1" width="36" height="179.9" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="92" y="64.1" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">610</text>
+  <rect x="128" y="202.8" width="36" height="47.2" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="155" y="196.8" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">160</text>
+  <rect x="170" y="232.3" width="36" height="17.7" rx="2" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="188" y="226.3" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">60</text>
+  <rect x="212" y="241.2" width="36" height="8.8" rx="2" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="230" y="235.2" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">30</text>
+  <rect x="254" y="246.5" width="36" height="3.5" rx="2" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="272" y="240.5" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">12</text>
+  <rect x="296" y="248.0" width="36" height="2.0" rx="2" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="314" y="242.0" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">5</text>
+  <rect x="338" y="248.0" width="36" height="2.0" rx="2" stroke-width="1.5" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <text x="356" y="242.0" font-size="15" text-anchor="middle" style="fill: var(--viz-ink)">3</text>
+  <text x="44" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">0</text>
+  <text x="83" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">25</text>
+  <text x="125" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">50</text>
+  <text x="167" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">75</text>
+  <text x="209" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">100</text>
+  <text x="251" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">250</text>
+  <text x="293" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">500</text>
+  <text x="335" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">1k</text>
+  <text x="377" y="272" font-size="14" text-anchor="middle" style="fill: var(--viz-muted)">2k</text>
+  <line x1="108" y1="36" x2="108" y2="250" stroke-width="2" style="stroke: var(--viz-ok)" />
+  <text x="102" y="30" font-size="16" font-weight="700" text-anchor="end" style="fill: var(--viz-ink)">p50: 40 ms</text>
+  <line x1="140" y1="36" x2="140" y2="250" stroke-width="2" stroke-dasharray="6 5" style="stroke: var(--viz-ink)" />
+  <text x="146" y="30" font-size="16" font-weight="700" style="fill: var(--viz-ink)">average: 58 ms</text>
+  <line x1="212" y1="132" x2="380" y2="132" stroke-width="2" style="stroke: var(--viz-warn)" />
+  <line x1="212" y1="132" x2="212" y2="140" stroke-width="2" style="stroke: var(--viz-warn)" />
+  <line x1="380" y1="132" x2="380" y2="140" stroke-width="2" style="stroke: var(--viz-warn)" />
+  <text x="296" y="122" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">the tail: 50 requests</text>
+  <line x1="284" y1="172" x2="284" y2="250" stroke-width="2" style="stroke: var(--viz-bad)" />
+  <text x="284" y="166" font-size="16" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">p99: 460 ms</text>
+  <text x="212" y="300" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">time taken, in ms (ranges grow wider to the right)</text>
+  <text x="40" y="324" font-size="15" style="fill: var(--viz-muted)">number above each bar: requests in that range</text>
+</svg>

@@ -1,0 +1,40 @@
+---
+// Coordinated omission, from examples/percentiles-and-tail-latency/python/load_test.py: a server
+// freezes from 5.0 s to 6.0 s while a test sends 50 requests a second. Shown from 4 s to 8 s.
+// x: 4.0 s -> 40, 8.0 s -> 380 (85 units per second).
+---
+
+<svg viewBox="0 0 400 320" width="100%" role="img" aria-labelledby="ptl-co-t ptl-co-d">
+  <title id="ptl-co-t">Two load tests watching the same 1-second freeze</title>
+  <desc id="ptl-co-d">
+    A time line from 4 to 8 seconds. A shaded band from 5 to 6 seconds marks when the server is
+    frozen. Top row, the test that waits for each answer: steady requests until 5 seconds, then one
+    request that waits the whole second, then steady requests again; it records 1 slow request. Bottom
+    row, the test that sends on schedule: requests keep being sent during the freeze and queue up,
+    and everything sent from 5.0 to 6.8 seconds is slow; it records 91 slow requests.
+  </desc>
+  <rect x="125" y="30" width="85" height="236" style="fill: var(--viz-bad-soft)" />
+  <text x="167.5" y="50" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">server</text>
+  <text x="167.5" y="68" font-size="15" font-weight="700" text-anchor="middle" style="fill: var(--viz-ink)">frozen</text>
+
+  <text x="20" y="98" font-size="16" font-weight="700" style="fill: var(--viz-ink)">waits for each answer</text>
+  <rect x="40" y="108" width="85" height="22" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <rect x="125" y="108" width="85" height="22" rx="3" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <rect x="210" y="108" width="170" height="22" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="20" y="154" font-size="15" style="fill: var(--viz-ink)">1 request waits 1 s; 49 are never sent</text>
+  <text x="20" y="174" font-size="15" font-weight="700" style="fill: var(--viz-ink)">records 1 slow request: p99 = 10 ms</text>
+
+  <text x="20" y="204" font-size="16" font-weight="700" style="fill: var(--viz-ink)">sends on schedule</text>
+  <rect x="40" y="214" width="85" height="22" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <rect x="125" y="214" width="153" height="22" rx="3" stroke-width="2" style="fill: var(--viz-warn-soft); stroke: var(--viz-warn)" />
+  <rect x="278" y="214" width="102" height="22" rx="3" stroke-width="1.5" style="fill: var(--viz-flow-soft); stroke: var(--viz-flow)" />
+  <text x="20" y="260" font-size="15" style="fill: var(--viz-ink)">requests queue up; clearing takes 0.8 s more</text>
+  <text x="20" y="280" font-size="15" font-weight="700" style="fill: var(--viz-ink)">records 91 slow requests: p99 = 960 ms</text>
+
+  <line x1="40" y1="292" x2="380" y2="292" stroke-width="1.5" style="stroke: var(--viz-stroke)" />
+  <text x="40" y="312" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">4 s</text>
+  <text x="125" y="312" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">5 s</text>
+  <text x="210" y="312" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">6 s</text>
+  <text x="295" y="312" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">7 s</text>
+  <text x="380" y="312" font-size="15" text-anchor="middle" style="fill: var(--viz-muted)">8 s</text>
+</svg>

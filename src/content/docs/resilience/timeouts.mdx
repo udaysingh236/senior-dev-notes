@@ -5,7 +5,7 @@ tagline: How long your code should wait for another service before giving up, an
 difficulty: intermediate
 track: resilience
 prerequisites: [latency-vs-throughput, connection-pooling, proxy-lb-gateway]
-next: [retries-and-backoff, circuit-breakers, load-shedding, logging]
+next: [retries-and-backoff, circuit-breakers, load-shedding, percentiles-and-tail-latency, logging]
 lastReviewed: 2026-11-09
 sidebar:
   order: 1
@@ -984,6 +984,7 @@ database role, check whether the driver sends a cancel request on timeout, and c
   { slug: 'retries-and-backoff', why: 'What to do after a timeout fires, and how to retry without multiplying the load on a dependency that is already slow.' },
   { slug: 'circuit-breakers', why: 'A timeout limits what each failing call costs; a circuit breaker stops making the calls.' },
   { slug: 'load-shedding', why: 'When the whole service, not one dependency, is overloaded: refusing work early, by priority.' },
+  { slug: 'percentiles-and-tail-latency', why: 'Where the p99.9 a timeout is set from comes from, and how to measure it honestly.' },
   { slug: 'logging', why: 'Finding out afterwards which call timed out and what happened next, with one search across services.' },
 ]} />
 

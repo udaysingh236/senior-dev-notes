@@ -5,7 +5,7 @@ tagline: How to decide how reliable a service needs to be, measure it the way yo
 difficulty: beginner
 track: observability
 prerequisites: [latency-vs-throughput, logging]
-next: [alerting, metrics-and-monitoring, incident-response-and-on-call, postmortems]
+next: [percentiles-and-tail-latency, alerting, metrics-and-monitoring, incident-response-and-on-call, postmortems]
 lastReviewed: 2026-11-23
 sidebar:
   order: 6
@@ -659,6 +659,7 @@ consistently unspent budget is a sign to move faster or to tighten the target.
 ## Where to go next
 
 <NextTopics items={[
+  { slug: 'percentiles-and-tail-latency', why: 'What p50 and p99 really measure, and why latency SLIs must be built from merged histograms, not averaged percentiles.' },
   { slug: 'alerting', why: 'Turning burn rates into pages and tickets that wake people only when users are hurting.' },
   { slug: 'metrics-and-monitoring', why: 'Collecting the counts that SLIs are built from, cheaply, at any traffic level.' },
   { slug: 'incident-response-and-on-call', why: 'What happens after the page fires: roles, communication and getting back inside the budget.' },
